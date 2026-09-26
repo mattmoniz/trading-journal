@@ -829,3 +829,48 @@ The ML/Performance discrepancy itself is otherwise correctly explained by the de
 
 - **Runner/trailing-stop optimization — saved, not started.** Full notes: `docs/RUNNER_OPTIMIZATION_NOTES_20260814.md` (DeepSeek's plain-English mechanism explanation, the broader "next level" roadmap DeepSeek volunteered — flagged as mostly out-of-scope institutional advice, not a near-term backlog — and Gemini's `structural_runner_optimization.py` prototype, permanent copy at `docs/structural_runner_optimization_20260814.py`). **Blocked on a real schema mismatch** (the script assumes flat `trades` columns and a `price_bars_primary.bar_time` column that don't exist in this codebase's real schema) — that's the actual next step, not a backtest. User explicitly: review the design first, don't just run it.
 
+
+## 2026-09-25: SCOPED, NOT YET IMPLEMENTED — temporary "disable all suppression, trade everything live" override
+
+**User's explicit, informed decision** (given via AskUserQuestion after being told plainly what it means): "so much confusion with live and suppressed trades that I want to move everything to live for the time being." Confirmed understanding both ways: the user knows this includes the 63 real `SUPPRESS` setup_types (proven negative EV from real trade history, including `IB_BULLISH`/`IB_BEARISH` which were explicitly "dumped" after testing) and the 180 `THIN_N` types, and confirmed it will lose real money on setups already shown to lose money, on purpose, temporarily. Also confirmed with the user: this does NOT touch DLL/profit-lock/cooldown or any risk-discipline gate (opposite-direction conflict, same-type refire, cross-direction fast-flip, post-win-opposite-family, opening-drive counter-trade, 9:30-9:35/4-6pm dead zones, the sibling fill gate) or `CAPITAL_EXPOSURE_OVERRIDE` (uncalibrated-stop types stay blocked regardless — a data-integrity gate, not a performance judgment). Scoped narrowly to: does a setup_type's real historical track record (SETUP_STATUS) get to gate whether it can be `ACTIVE`.
+
+**This is a continuation of the same-day `ALL_LEVELS_LIVE` correction** (see CLAUDE.md's "Where to look" entry, commit `f316e2a`) — that fix made the sibling-touch-credit path correctly RESPECT suppression (a sibling only goes ACTIVE if it clears the real `isLiveEligible()` check). This new ask is the opposite: temporarily make `isLiveEligible()`/`getCanonicalLiveStatus()` themselves stop caring about suppression at all, system-wide, not just for cluster siblings.
+
+### Implementation plan (server/services/setupEligibility.js)
+
+1. Add a new exported flag, clearly separate from `ALL_LEVELS_LIVE` (that one is level-fade-scoped and about cluster-sibling selection; this one is broader — ALL setup_types, not just `_FADE_(LONG|SHORT)`):
+   ```js
+   export const SUPPRESS_ALL_DISABLED = {
+     enabled: true, addedDate: '2026-09-25',
+     reason: 'explicit user request via AskUserQuestion, informed of the real-money risk -- ' +
+       'too much confusion distinguishing live vs suppressed trades, wants everything trading ' +
+       'live temporarily while the system is untangled. Does NOT bypass CAPITAL_EXPOSURE_OVERRIDE, ' +
+       'DLL, cooldowns, or any risk-discipline gate -- only SETUP_STATUS/DOW/time-window suppression.',
+   };
+   ```
+2. `isLiveEligible(setupType, {...})`: short-circuit near the top —
+   ```js
+   if (SUPPRESS_ALL_DISABLED.enabled) return !CAPITAL_EXPOSURE_OVERRIDE.has(setupType);
+   ```
+   (placed so an UNKNOWN setup_type — no SETUP_STATUS row at all — also becomes eligible, consistent with "trade everything"; the existing fail-closed-on-unknown behavior only applies when the flag is off).
+3. `getCanonicalLiveStatus(signalName)`: after the query but before the recommendation check, short-circuit similarly:
+   ```js
+   if (SUPPRESS_ALL_DISABLED.enabled && !CAPITAL_EXPOSURE_OVERRIDE.has(signalName)) {
+     return { status: 'ACTIVE', reason: 'SUPPRESS_ALL_DISABLED', liveN: row?.sample_size ?? 0, liveEv: row?.ev ?? null, realN: null };
+   }
+   ```
+4. `isLiveTimeWindowBlocked(setupType, etMin)`: short-circuit to `false` when the flag is enabled (bypasses e.g. `PD_VAL_FADE_LONG`'s 1pm-4pm block).
+5. **Deliberately do NOT touch `computeSuppressionSets()`** — leave it computing the real, accurate `suppressedSetups`/`dowSuppressToday` sets exactly as today. The override lives entirely in the 3 consuming functions above. This means: (a) turning the flag back off (`enabled: false`) instantly and exactly restores today's real behavior with zero drift/recompute, and (b) anything that reads `suppressedSetups`/`dowSuppressToday` directly for DISPLAY purposes (not gating) — e.g. a dashboard showing "this is suppressed" — keeps showing the true, real suppression status even while it's not being enforced live. That distinction (real status vs. enforced status) should probably be surfaced in the UI once this ships, so it's visible that a trade firing live is doing so BECAUSE of this override, not because it's actually a good setup — worth a quick display tag (e.g. `notes.override_reason` or similar on the `active_setups` row) so a future review of "why did this fire" doesn't require re-deriving that this flag was on.
+
+### Verification plan before considering it shipped
+1. `node --check` + `npx eslint` on the edited file.
+2. `node scripts/test_invariants.mjs`, compare failure count via `git stash` to baseline (currently 30 — should stay 30, since this shouldn't touch anything the invariants suite checks structurally, only live behavior).
+3. Direct functional check: confirm `isLiveEligible('IB_BULLISH', {...})` now returns `true` with the flag on (a deliberate smoke test of the most emphatically-suppressed real example in the system).
+4. Restart server, confirm process start time postdates the edit.
+5. Update CLAUDE.md's Hard Rules or "Where to look" with this flag's existence, scope, and the explicit user-confirmed risk acceptance — including a clear note that `MANUAL_SUPPRESS_OVERRIDE`-flagged types (currently `IB_BULLISH`/`IB_BEARISH`) WILL start firing live under this flag too, since the override doesn't distinguish manual-override suppression from statistically-derived suppression.
+6. Flag an `OPEN_DECISION` (or extend tonight's `all_levels_live_corrected_needs_deepseek_review_20260925`) noting this is a temporary state with no auto-expiry — someone has to remember to flip it back off. Consider whether a hard expiry (e.g. auto-revert after N days without an explicit renewal) is worth building, or whether a loud, unmissable display banner while it's on is enough. Not yet decided with the user.
+
+### Not yet done as of this write-up
+- No code has been written for this yet (scoped only, per the user's own "scope this out and I'll clear context" request).
+- Whether `isLevelForcedLive()`'s existing `ALL_LEVELS_LIVE`-specific logic in the cluster-sibling path (acd.js ~line 5176-5203, fixed earlier tonight) needs any change once `SUPPRESS_ALL_DISABLED` also exists — likely not, since `SUPPRESS_ALL_DISABLED` short-circuits inside `isLiveEligible()` itself, which that sibling code already calls; the two flags should compose without conflict, but this should be re-checked once both are live together.
+- Whether to also disable it after some time automatically, or add a visible "suppression override active" banner somewhere in the UI (quick-check.html) so it's never silently forgotten.
