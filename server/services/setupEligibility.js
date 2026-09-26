@@ -296,12 +296,55 @@ export function isLevelForcedLive(setupType) {
 export const LIVE_TIME_WINDOW_OVERRIDE = new Map([
   ['PD_VAL_FADE_LONG', { fromEtMin: 780, toEtMin: 960, reason: 'LIVE_TIME_WINDOW', addedDate: '2026-09-25' }],
 ]);
+
+// Temporary, explicit-user-requested override (2026-09-25, via AskUserQuestion, informed of the
+// real-money risk): "so much confusion with live and suppressed trades that I want to move
+// everything to live for the time being." Confirmed both ways with the user: this DOES include
+// the 63 real SUPPRESS setup_types (proven negative EV from real trade history, including
+// IB_BULLISH/IB_BEARISH which were explicitly "dumped" after testing -- see CLAUDE.md's "Where to
+// look" entry) and the 180 THIN_N types, and WILL lose real money on setups already shown to lose
+// money, on purpose, temporarily. Scoped narrowly to: does a setup_type's real historical track
+// record (SETUP_STATUS/DOW/time-window) get to gate whether it can be ACTIVE. Does NOT bypass
+// CAPITAL_EXPOSURE_OVERRIDE (a data-integrity gate on uncalibrated stops, not a performance
+// judgment) or any risk-discipline gate (DLL, profit-lock, cooldown, opposite-direction conflict,
+// same-type refire, cross-direction fast-flip, post-win-opposite-family, opening-drive
+// counter-trade, the 9:30-9:35/4-6pm dead zones, the sibling fill gate) -- none of those are
+// touched by this flag.
+//
+// Deliberately does NOT touch computeSuppressionSets() -- that function keeps computing the
+// real, accurate suppressedSetups/dowSuppressToday sets exactly as before this flag existed.
+// The override lives entirely in the 3 consuming functions below (isLiveEligible,
+// getCanonicalLiveStatus, isLiveTimeWindowBlocked), so: (a) setting enabled:false instantly and
+// exactly restores today's real behavior with zero drift/recompute, and (b) anything reading
+// suppressedSetups/dowSuppressToday directly for DISPLAY (not gating) keeps showing the true,
+// real suppression status even while it's not being enforced live.
+//
+// This includes MANUAL_SUPPRESS_OVERRIDE-flagged types (currently IB_BULLISH/IB_BEARISH,
+// scripts/backtest_setup_status.mjs) -- this flag does not distinguish manual-override
+// suppression from statistically-derived suppression; both fire live while it's enabled.
+//
+// No auto-expiry -- someone has to remember to flip this back to enabled:false.
+// See docs/OPEN_THREADS.md's 2026-09-25 "SCOPED, NOT YET IMPLEMENTED" entry (now implemented)
+// and OPEN_DECISION suppress_all_disabled_temporary_override_20260925 for the revert plan.
+export const SUPPRESS_ALL_DISABLED = {
+  enabled: true, addedDate: '2026-09-25',
+  reason: 'explicit user request via AskUserQuestion, informed of the real-money risk -- ' +
+    'too much confusion distinguishing live vs suppressed trades, wants everything trading ' +
+    'live temporarily while the system is untangled. Does NOT bypass CAPITAL_EXPOSURE_OVERRIDE, ' +
+    'DLL, cooldowns, or any risk-discipline gate -- only SETUP_STATUS/DOW/time-window suppression.',
+};
+
 export function isLiveTimeWindowBlocked(setupType, etMin) {
+  if (SUPPRESS_ALL_DISABLED.enabled) return false;
   const o = LIVE_TIME_WINDOW_OVERRIDE.get(setupType);
   return !!o && Number.isFinite(etMin) && etMin >= o.fromEtMin && etMin < o.toEtMin;
 }
 
 export function isLiveEligible(setupType, { suppressedSetups, dowSuppressToday, knownTypes }) {
+  // Placed ahead of the knownTypes check so a setup_type with NO SETUP_STATUS row at all
+  // (never calibrated) also becomes eligible under this flag, consistent with "trade
+  // everything" -- the normal fail-closed-on-unknown behavior only applies when this is off.
+  if (SUPPRESS_ALL_DISABLED.enabled) return !CAPITAL_EXPOSURE_OVERRIDE.has(setupType);
   return knownTypes.has(setupType) && !suppressedSetups.has(setupType) && !dowSuppressToday.has(setupType)
     && !CAPITAL_EXPOSURE_OVERRIDE.has(setupType);
 }
@@ -340,8 +383,11 @@ export async function getCanonicalLiveStatus(signalName) {
       return n?.all_time_real_n ?? null;
     } catch { return null; }
   };
-  if (!row) return { status: 'SHADOW', reason: 'NEW_SIGNAL_UNDER_LIVE_EVALUATION', liveN: 0, liveEv: null, realN: null };
   const realN = parseRealN(row);
+  if (SUPPRESS_ALL_DISABLED.enabled && !CAPITAL_EXPOSURE_OVERRIDE.has(signalName)) {
+    return { status: 'ACTIVE', reason: 'SUPPRESS_ALL_DISABLED', liveN: row?.sample_size ?? 0, liveEv: row?.ev ?? null, realN };
+  }
+  if (!row) return { status: 'SHADOW', reason: 'NEW_SIGNAL_UNDER_LIVE_EVALUATION', liveN: 0, liveEv: null, realN: null };
   const isLive = row.recommendation === 'ACTIVE' || row.recommendation === 'PROMOTE';
   if (!isLive) {
     return {
