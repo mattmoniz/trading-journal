@@ -191,7 +191,7 @@ export async function computeSuppressionSets(todayDowInt, setupStatusRows = null
   const knownTypes = new Set();
   for (const r of setupStatusQ.rows) {
     knownTypes.add(r.signal_name);
-    if ((r.recommendation === 'SUPPRESS' || r.recommendation === 'THIN_N') && !isLevelForcedLive(r.signal_name)) suppressedSetups.add(r.signal_name);
+    if (r.recommendation === 'SUPPRESS' || r.recommendation === 'THIN_N') suppressedSetups.add(r.signal_name);
   }
   // Found 2026-08-19 (promotion_pipeline_remaining_stuck_types): an ACTIVE/PROMOTE
   // recommendation from a BACKTEST_DERIVED_SETUP_STATUS_TYPES member is NOT the same
@@ -208,7 +208,7 @@ export async function computeSuppressionSets(todayDowInt, setupStatusRows = null
   const dowSuppressToday = new Set();
   for (const r of dowStatusQ.rows) {
     const t = r.signal_name.replace(/_DOW_\d+$/, '');
-    if (r.recommendation === 'SUPPRESS' && !isLevelForcedLive(t)) dowSuppressToday.add(t);
+    if (r.recommendation === 'SUPPRESS') dowSuppressToday.add(t);
   }
   return { suppressedSetups, dowSuppressToday, knownTypes };
 }
@@ -247,27 +247,45 @@ export async function computeSuppressionSets(todayDowInt, setupStatusRows = null
 //     RESEARCH_CLAIM per_setup_improvement_variants_20260925, OPEN_DECISION
 //     setup_improvement_candidates_20260925.
 // ALL_LEVELS_LIVE (2026-09-25, explicit user directive: "I want all levels to fire" / "I want the
-// declustered level trades to trade, I don't want them grouped"). While enabled, every level-fade
-// setup_type (/_FADE_(LONG|SHORT)/) bypasses SETUP_STATUS-driven SHADOW gating (SUPPRESS, THIN_N,
-// DOW suppression, no-row fail-closed, LIVE_TIME_WINDOW_OVERRIDE) and every level in a confluence
-// cluster fires its own real row (acd.js, CLUSTER_SIBLING_TOUCH_CREDIT) instead of one grouped
-// winner. Deliberately a user decision that overrides the calibration evidence (at the time: 6 of
-// 190 level-fade types ACTIVE, 51 SUPPRESS) -- SETUP_STATUS keeps recalibrating underneath, so
-// setting enabled:false restores evidence-gated behavior with no other change. Risk-discipline
-// gates are NOT bypassed: CAPITAL_EXPOSURE_OVERRIDE (uncalibrated stop), opposite-direction
-// conflict, same-type refire, opening-drive counter-trade, 4-6PM dead zone.
+// declustered level trades to trade, I don't want them grouped"; re-confirmed same day after the
+// first ship+revert, with the crucial correction "I want every VALID trade firing live or
+// suppressed" -- see the CORRECTED block below).
+//
+// v1 (shipped, then REVERTED ~09:45 ET the same morning): isLevelForcedLive() made
+// isLiveEligible()/getCanonicalLiveStatus()/the two suppressed-set builders above all BYPASS
+// SETUP_STATUS suppression entirely for every level-fade setup_type -- not just "let siblings
+// fire," but "ignore whether this type has a proven-negative track record." This is what actually
+// cost ~$73 in real trading before being caught: a SUPPRESSed type could fire ACTIVE with zero
+// eligibility check. Reverted the same morning, for a different reason at the time (the sibling
+// entry-price question was unresolved) -- the suppression-bypass bug wasn't the stated reason for
+// the revert, but it was real and would have recurred on re-enable if left as-is.
+//
+// v2, CORRECTED (2026-09-25, same day): the suppression-bypass branches were removed from
+// isLiveEligible()/getCanonicalLiveStatus()/isLiveTimeWindowBlocked()/the two set-builders above --
+// they now always respect real SETUP_STATUS suppression, DOW suppression, and LIVE_TIME_WINDOW_
+// OVERRIDE, unconditionally, regardless of this flag. isLevelForcedLive() is now ONLY a SCOPE gate
+// (is this feature on, is this a level-fade type, is it not on the uncalibrated-stop override
+// list) used at exactly one call site (acd.js's cluster-sibling-touch-credit insert): it decides
+// whether a non-winning cluster candidate is even considered for ACTIVE status at all, instead of
+// being unconditionally forced SHADOW just for losing the EV-ranked pick. That site now explicitly
+// calls the real (unbypassed) isLiveEligible()/isLiveTimeWindowBlocked() before a sibling can ever
+// go ACTIVE -- a SUPPRESSed or THIN_N sibling still fires (gets a real row, accumulates real N) but
+// as SHADOW, exactly matching "every VALID trade firing live or suppressed." Every level in a
+// confluence cluster still fires its own real row regardless of this flag (CLUSTER_SIBLING_
+// TOUCH_CREDIT, acd.js) -- that part was never gated on ALL_LEVELS_LIVE to begin with. Risk-
+// discipline gates are NOT bypassed either way: CAPITAL_EXPOSURE_OVERRIDE (uncalibrated stop),
+// opposite-direction conflict, same-type refire, opening-drive counter-trade, 4-6PM dead zone.
+//
 // Sibling rows enter at their OWN level (a resting limit); resolveSetupsByPrice() requires that
-// price to actually trade before the trade counts (sibling fill gate, same day) -- without it the
-// declustered view credits ~12% unfillable wins (RESEARCH_CLAIM
-// sibling_phantom_fill_inflates_shadow_ev_20260925).
-// REVERTED 2026-09-25 (~09:45 ET, same morning as ship): the entry-price question for siblings
-// (own-level resting order vs immediate current-price fill) was never resolved with the user
-// before this went live, and the phantom-fill discovery surfaced mid-session shook confidence in
-// shipping this without that answered first. enabled:false restores the one-winner-per-touch
-// behavior that ran stable for 3 weeks; the sibling fill gate, RTH-open dead zone, and PD_VAL
-// time-window fix from the same morning are UNRELATED and stay as-is. Re-enable only after the
-// entry-price design question is explicitly settled with the user.
-export const ALL_LEVELS_LIVE = { enabled: false, addedDate: '2026-09-25', revertedDate: '2026-09-25' };
+// price to actually trade before the trade counts (sibling fill gate, shipped the same day) --
+// without it the declustered view credits ~12% unfillable wins (RESEARCH_CLAIM
+// sibling_phantom_fill_inflates_shadow_ev_20260925). Re-verified live against today's real data
+// after re-enabling (all flagged "phantom" rows were a false alarm from an ad hoc check that
+// compared bars against fired_at's exact second rather than its floor-to-the-minute -- the fix
+// itself holds up).
+// setting enabled:false restores the pre-2026-09-25 one-winner-per-touch behavior with no other
+// change (the suppression-bypass removal above is permanent either way, not tied to this flag).
+export const ALL_LEVELS_LIVE = { enabled: true, addedDate: '2026-09-25', correctedDate: '2026-09-25' };
 export function isLevelFadeType(setupType) {
   return /_FADE_(LONG|SHORT)/.test(setupType || '');
 }
@@ -280,11 +298,10 @@ export const LIVE_TIME_WINDOW_OVERRIDE = new Map([
 ]);
 export function isLiveTimeWindowBlocked(setupType, etMin) {
   const o = LIVE_TIME_WINDOW_OVERRIDE.get(setupType);
-  return !!o && !isLevelForcedLive(setupType) && Number.isFinite(etMin) && etMin >= o.fromEtMin && etMin < o.toEtMin;
+  return !!o && Number.isFinite(etMin) && etMin >= o.fromEtMin && etMin < o.toEtMin;
 }
 
 export function isLiveEligible(setupType, { suppressedSetups, dowSuppressToday, knownTypes }) {
-  if (isLevelForcedLive(setupType)) return true;
   return knownTypes.has(setupType) && !suppressedSetups.has(setupType) && !dowSuppressToday.has(setupType)
     && !CAPITAL_EXPOSURE_OVERRIDE.has(setupType);
 }
@@ -312,9 +329,6 @@ export async function getCanonicalLiveStatus(signalName) {
     ORDER BY run_date DESC LIMIT 1
   `, [signalName]);
   const row = rows[0];
-  if (isLevelForcedLive(signalName)) {
-    return { status: 'ACTIVE', reason: 'ALL_LEVELS_LIVE', liveN: row?.sample_size ?? 0, liveEv: row?.ev ?? null, realN: null };
-  }
   // realN: the origin_status-filtered (ACTIVE/SHADOW, not BACKFILL) real count from the row's
   // own notes JSON -- added 2026-09-14 so callers displaying "count" to a user show the real
   // figure, not sample_size (blended, can be ~80% synthetic BACKFILL per CLAUDE.md's hard

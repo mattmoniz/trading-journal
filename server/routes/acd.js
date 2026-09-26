@@ -5172,18 +5172,38 @@ export default function createACDRouter(io) {
                     // the concrete gap was a REFIRE_COOLDOWN_MINUTES type (PD_VAH_FADE_SHORT, OR5
                     // family) able to fire ACTIVE as a sibling 15-30min after its own last
                     // resolution, reintroducing a documented losing refire pattern (25% vs 53.6% WR).
+                    // FIXED AGAIN 2026-09-25 (real bug, this is what actually cost ~$73 in real
+                    // trading during the first ALL_LEVELS_LIVE ship): isLevelForcedLive() ALSO made
+                    // isLiveEligible()/getCanonicalLiveStatus() skip SETUP_STATUS suppression
+                    // entirely for every level-fade type (setupEligibility.js) -- so a proven-
+                    // negative SUPPRESS type could fire ACTIVE here with zero eligibility check at
+                    // all. User's explicit correction: "I want every VALID trade firing live or
+                    // suppressed" -- not "ignore suppression." isLevelForcedLive() is now ONLY a
+                    // scope gate (is this feature on, is this a level-fade type, not on the
+                    // uncalibrated-stop override list) -- setupEligibility.js's suppression-bypass
+                    // branches were removed, and this site now explicitly calls the real
+                    // isLiveEligible() (respecting SUPPRESS/THIN_N/DOW suppression) plus
+                    // isLiveTimeWindowBlocked() (the winner path's 12th guard, previously missing
+                    // here too) before a sibling can ever compete for ACTIVE.
                     let sibLive = false;
                     if (winnerFound && isLevelForcedLive(candType)) {
-                      const sibDirStr = isLong ? 'LONG' : 'SHORT';
-                      const sibLevelBase = candType.replace(/_(LONG|SHORT)$/, '');
-                      const sibCrossDirCooldown = await isCrossDirectionFastFlip(todayET, sibLevelBase, sibDirStr);
-                      const sibPostWinOppBlocked = !sibCrossDirCooldown
-                        && await isPostWinOppositeFamilyBlocked(todayET, postWinFamilyOf(candType), sibDirStr);
-                      sibLive = !sibCrossDirCooldown && !sibPostWinOppBlocked
-                        && !(await isOppositeDirectionOpen(sibDirStr))
-                        && !(await isInRefireCooldown(todayET, candType))
-                        && !(await isSameSetupRefireBlocked(todayET, candType, 'RTH'))
-                        && !(await isOpeningDriveCounterTrade(sibDirStr)).blocked;
+                      const sibBaseEligible = isLiveEligible(candType, {
+                        suppressedSetups: getCached(todayET, 'levelFadeStats', DAY_CACHE_TTL)?._suppressedSetups ?? new Set(),
+                        dowSuppressToday: getCached(todayET, 'levelFadeStats', DAY_CACHE_TTL)?._dowSuppressToday ?? new Set(),
+                        knownTypes: getCached(todayET, 'levelFadeStats', DAY_CACHE_TTL)?._knownSetupTypes ?? new Set(),
+                      }) && !isLiveTimeWindowBlocked(candType, etMin);
+                      if (sibBaseEligible) {
+                        const sibDirStr = isLong ? 'LONG' : 'SHORT';
+                        const sibLevelBase = candType.replace(/_(LONG|SHORT)$/, '');
+                        const sibCrossDirCooldown = await isCrossDirectionFastFlip(todayET, sibLevelBase, sibDirStr);
+                        const sibPostWinOppBlocked = !sibCrossDirCooldown
+                          && await isPostWinOppositeFamilyBlocked(todayET, postWinFamilyOf(candType), sibDirStr);
+                        sibLive = !sibCrossDirCooldown && !sibPostWinOppBlocked
+                          && !(await isOppositeDirectionOpen(sibDirStr))
+                          && !(await isInRefireCooldown(todayET, candType))
+                          && !(await isSameSetupRefireBlocked(todayET, candType, 'RTH'))
+                          && !(await isOpeningDriveCounterTrade(sibDirStr)).blocked;
+                      }
                     }
                     const sibOrigin = sibLive ? 'ACTIVE' : 'SHADOW';
                     const sibIns = await query(`
