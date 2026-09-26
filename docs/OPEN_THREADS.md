@@ -1,6 +1,20 @@
 # Open Threads / Pending Work
 
 Older resolved/superseded threads are periodically moved to [OPEN_THREADS_ARCHIVE.md](OPEN_THREADS_ARCHIVE.md) (via `node scripts/archive_open_threads.mjs --apply`) to keep this file's per-session read cost down — nothing is deleted, just relocated. Still-pending items are backed by `OPEN_DECISION`/`RESEARCH_CLAIM` rows regardless, so archiving here never buries anything.
+## ✅ 2026-09-26: DeepSeek review of 3 more unreviewed commits — 1 real HIGH gap fixed (`minorDefendedLevelDetector.js` missed the dead-zone audit entirely), 2 shape/visibility fixes, a stale count corrected
+
+Per user request ("Can we have deepseek qa your code changes"), identified 3 commits from tonight that hadn't gone through any independent review yet (`4a67087` backfill script, `c82f4fa` the SUPPRESS_ALL_DISABLED banner, `7a12e06` the 3-detector dead-zone extension) and dispatched a fresh DeepSeek pass.
+
+**HIGH, confirmed and fixed**: `minorDefendedLevelDetector.js` was never wired to either dead-zone helper — it's the "minor" sibling of `majorPivotDefendedBreakDetector.js` (which *was* fixed in `7a12e06`) and was omitted from that audit entirely. Its own RTH-only gate (`isRTHMod`, 9:30am-4pm) lets it fire squarely inside the 9:30-9:35 dead zone. Fixed by threading the signal's own bar-derived `mod` through to the insert loop and gating on it there (not the poll's wall-clock time) — same shape as the 3 already-fixed detectors.
+
+**MEDIUM, fixed**: (1) `rthFlushDetector.js`'s existing dead-zone check gated on the poll's wall-clock `totalMins`, not the candidate's own `resolutionBar`-derived timestamp — the exact `firedEtMin`-vs-`etMin` shape a standing rule warns about. Currently a no-op in practice (the flush trigger's own 30+-bar consolidation window means the resolution bar's mod can never land in 570-575), but the shape was wrong; added a correct second check right before the INSERT, keyed on the resolution bar's own UTC-getter-derived mod. (2) The banner only ever checked `suppressAllDisabled`, not the also-still-on `allLevelsLive` flag returned by the same endpoint — fixed with a lower-urgency amber variant (ALL_LEVELS_LIVE still respects real SETUP_STATUS suppression, so it's a real but less severe "someone has to remember" risk than SUPPRESS_ALL_DISABLED).
+
+**Documentation gap found and corrected**: CLAUDE.md's "5 standalone detector files" list (written the same night, in the very audit this review was checking) undercounted — the real number of files with an independent `INSERT INTO active_setups` is 10. Corrected in place with the full list and a note not to trust the count without re-deriving it via grep.
+
+Everything else in the review verified clean against the current tree (all earlier findings from this same night's other DeepSeek passes were re-confirmed as already fixed, not re-flagged as new). `test_invariants.mjs` confirmed unchanged (19/92, matched via `git stash` before/after — this baseline count itself is unrelated pre-existing drift, not caused by tonight's work).
+
+Full review: `scratch/deepseek_response.md` (line 257 is a huge raw-thinking-trace debris line — read lines 1-256 and 258-294 for the actual formatted review).
+
 ## ✅ 2026-09-26: DeepSeek follow-up review of all 3 batches' fixes — 1 real gap found and fixed, everything else verified clean
 
 Per user request, after all 3 week-review batches' fixes were committed (`ade7e91`, `e70d31e`, `eb0bcdd`), dispatched one more DeepSeek pass specifically reviewing those fixes for correctness (not re-deriving the original findings). Verdict: substantively correct, no new capital-risk or data-corruption bug introduced.

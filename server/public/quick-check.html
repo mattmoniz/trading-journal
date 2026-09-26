@@ -3286,7 +3286,17 @@ async function checkFlagsBanner() {
     const el = $('flags-banner');
     if (d.suppressAllDisabled) {
       el.style.display = 'block';
+      el.style.background = 'var(--red)';
       el.textContent = `⚠ SUPPRESS_ALL_DISABLED is ON (since ${d.suppressAllDisabledSince || 'unknown'}) — every setup fires live regardless of real track record`;
+    } else if (d.allLevelsLive) {
+      // Found via DeepSeek review 2026-09-26 -- the endpoint always returned this field but the
+      // banner only ever checked suppressAllDisabled, so ALL_LEVELS_LIVE (a separate, still-on
+      // override) carried the same "someone has to remember to flip it back" risk with zero
+      // visible indicator. Less severe than SUPPRESS_ALL_DISABLED (it still respects real
+      // SETUP_STATUS suppression), so a lower-urgency amber banner rather than red.
+      el.style.display = 'block';
+      el.style.background = 'var(--amber)';
+      el.textContent = `⚠ ALL_LEVELS_LIVE is ON — every level-fade type fires live, cluster siblings trade individually`;
     } else {
       el.style.display = 'none';
     }

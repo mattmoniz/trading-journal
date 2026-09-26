@@ -85,7 +85,7 @@ import { findSwingPoints } from './swingPivots.js';
 import { getVolumeBaseline } from './touchQuality.js';
 import { cacheGet, cacheSet } from '../lib/cache.js';
 import { getBetClass } from '../config/setupTypes.js';
-import { dropToTimeline, etNaiveTimestampToMs, bucketTo5mBars, buildRollWeekDateSet, walkZigZagAcceptance } from './acdShared.js';
+import { dropToTimeline, etNaiveTimestampToMs, bucketTo5mBars, buildRollWeekDateSet, walkZigZagAcceptance, isInNewEntryDeadZone, isInRthOpenDeadZone } from './acdShared.js';
 
 const SWING_WIDTH = 5;
 // Light pre-filter sitting in front of the order-flow signature -- see file header for why
@@ -275,6 +275,7 @@ export async function computeMinorDefendedLevelSignals() {
       pivotPrice: ev.pivot.price,
       actualExtreme,
       atr: ev.atr,
+      mod: bars1m[matchedSigIdx].mod, // candidate's own ET minute-of-day, for the dead-zone gate below
     });
   }
 
@@ -320,6 +321,15 @@ export async function computeMinorDefendedLevelSignal(todayET, etMin) {
 
     const inserted = [];
     for (const s of recent) {
+      // No-new-entries dead zones (found 2026-09-26 via DeepSeek review of the same-night
+      // dead-zone-extension audit -- this file was omitted entirely from the "5 standalone
+      // detector files" list that got fixed, the "minor" sibling of
+      // majorPivotDefendedBreakDetector.js which WAS fixed). This file is RTH-only by design
+      // (isRTHMod already restricts signal detection to 570-960 above), so no session-split
+      // logic is needed here -- just the plain gate, keyed on the candidate's OWN bar-derived
+      // `mod` (set when the signal was built), not the poll's wall-clock time.
+      if (isInNewEntryDeadZone(s.mod) || isInRthOpenDeadZone(s.mod)) continue;
+
       const setupType = `MINOR_DEFENDED_LEVEL_${s.direction}`;
 
       // REMOVED 2026-09-15 (DeepSeek code review): a DB-level dupeCheck used to live here

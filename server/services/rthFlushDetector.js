@@ -191,6 +191,16 @@ export async function detectRthFlush(io) {
     // downstream resolution walk in resolveSetupsByPrice() (a stop-loss look-back window starting
     // hours before the trade actually existed).
     const firedAt = resolutionBar.ts.toISOString().slice(0, 16).replace('T', ' ') + ':00';
+    // Re-check the dead zone against the CANDIDATE's own resolution-bar timestamp, not the
+    // poll's wall-clock `totalMins` used for the cheap early-exit above (found via DeepSeek
+    // review 2026-09-26: the earlier check gated on when the POLL happened to run, not when
+    // this row's own `fired_at` actually falls -- the exact `firedEtMin`-vs-`etMin` shape a
+    // standing CLAUDE.md rule warns about, elsewhere confirmed to matter under real poll lag.
+    // Currently a no-op in practice -- the flush trigger's own >=30-bar consolidation window
+    // means resolutionBar's mod can never land inside 570-575 -- but the shape needs to be
+    // correct in case that consolidation requirement is ever shortened.
+    const resolutionMod = resolutionBar.ts.getUTCHours() * 60 + resolutionBar.ts.getUTCMinutes();
+    if (isInRthOpenDeadZone(resolutionMod)) return;
 
     const live = await getLiveStatus(setupType);
     // Live-safety-gate checkpoint added 2026-09-07 -- see server/services/detectorLiveGates.js's
