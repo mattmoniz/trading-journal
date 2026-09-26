@@ -1,6 +1,16 @@
 # Open Threads / Pending Work
 
 Older resolved/superseded threads are periodically moved to [OPEN_THREADS_ARCHIVE.md](OPEN_THREADS_ARCHIVE.md) (via `node scripts/archive_open_threads.mjs --apply`) to keep this file's per-session read cost down — nothing is deleted, just relocated. Still-pending items are backed by `OPEN_DECISION`/`RESEARCH_CLAIM` rows regardless, so archiving here never buries anything.
+## ✅ 2026-09-26: DeepSeek week-review batch 3 (final) — clean bill of health on the high-stakes changes, 1 real latency fix
+
+Scope: the one commit from the "ML silo week" (2026-09-20, `fc0e37b`) that changed real live trade-selection ranking (`directionalEv`, now prefers real `SETUP_STATUS` EV over the weekly bar-simulated backtest once real N≥20) and live sizing (`sizeMultiplier` stripped from 12+ factors to the one that survived real-only resimulation) with no DeepSeek review in its own commit message — unlike nearly everything else that week, which explicitly went through DeepSeek at each build step.
+
+**No correctness bug found in either high-stakes change** — DeepSeek verified `directionalEv`'s threshold/fallback/memoization end-to-end (the `-999` always-loses-the-sort sentinel, the 2-arg call site, no stale keying) and confirmed `computeSizeMultiplier()`'s extracted logic is byte-behavior-identical to the surviving factor from the old IIFE, with `sessionConflict` genuinely removed from the sum (not just zeroed). Independently spot-checked before trusting.
+
+One real **MEDIUM** finding, fixed: `tagEntryOrderFlowShadow()` was `await`ed inline at all 6 real insert sites, but the function it calls has an internal 8-second sleep on a stale-bar retry (~1/3 of RTH SHORT fires trigger this) — stalling the rest of each poll's work even though the real trade row was already persisted. Made fire-and-forget at all 6 sites (commit `eb0bcdd`) — safe, since the function already catches its own errors internally. Two LOW stale-comment fixes alongside it.
+
+**All 3 batches of this week's DeepSeek QA pass are now complete.** Total: 1 HIGH, 2 MEDIUM (+1 self-caught while fixing batch 1's finding), 5 LOW — all fixed and verified.
+
 ## ✅ 2026-09-26: DeepSeek week-review batch 2 — 3 real findings, all fixed
 
 Scope: the 9:30-9:35 RTH dead-zone commit + its same-day `firedEtMin`/`isLiveTimeWindowBlocked` staleness fixes (3 commits — the opening-drive gate and POC resolver-race fix from the same week were excluded, since they'd already had a DeepSeek review before shipping).
