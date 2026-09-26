@@ -1,6 +1,16 @@
 # Open Threads / Pending Work
 
 Older resolved/superseded threads are periodically moved to [OPEN_THREADS_ARCHIVE.md](OPEN_THREADS_ARCHIVE.md) (via `node scripts/archive_open_threads.mjs --apply`) to keep this file's per-session read cost down — nothing is deleted, just relocated. Still-pending items are backed by `OPEN_DECISION`/`RESEARCH_CLAIM` rows regardless, so archiving here never buries anything.
+## ✅ 2026-09-26: DeepSeek follow-up review of all 3 batches' fixes — 1 real gap found and fixed, everything else verified clean
+
+Per user request, after all 3 week-review batches' fixes were committed (`ade7e91`, `e70d31e`, `eb0bcdd`), dispatched one more DeepSeek pass specifically reviewing those fixes for correctness (not re-deriving the original findings). Verdict: substantively correct, no new capital-risk or data-corruption bug introduced.
+
+**One real (LOW-MEDIUM) gap, fixed**: the batch-1 fix added `late_fill_past_expiry_basis` exclusion to `getDecidedRows()` (used by `renderRangeStats`/`renderEquityCurve`), but `renderAggTable`'s by-setup table on the same Performance card was fed the raw, unfiltered rows array — so the by-setup N/wins/losses/pnl silently disagreed with the Net P&L/equity curve directly above it. Fixed by reusing `getDecidedRows()` there too (commit `08be100`).
+
+Everything else checked out with specific line-number verification: the `expires_at`/`resolved_at` boundary partition is clean (no gap, no overlap), `IS NOT TRUE` correctly treats a never-backfilled `NULL` as "keep" not "exclude", both scripts are confirmed idempotent on re-run, `firedEtMin`'s fallback getter convention (local vs UTC) matches how each source object was actually constructed, and all 6 `tagEntryOrderFlowShadow` fire-and-forget sites were confirmed safe (nothing downstream reads the value, the function never rejects). Two LOW, explicitly-not-bugs observations noted (the repair script's dry-run still runs an idempotent `ADD COLUMN IF NOT EXISTS`; the backfill script hardcodes 3 backup-table names, not self-healing if one's missing — both correct for one-time historical scripts, no live impact, no action taken).
+
+**This closes the full DeepSeek week-review initiative**: 3 audit batches + 1 fixes-review pass, all real findings fixed and verified, server restarted and confirmed postdating every change throughout.
+
 ## ✅ 2026-09-26: DeepSeek week-review batch 3 (final) — clean bill of health on the high-stakes changes, 1 real latency fix
 
 Scope: the one commit from the "ML silo week" (2026-09-20, `fc0e37b`) that changed real live trade-selection ranking (`directionalEv`, now prefers real `SETUP_STATUS` EV over the weekly bar-simulated backtest once real N≥20) and live sizing (`sizeMultiplier` stripped from 12+ factors to the one that survived real-only resimulation) with no DeepSeek review in its own commit message — unlike nearly everything else that week, which explicitly went through DeepSeek at each build step.
