@@ -9,8 +9,22 @@ import { INSTRUMENTS } from '../config/instruments.js';
 import { getDeltaConfirmationCategory } from '../services/deltaConfirmation.js';
 import { REAL_TRADE_FILTER } from '../../scripts/backtest_setup_status.mjs';
 import { MECHANISMS, MIN_REAL_N, evalBucket, modeOf } from '../../scripts/backtest_flush_post_entry_exit_signals_promotion.mjs';
+import { SUPPRESS_ALL_DISABLED, ALL_LEVELS_LIVE } from '../services/setupEligibility.js';
 
 const router = express.Router();
+
+// GET /api/setups/live-flags -- exposes the temporary suppression-override flags so the
+// frontend can show an unmissable banner while they're on. Added 2026-09-26 (OPEN_DECISION
+// suppress_all_disabled_temporary_override_20260925's own text names this as one of its 3
+// resolution paths -- "someone has to remember to flip this back to enabled:false" -- a
+// visible banner is the one that doesn't need anyone to remember anything).
+router.get('/setups/live-flags', (req, res) => {
+  res.json({
+    suppressAllDisabled: !!SUPPRESS_ALL_DISABLED.enabled,
+    suppressAllDisabledSince: SUPPRESS_ALL_DISABLED.enabled ? SUPPRESS_ALL_DISABLED.addedDate : null,
+    allLevelsLive: !!ALL_LEVELS_LIVE.enabled,
+  });
+});
 
 // Fallback medians from Key Level Analysis when sessions < 3
 const FALLBACK_MEDIANS = {

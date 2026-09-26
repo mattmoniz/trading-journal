@@ -288,6 +288,12 @@
 </head>
 <body>
 
+<!-- SUPPRESS_ALL_DISABLED banner (2026-09-26) -- resolves OPEN_DECISION
+     suppress_all_disabled_temporary_override_20260925's own "someone has to remember to
+     flip this back" risk with a visible indicator instead of relying on memory. Hidden by
+     default, shown by checkFlagsBanner() below if the live flag is currently on. -->
+<div id="flags-banner" style="display:none; position:sticky; top:0; z-index:1000; background:var(--red); color:#fff; font-size:12px; font-weight:700; text-align:center; padding:6px 10px; letter-spacing:0.02em;"></div>
+
 <div id="hamburger-btn" onclick="toggleNavMenu()">☰</div>
 <div id="nav-menu">
   <a onclick="jumpTo('top')">Market Pulse</a>
@@ -3264,7 +3270,25 @@ function toggleTimelineCollapse() {
 }
 applyTimelineCollapseState();
 
+// SUPPRESS_ALL_DISABLED / ALL_LEVELS_LIVE banner (2026-09-26) -- see the #flags-banner div's
+// own comment above. Slow-changing (a manual code flip, not live data) but polled at the same
+// 5min cadence as loadVolRegime/loadModelsTab so a flip mid-session is still caught without
+// needing a page reload.
+async function checkFlagsBanner() {
+  try {
+    const d = await fetch('/api/setups/live-flags', { cache: 'no-store' }).then(r => r.json());
+    const el = $('flags-banner');
+    if (d.suppressAllDisabled) {
+      el.style.display = 'block';
+      el.textContent = `⚠ SUPPRESS_ALL_DISABLED is ON (since ${d.suppressAllDisabledSince || 'unknown'}) — every setup fires live regardless of real track record`;
+    } else {
+      el.style.display = 'none';
+    }
+  } catch (e) { /* fail quiet -- a banner check failing shouldn't break the rest of the page */ }
+}
+
 // ---- Boot ----
+checkFlagsBanner();
 loadPulse();
 loadTimeline();
 loadRange('today');
@@ -3287,6 +3311,7 @@ setInterval(loadVolRegime, 300000);
 setInterval(loadModelsTab, 300000);
 setInterval(loadPulseReading, 60000);
 setInterval(loadTagRanking, 60000);
+setInterval(checkFlagsBanner, 300000);
 
 // Mobile browsers throttle or fully suspend setInterval timers on a backgrounded tab (screen
 // lock, app switch) -- this page is checked mostly on a phone via the Cloudflare tunnel, so
