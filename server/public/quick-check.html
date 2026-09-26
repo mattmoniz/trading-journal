@@ -3195,7 +3195,13 @@ function renderPerformance() {
   }
 
   renderRangeStats('range-stats', rows, declustered);
-  renderAggTable('range-agg', rows);
+  // FIXED 2026-09-26 (DeepSeek follow-up review of the batch-1 fix, real finding): this used
+  // to pass the RAW rows array -- renderRangeStats/renderEquityCurve both internally call
+  // getDecidedRows(rows, declustered) (which excludes late_fill_past_expiry_basis rows per
+  // the earlier fix), but this call never did, so the by-setup table's N/wins/losses/pnl
+  // silently disagreed with the Net P&L/equity curve on the same card. Reusing getDecidedRows
+  // here too, matching the other two renderers, instead of hand-rolling a new filter.
+  renderAggTable('range-agg', getDecidedRows(rows, declustered));
   renderEquityCurve('range-equity', rows, currentRange, declustered);
 }
 
