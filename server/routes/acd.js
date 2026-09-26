@@ -5187,6 +5187,12 @@ export default function createACDRouter(io) {
                     // here too) before a sibling can ever compete for ACTIVE.
                     let sibLive = false;
                     if (winnerFound && isLevelForcedLive(candType)) {
+                      // isLiveTimeWindowBlocked(candType, etMin) here uses the OUTER wall-clock
+                      // etMin, not a firedEtMin-style bar-derived value -- confirmed correct, not
+                      // a 3rd instance of the ec55e52/069b5c8 staleness bug (DeepSeek week-review
+                      // batch 2, finding #3): this sibling's own INSERT below stamps fired_at via
+                      // NOW(), not a bar timestamp, so wall-clock IS the right reference here --
+                      // same reasoning as momentumChaseDetector.js's exemption.
                       const sibBaseEligible = isLiveEligible(candType, {
                         suppressedSetups: getCached(todayET, 'levelFadeStats', DAY_CACHE_TTL)?._suppressedSetups ?? new Set(),
                         dowSuppressToday: getCached(todayET, 'levelFadeStats', DAY_CACHE_TTL)?._dowSuppressToday ?? new Set(),
@@ -6735,7 +6741,16 @@ export default function createACDRouter(io) {
       // (inside the block) but weren't inserted until 9:35:58/9:36:37 wall-clock (after it), so
       // etMin read as clear. Use THIS (the row's own fired-bar time) for any dead-zone check that
       // gates whether THIS candidate may go live, not the poll's own current etMin.
-      const firedEtMin = latestBarTs ? latestBarTs.getUTCHours() * 60 + latestBarTs.getUTCMinutes() : etMin;
+      // FIXED 2026-09-26 (DeepSeek week-review batch 2, finding #2): the null-latestBarTs
+      // fallback used to be `etMin` (captured at poll-start, ~line 3808) -- but firedAtTs/
+      // firedTimeStr's OWN null fallback is etNow (captured here, mid-poll, many awaits later),
+      // read via its LOCAL getters (etNow is built from a toLocaleString('en-US', {timeZone:
+      // 'America/New_York'}) string, a different construction than latestBarTs's UTC-mislabeled
+      // one -- local getters are correct for THIS object). Falling back to etMin instead of
+      // etNow could disagree by the poll's own duration whenever latestBarTs is genuinely null
+      // (rare -- requires an empty getLatestBars() result). Matched to etNow for exact parity
+      // with what fired_at itself falls back to in this same edge case.
+      const firedEtMin = latestBarTs ? latestBarTs.getUTCHours() * 60 + latestBarTs.getUTCMinutes() : etNow.getHours() * 60 + etNow.getMinutes();
 
       // Expiry per setup type (minutes from fired_at); null = no time expiry
       const EXPIRY_WINDOW = {
@@ -7021,13 +7036,22 @@ export default function createACDRouter(io) {
         // Known limitation (DeepSeek review 2026-09-25): a LIVE_TIME_WINDOW-forced candidate within
         // 5min of a same-type resolution is skipped here, not SHADOW-inserted -- same accepted
         // tradeoff as isSameSetupRefireBlocked (bypassing reintroduces the 2026-08-20 flood).
+        // FIXED 2026-09-26 (DeepSeek week-review batch 2, finding #1): this used the OUTER
+        // inNewEntryDeadZone/inRthOpenDeadZone (poll wall-clock etMin, ~line 3833) instead of
+        // mainInNewEntryDeadZone/mainInRthOpenDeadZone (firedEtMin, this row's own bar-derived
+        // fired_at, ~line 6985) -- the exact staleness class ec55e52 fixed for forceShadow/
+        // forceShadowReason just above, just missed here. Consequence: a touch whose bar fell
+        // inside the dead zone but whose poll ran a few minutes late correctly avoided ACTIVE
+        // (forceShadow used the right flag) but fell through to a SHADOW insert instead of the
+        // intended full skip -- no capital risk, but silently re-polluted the dead zone with
+        // SHADOW rows, the exact thing the 2026-09-16 "quiet dead zone" change existed to stop.
         const skipRedundantShadowInsert = forceShadow
-          && (inNewEntryDeadZone || inRthOpenDeadZone || inRefireCooldown || await recentlyShadowedSameType(todayET, active.type));
+          && (mainInNewEntryDeadZone || mainInRthOpenDeadZone || inRefireCooldown || await recentlyShadowedSameType(todayET, active.type));
         if (skipRedundantShadowInsert) {
           logGatedCandidate({
             tradeDate: todayET, setupType: active.type, gateName: 'REDUNDANT_SHADOW_SUPPRESSED',
-            gateReason: inNewEntryDeadZone ? 'POST_RTH_DEAD_ZONE'
-              : inRthOpenDeadZone ? 'RTH_OPEN_DEAD_ZONE'
+            gateReason: mainInNewEntryDeadZone ? 'POST_RTH_DEAD_ZONE'
+              : mainInRthOpenDeadZone ? 'RTH_OPEN_DEAD_ZONE'
               : `${forceShadowReason} + same-type resolved within ${REFIRE_COOLDOWN_MINUTES[active.type] ?? SHADOW_NOISE_SUPPRESSION_MINUTES}min`,
             entry: active.entry, stop: active.stop, target: safeT1Level,
           });
