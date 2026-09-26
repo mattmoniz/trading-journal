@@ -66,7 +66,7 @@ import { getRollingATR } from './levelProximityService.js';
 import { findSwingPoints } from './swingPivots.js';
 import { cacheGet, cacheSet } from '../lib/cache.js';
 import { getBetClass } from '../config/setupTypes.js';
-import { dropToTimeline, etNaiveTimestampToMs, bucketTo5mBars, buildRollWeekDateSet } from './acdShared.js';
+import { dropToTimeline, etNaiveTimestampToMs, bucketTo5mBars, buildRollWeekDateSet, isInNewEntryDeadZone, isInRthOpenDeadZone } from './acdShared.js';
 
 // EARNED literals below -- each was chosen from a real parameter sweep tested against
 // real-stop/target EV (not guessed), same category as majorPivotDefendedBreakDetector.js's
@@ -347,6 +347,16 @@ export async function computeStallDefendedLevelSignal(todayET) {
       const stopPx = s.entryPrice - sign * stopDist;
       const targetPx = s.entryPrice + sign * TARGET_ATR_MULT * s.atr;
       const entryDate = new Date(s.entryTsStr.replace(' ', 'T') + 'Z');
+      // No-new-entries dead zones (found 2026-09-26 auditing OPEN_DECISION
+      // dead_zone_full_skip_live_verification_pending_20260916 -- this standalone detector
+      // was never wired to either dead-zone helper at all, unlike every acd.js insert site.
+      // Confirmed real: STALL_DEFENDED_LEVEL_SHORT (id 124469) fired 2026-09-18 16:30 ET,
+      // squarely inside the 4-6pm window. Gate on the STALL's own entry time (same
+      // firedEtMin-style philosophy as acd.js's dead-zone fixes), not "now" -- entryDate is
+      // the same self-consistent naive-ET-as-UTC parse used for expiresAt above, so UTC
+      // getters read the real ET wall-clock digits correctly.
+      const entryEtMin = entryDate.getUTCHours() * 60 + entryDate.getUTCMinutes();
+      if (isInNewEntryDeadZone(entryEtMin) || isInRthOpenDeadZone(entryEtMin)) continue;
       const expiresAt = new Date(entryDate.getTime() + HOLD_MIN * 60000);
       const setupType = `STALL_DEFENDED_LEVEL_${s.direction}`;
       const t1Label = `RTH stall, ${TARGET_ATR_MULT}x ATR target, ${HOLD_MIN}min hold (uncapped past session boundary)`.slice(0, 100);

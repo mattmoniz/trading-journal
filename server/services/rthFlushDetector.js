@@ -24,6 +24,7 @@
 // for the Setup Reference page), never read here for the actual live stop.
 import { query } from '../db.js';
 import { dropToTimeline, computeFireTags, FIRE_TAG_COLS, fireTagValues } from '../routes/acd.js';
+import { isInRthOpenDeadZone } from './acdShared.js';
 import { getBetClass } from '../config/setupTypes.js';
 import { computeBalanceAndResolution } from './flushMechanics.js';
 import { getVolumeBaseline } from './touchQuality.js';
@@ -87,6 +88,15 @@ export async function detectRthFlush(io) {
     // backtest_flush_patterns.mjs recalibration is never picked up without a full server restart.
     if (_cache.date !== tradeDateStr) _cache = { date: tradeDateStr, optimalTargets: null, firedToday: false };
     if (totalMins < EVAL_START_ET_MIN || totalMins >= EVAL_END_ET_MIN) return;
+    // 9:30-9:35 ET no-new-entries dead zone (found 2026-09-26 auditing OPEN_DECISION
+    // dead_zone_full_skip_live_verification_pending_20260916): EVAL_START_ET_MIN=570 means
+    // this window's own start overlaps the dead zone exactly, and this file was never wired
+    // to either dead-zone helper -- no acd.js insert site is involved here (this is a fully
+    // separate poller). No real fire confirmed in this exact window yet, but the exposure is
+    // real and structurally identical to the confirmed STALL_DEFENDED_LEVEL_SHORT miss found
+    // the same audit. EVAL_END_ET_MIN=960 already excludes the 4-6PM zone, so only this one
+    // needs adding here.
+    if (isInRthOpenDeadZone(totalMins)) return;
     if (_cache.firedToday) return;
 
     if (!_cache.optimalTargets) _cache.optimalTargets = await getOptimalTargets();

@@ -56,7 +56,7 @@ import { getRollingATR } from './levelProximityService.js';
 import { findSwingPoints } from './swingPivots.js';
 import { cacheGet, cacheSet } from '../lib/cache.js';
 import { getBetClass } from '../config/setupTypes.js';
-import { dropToTimeline, etNaiveTimestampToMs, bucketTo5mBars, buildRollWeekDateSet, walkZigZagAcceptance } from './acdShared.js';
+import { dropToTimeline, etNaiveTimestampToMs, bucketTo5mBars, buildRollWeekDateSet, walkZigZagAcceptance, isInNewEntryDeadZone, isInRthOpenDeadZone } from './acdShared.js';
 
 const SWING_WIDTH = 5;
 const ZIGZAG_THRESHOLD = 1.5; // x ATR20 -- confirmed sweet spot, both configs peak here
@@ -238,6 +238,16 @@ export async function computeMajorPivotDefendedBreakSignal(todayET) {
       const entryDate = new Date(b.entryTsStr.replace(' ', 'T') + 'Z');
       const entryMod = etModOf(entryDate);
       const session = isGlobexMod(entryMod) ? 'GLOBEX' : 'RTH';
+      // No-new-entries dead zones, RTH only (found 2026-09-26 auditing OPEN_DECISION
+      // dead_zone_full_skip_live_verification_pending_20260916 -- user confirmed the intent
+      // directly: "the 4-6 area is just a volumeless deadzone that fires random trades that
+      // hurt us"). This does NOT touch the RTH/Globex session-split boundary the file's own
+      // header warns not to change (that's about which stop/target CONFIG a break uses, an
+      // entirely different question from whether a NEW entry should be allowed at all) --
+      // this is a plain additional gate layered on top, same shape as every acd.js insert
+      // site. Globex-classified breaks are untouched, matching "RTH-only by evidence"
+      // elsewhere in this codebase's dead-zone convention.
+      if (session === 'RTH' && (isInNewEntryDeadZone(entryMod) || isInRthOpenDeadZone(entryMod))) continue;
       // Globex arm (config "A") RE-ENABLED 2026-09-14, SHADOW-ONLY -- was a hard `continue`
       // (zero rows, not even SHADOW) from 2026-09-10 through today, after a strict day-blocked-
       // bootstrap + full-placebo-range standard found 0/64 stop/target/hold cells clear the bar
