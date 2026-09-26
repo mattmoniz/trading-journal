@@ -69,7 +69,17 @@ const SUPPRESS_MAX_EV  = -5;   // EV below -$5/trade (sole condition — no WR g
 // NOT yet cover the still-actively-racing contract-calendar mechanism found the same day
 // (2026-09-14/09-15) -- that one is tracked separately since repairing it now would need
 // redoing once the underlying race is actually fixed.
-export const REAL_TRADE_FILTER = `origin_status IN ('ACTIVE','SHADOW') AND (resolution_method IS NULL OR resolution_method NOT IN ('MARK_TO_MARKET','RECOVERY_MTM')) AND ib_window_stale_basis IS NOT TRUE AND stale_entry_price_basis IS NOT TRUE`;
+//
+// late_fill_past_expiry_basis (2026-09-26, user request: "backfill the pnl with more accurate
+// pnl given this new info", scripts/backfill_sibling_late_fill_outcomes_20260926.mjs): 287
+// cluster-sibling rows whose entry never traded within their own expires_at window (the
+// 2026-09-25/26 sibling-fill-gate fix correctly marked them NOT_FILLED) were then re-walked
+// with NO time limit to find their honest eventual outcome, for historical-record purposes --
+// median 60min, up to 5.6 real days past the original expiry. That honest outcome is real
+// price history, but the live system would never actually leave a resting order open that
+// long -- it marks NOT_FILLED at expiry, full stop. Flagged so these can be inspected without
+// silently inflating any setup_type's real N/EV with fills that could never have happened live.
+export const REAL_TRADE_FILTER = `origin_status IN ('ACTIVE','SHADOW') AND (resolution_method IS NULL OR resolution_method NOT IN ('MARK_TO_MARKET','RECOVERY_MTM')) AND ib_window_stale_basis IS NOT TRUE AND stale_entry_price_basis IS NOT TRUE AND late_fill_past_expiry_basis IS NOT TRUE`;
 
 // Cluster touch credit Phase 2 (2026-09-07, OPEN_DECISION
 // cluster_touch_credit_phase3_sibling_rows_shipped, DeepSeek design-critiqued): a cluster's
