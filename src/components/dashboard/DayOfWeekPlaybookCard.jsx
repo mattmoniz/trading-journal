@@ -12,20 +12,23 @@ export default function DayOfWeekPlaybookCard({ todayData, forecast }) {
   // against a real Sunday-evening session with fresh bars flowing and setups resolving.
   const isSundayGlobexOpen = dow === 0 && (nowET.getHours() >= 18);
 
-  const monStats = todayData?.tradeBacktest?.allTime?.dowStats?.[1] || { winRate: 40.0, avgPnl: -339 };
-  const friStats = todayData?.tradeBacktest?.allTime?.dowStats?.[5] || { winRate: 36.4, avgPnl: 374 };
+  // No hardcoded fallback numbers (CLAUDE.md: never hand-type a WR%/N/$ literal, even as a
+  // placeholder "for now") -- null when the real backtest hasn't loaded yet, and the
+  // qualitative text below omits the specific figure rather than substituting an invented one.
+  const monStats = todayData?.tradeBacktest?.allTime?.dowStats?.[1] ?? null;
+  const friStats = todayData?.tradeBacktest?.allTime?.dowStats?.[5] ?? null;
 
   const pd = dow === 1 ? {
     title: 'Monday Mean Reversion Protocol',
     alert: '⚠️ HIGH LOSS RISK DAY',
-    text: `Mondays represent a historical loss rate (${monStats.winRate.toFixed(1)}% WR, $${Math.abs(monStats.avgPnl).toFixed(0)} avg P&L on live accounts). Standard breakout plays have an extremely high failure rate. Focus strictly on fading early range extensions. Use 50% max sizing.`,
+    text: `Mondays represent a historical loss rate${monStats ? ` (${monStats.winRate.toFixed(1)}% WR, $${Math.abs(monStats.avgPnl).toFixed(0)} avg P&L on live accounts)` : ''}. Standard breakout plays have an extremely high failure rate. Focus strictly on fading early range extensions. Use 50% max sizing.`,
     recs: ['FAILED_AUCTION_LONG/SHORT', 'VALUE_AREA_RESPONSIVE_LONG/SHORT', 'TRT_LONG/SHORT'],
     color: '#ef4444',
     bg: 'rgba(239, 68, 68, 0.05)',
   } : dow === 5 ? {
     title: 'Friday Capital Preservation Protocol',
     alert: '⚠️ AFTERNOON SQUARING RISK',
-    text: `Fridays have a ${(100 - friStats.winRate).toFixed(1)}% red rate due to afternoon profit givebacks. Keep stops tight, lock in gains early. Shut screens by 12:30 PM ET.`,
+    text: `Fridays have${friStats ? ` a ${(100 - friStats.winRate).toFixed(1)}%` : ' a historical'} red rate due to afternoon profit givebacks. Keep stops tight, lock in gains early. Shut screens by 12:30 PM ET.`,
     recs: ['GAP_UP/DOWN_FILL', 'VALUE_AREA_RESPONSIVE_LONG'],
     color: '#f59e0b',
     bg: 'rgba(245, 158, 11, 0.05)',

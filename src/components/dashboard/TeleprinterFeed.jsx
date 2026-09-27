@@ -14,11 +14,14 @@ import { API_URL } from '../../constants/api.js';
 function buildFeed({ liveStatus, setups, limits, tradeBacktest }) {
   const feed = [];
 
-  const monStats = tradeBacktest?.allTime?.dowStats?.[1] || { winRate: 40.0, avgPnl: -339 };
-  const friStats = tradeBacktest?.allTime?.dowStats?.[5] || { winRate: 36.4, avgPnl: 374 };
-  const monWinRate = monStats.winRate;
-  const monAvgPnl = monStats.avgPnl;
-  const friRedRate = 100 - friStats.winRate;
+  // No hardcoded fallback numbers (CLAUDE.md: never hand-type a WR%/N/$ literal, even as a
+  // placeholder "for now") -- null when the real backtest hasn't loaded yet, and prepText
+  // below omits the specific figure rather than substituting an invented one.
+  const monStats = tradeBacktest?.allTime?.dowStats?.[1] ?? null;
+  const friStats = tradeBacktest?.allTime?.dowStats?.[5] ?? null;
+  const monWinRate = monStats?.winRate ?? null;
+  const monAvgPnl = monStats?.avgPnl ?? null;
+  const friRedRate = friStats ? 100 - friStats.winRate : null;
 
   const todayETStr = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
   const targetDateStr = setups?.isFallback ? todayETStr : (setups?.date || liveStatus?.date || todayETStr);
@@ -33,8 +36,8 @@ function buildFeed({ liveStatus, setups, limits, tradeBacktest }) {
 
   // Pre-market prep
   let prepText = '';
-  if (dayOfWeek === 1) prepText = `Monday Mean Reversion Protocol active. Mondays have a historical ${monWinRate.toFixed(1)}% win rate (${monAvgPnl < 0 ? '-' : ''}$${fmtP(Math.abs(monAvgPnl))} avg P&L). Standard breakout plays have an extremely high failure rate. Focus strictly on fading early range extensions. Risk parameters: 50% max sizing.`;
-  else if (dayOfWeek === 5) prepText = `Friday Capital Preservation Protocol active. Fridays carry a ${friRedRate.toFixed(1)}% historical red rate. Focus on morning Gap Fills only. Hard rule: Shut down screens by 12:30 PM ET regardless of P&L.`;
+  if (dayOfWeek === 1) prepText = `Monday Mean Reversion Protocol active. Mondays have a historical${monWinRate != null ? ` ${monWinRate.toFixed(1)}%` : ''} win rate${monAvgPnl != null ? ` (${monAvgPnl < 0 ? '-' : ''}$${fmtP(Math.abs(monAvgPnl))} avg P&L)` : ''}. Standard breakout plays have an extremely high failure rate. Focus strictly on fading early range extensions. Risk parameters: 50% max sizing.`;
+  else if (dayOfWeek === 5) prepText = `Friday Capital Preservation Protocol active. Fridays carry a${friRedRate != null ? ` ${friRedRate.toFixed(1)}%` : ''} historical red rate. Focus on morning Gap Fills only. Hard rule: Shut down screens by 12:30 PM ET regardless of P&L.`;
   else if (dayOfWeek === 2 || dayOfWeek === 4) prepText = `${dayOfWeek === 2 ? 'Tuesday' : 'Thursday'} Trend Sweet Spot Playbook active. Mid-week liquidity days with clean, sustained trend characteristics. Standard sizing and breakout/continuation plays fully authorized.`;
   else if (dayOfWeek === 3) prepText = "Wednesday Trend Continuation Playbook active. Strong tendency for morning momentum to continue into the PM close. Ride early drives and avoid counter-trend fading before 1:30 PM.";
   else prepText = "Weekend Prep Protocol active. Market closed. Review current playbook metrics and verify setup detections in the Chart Review sub-tab.";

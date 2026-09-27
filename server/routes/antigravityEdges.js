@@ -474,7 +474,15 @@ async function getLiveEdgesContext() {
              s.touch_quality, s.touch_quality_vol_z::float, s.bar6_checkpoint, s.bar6_exit_recommended,
              s.delta_confirmation_state
       FROM active_setups s
-      WHERE s.trade_date = $1 AND s.origin_status NOT IN ('SHADOW', 'BACKFILL')
+      -- FIXED 2026-09-27 (DeepSeek dashboard-statistics review): was
+      -- origin_status NOT IN ('SHADOW','BACKFILL') -- correctly excluded BACKFILL but ALSO
+      -- excluded SHADOW, which CLAUDE.md defines as real (just never shown live). Switched to
+      -- the standard IN ('ACTIVE','SHADOW') convention used everywhere else in this codebase
+      -- (also naturally excludes pre-2026-07-09 UNKNOWN rows). Added is_cluster_primary --
+      -- without it, a confluence-cluster's non-winning siblings show as duplicate cards and
+      -- inflate PermSlipAndStackBar's LONG/SHORT stack count (is_cluster_primary defaults
+      -- true, so this excludes nothing for the vast majority of non-clustered rows).
+      WHERE s.trade_date = $1 AND s.origin_status IN ('ACTIVE', 'SHADOW') AND s.is_cluster_primary
       ORDER BY s.fired_at DESC
     `, [targetDate]),
     // Baseline win rates
@@ -1451,12 +1459,18 @@ async function getLiveEdgesContext() {
   const setupDayOfWeek = todayD.getDay();
 
   for (const s of setupsQ.rows) {
-    const base = baselineMap[s.setup_type] || { wr: 0.50, n: 25 };
-    let adjustedWr = base.wr;
-    let confidence = 'MEDIUM';
+    // No fabricated fallback (CLAUDE.md: never hand-type a WR%/N/$ literal, even as a
+    // placeholder "for now") -- found 2026-09-27, DeepSeek dashboard-statistics review:
+    // `{ wr: 0.50, n: 25 }` invented an N that clears this codebase's own N>=20 "decisive"
+    // floor, so a setup with no real baseline row read as confidently-calculated rather
+    // than as a missing-data placeholder. `base` is null when no real baseline exists;
+    // every downstream field for this row stays null/NO_DATA instead of a computed guess.
+    const base = baselineMap[s.setup_type] || null;
+    let adjustedWr = base?.wr ?? null;
+    let confidence = base ? 'MEDIUM' : 'NO_DATA';
     let rec = '';
 
-    const dynamicEdges = dynamicEdgesMap[s.setup_type] || [];
+    const dynamicEdges = base ? (dynamicEdgesMap[s.setup_type] || []) : [];
     let dynamicAdj = 0;
     const dynamicReasons = [];
 
@@ -1504,13 +1518,17 @@ async function getLiveEdgesContext() {
       }
     }
 
-    adjustedWr = Math.max(0.05, Math.min(0.95, adjustedWr));
-    if (!rec) rec = 'Standard context — no significant adjustments.';
+    if (base) {
+      adjustedWr = Math.max(0.05, Math.min(0.95, adjustedWr));
+      if (!rec) rec = 'Standard context — no significant adjustments.';
 
-    if (adjustedWr >= 0.58) confidence = 'HIGH';
-    else if (adjustedWr >= 0.46) confidence = 'MEDIUM';
-    else if (adjustedWr <= 0.38) confidence = 'AVOID';
-    else confidence = 'LOW';
+      if (adjustedWr >= 0.58) confidence = 'HIGH';
+      else if (adjustedWr >= 0.46) confidence = 'MEDIUM';
+      else if (adjustedWr <= 0.38) confidence = 'AVOID';
+      else confidence = 'LOW';
+    } else {
+      rec = 'No calibration data yet for this setup.';
+    }
 
     // Touch-quality: informational only, mid-trade signal (only known once the setup's
     // own reaction window has elapsed — see server/services/touchQuality.js). Never
@@ -1533,9 +1551,9 @@ async function getLiveEdgesContext() {
 
     processedSetups.push({
       ...s,
-      baselineWr: base.wr,
-      sampleN: base.n,
-      adjustedWr: parseFloat(Math.max(0.05, Math.min(0.95, adjustedWr)).toFixed(3)),
+      baselineWr: base?.wr ?? null,
+      sampleN: base?.n ?? null,
+      adjustedWr: base ? parseFloat(Math.max(0.05, Math.min(0.95, adjustedWr)).toFixed(3)) : null,
       confidence,
       recommendation: rec,
       touchQualityStats,

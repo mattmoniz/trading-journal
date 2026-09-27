@@ -610,19 +610,27 @@ function EdgeSectionsPanel() {
                 );
               }
 
-              const cc = s.confidence === 'HIGH' ? '#10b981' : s.confidence === 'MEDIUM' ? '#3b82f6' : s.confidence === 'LOW' ? '#f59e0b' : '#ef4444';
+              const cc = s.confidence === 'HIGH' ? '#10b981' : s.confidence === 'MEDIUM' ? '#3b82f6' : s.confidence === 'LOW' ? '#f59e0b' : s.confidence === 'NO_DATA' ? '#64748b' : '#ef4444';
+              // No hardcoded WR%/N literals (CLAUDE.md: never hand-type a WR%/N/$ literal,
+              // even as a placeholder "for now") -- found 2026-09-27 auditing this same file
+              // for the OvernightContextStrip fix (the same anti-pattern, a 9th instance,
+              // never caught by that pass since it's an inline object, not a named
+              // component). The real, live-computed `s.recommendation` (adjustedWr/confidence
+              // from a real dynamic_edges_mining query, rendered just below this) already
+              // covers the actionable part -- these strings are now qualitative-only
+              // descriptions of each setup's mechanism, not a second, stale WR/N claim.
               const edgeCtx = {
-                'VALUE_AREA_RESPONSIVE_SHORT': 'Fade 2D VAH. 66.7% WR controlled. Best on BALANCE + NL30 aligned. 15pt stop / 20pt target.',
-                'IB_BEARISH': 'IB range break short. 74.2% WR on TURBULENT (N=31). Best on TURBULENT + POC aligned.',
-                'IB_BULLISH': 'IB range break long. 77.8% WR on TREND (N=27). Elevated edge today.',
-                'OPEN_DRIVE_SHORT': 'Pullback to OR Low after opening drive. 68% WR. Best WED/FRI + tight OR.',
-                'OPEN_DRIVE_LONG': 'Pullback to OR High after opening drive. 67% WR. Best TREND + tight OR.',
-                'TRT_LONG': 'Trapped shorts reversal. 75% WR at 20 bars. 120-min expiry. Suppress on wide OR.',
-                'C_STANDALONE_DOWN': 'C signal break. 63.3% WR on TURBULENT (N=30). Elevated edge today.',
-                'C_STANDALONE_UP': 'C signal break. 63.3% WR on TREND (N=30). Elevated edge today.',
-                'ABSORPTION_LONG': 'Bullish absorption at support. 71% WR on BALANCE. 2-min bar detection. Runner profile.',
-                'EMA_SNAPBACK_LONG': '9 EMA stretch fade long. 96% directional reversion. Scalp toward EMA.',
-                'EMA_SNAPBACK_SHORT': '9 EMA stretch fade short. 96% directional reversion. Scalp toward EMA.',
+                'VALUE_AREA_RESPONSIVE_SHORT': 'Fade 2D VAH. Best on BALANCE + NL30 aligned. 15pt stop / 20pt target.',
+                'IB_BEARISH': 'IB range break short. Best on TURBULENT + POC aligned.',
+                'IB_BULLISH': 'IB range break long. Best on TREND days.',
+                'OPEN_DRIVE_SHORT': 'Pullback to OR Low after opening drive. Best WED/FRI + tight OR.',
+                'OPEN_DRIVE_LONG': 'Pullback to OR High after opening drive. Best TREND + tight OR.',
+                'TRT_LONG': 'Trapped shorts reversal. 120-min expiry. Suppress on wide OR.',
+                'C_STANDALONE_DOWN': 'C signal break. Best on TURBULENT days.',
+                'C_STANDALONE_UP': 'C signal break. Best on TREND days.',
+                'ABSORPTION_LONG': 'Bullish absorption at support. Best on BALANCE. 2-min bar detection. Runner profile.',
+                'EMA_SNAPBACK_LONG': '9 EMA stretch fade long. Scalp toward EMA.',
+                'EMA_SNAPBACK_SHORT': '9 EMA stretch fade short. Scalp toward EMA.',
                 'COIL_SURGE_LONG': 'Coil + vol surge. Fade toward VWAP. TREND/NL30-aligned only.',
                 'COIL_SURGE_SHORT': 'Coil + vol surge. Fade toward VWAP. TREND/NL30-aligned only.',
               }[s.setup_type] || s.recommendation || '';
@@ -640,7 +648,7 @@ function EdgeSectionsPanel() {
                     <span style={{ fontSize: 11, fontWeight: 800, color: cc, background: `${cc}15`, padding: '1px 6px', borderRadius: 3 }}>{s.confidence}</span>
                   </div>
                   <div style={{ display: 'flex', gap: 12, fontSize: 11, color: '#94a3b8', marginBottom: 4 }}>
-                    <span>WR: <strong style={{ color: cc }}>{(s.adjustedWr * 100).toFixed(0)}%</strong> (N={s.sampleN})</span>
+                    <span>WR: <strong style={{ color: cc }}>{s.adjustedWr != null ? `${(s.adjustedWr * 100).toFixed(0)}%` : 'No data yet'}</strong>{s.sampleN != null && ` (N=${s.sampleN})`}</span>
                     <span>Fired: {s.fired_time} ET</span>
                   </div>
                   <div style={{ display: 'flex', gap: 12, fontSize: 11, color: '#94a3b8' }}>
