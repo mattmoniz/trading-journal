@@ -1,7 +1,47 @@
 # acd.js file-size reduction — scoping spec (2026-09-16)
 
-**Status: Phase A DONE (2026-09-20). Phase B not started.** Written after a user question
+**Status: Phase A DONE (2026-09-20). Phase B DONE (2026-09-20). "Risk gates" extraction DONE
+(2026-09-27, opportunistic, beyond this spec's original scope).** Written after a user question
 ("how many lines is acd.js" → "what would shrink it") turned into a real measurement pass.
+
+## Risk-gates extraction — executed 2026-09-27, opportunistic pass beyond Phase A/B
+
+User asked to "extract from acd.js where applicable" as a general, standing ask (not scoped to
+this spec's original Phase A/B items, both already done by that point). Surveyed the file fresh
+and found a ~700-line region of module-level functions declared BEFORE `createACDRouter()` even
+begins (lines 137-841 of the then-9,388-line file) — the cross-direction fast-flip gate, the
+post-win opposite-family ("sibling reversal") gate, the single-firing directional-conflict gate,
+the same-setup-type refire gate, the direction-loss-alternation SHADOW tag, the plain refire
+cooldown + shadow-noise-suppression dedup, session-bars-since-open, and the momentum-against-fade
+SHADOW tag — all confirmed via exhaustive grep (per this spec's own "Do not assume... prove it"
+rule below) to have zero closure over `req`/`res`/`io`/`liveStats`/`acdJob`, only module-level
+imports and their own local consts. Two names textually adjacent to this block (`STOP_SWEEP_PAUSED`,
+`_dtaGateLogged`) were confirmed used only deep inside `runSetupDetection` and correctly left
+behind. Moved verbatim (zero logic changes) to `server/services/acdRiskGates.js` (714 lines).
+
+**A real bug was caught, not by lint, by the actual restart**: 5 of the ~13 relocated
+functions/consts needed `export` added (they're called from many sites throughout
+`runSetupDetection`, which stays in acd.js and now imports them back) — `npm run lint`/`eslint`
+passed clean on both files despite `SHADOW_NOISE_SUPPRESSION_MINUTES` and 4 others genuinely
+missing their `export` keyword, because ESLint's `no-undef` only catches an unresolved
+identifier, not an import naming something the target module never actually exports — that's a
+runtime ESM `SyntaxError`, only surfaced by actually loading the module. Node crashed 6 times in
+under 10 seconds via `nodemon`/`trading-journal-server.service` before this was caught and fixed
+(the systemd unit hit its own restart-burst limit and went `failed` — expected, matches the
+documented single-instance server-lifecycle behavior, not a new bug). Fixed, then verified by
+directly `import()`-ing both the module and `acd.js` itself in a standalone `node -e` check (not
+just re-running eslint) before restarting again. **Lesson for the next extraction of this shape**:
+after adding `export` to satisfy `no-undef`, independently verify each newly-exported name
+actually resolves via a real module import — don't trust a clean lint pass alone.
+
+Verified before commit: `node --check` both files, `npm run lint`/`npm run build` clean,
+`node scripts/test_invariants.mjs` byte-identical failure/warning counts vs. a `git stash`
+baseline (19/94, both before and after), live server restart with process-uptime confirmed to
+postdate the fix, and a direct hit on `/api/acd/setup-detection` (the live 15s-polled endpoint
+that directly exercises these gates) returning 200 with no new entries in
+`scratch/server_errors.jsonl`.
+
+`server/routes/acd.js`: 9,388 → 8,721 lines (~7% further reduction on top of Phase A/B).
 
 ## Phase A — executed 2026-09-20, corrected the spec's own premise along the way
 
