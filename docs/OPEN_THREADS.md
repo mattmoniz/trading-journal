@@ -1,6 +1,12 @@
 # Open Threads / Pending Work
 
 Older resolved/superseded threads are periodically moved to [OPEN_THREADS_ARCHIVE.md](OPEN_THREADS_ARCHIVE.md) (via `node scripts/archive_open_threads.mjs --apply`) to keep this file's per-session read cost down — nothing is deleted, just relocated. Still-pending items are backed by `OPEN_DECISION`/`RESEARCH_CLAIM` rows regardless, so archiving here never buries anything.
+## 🔄 2026-09-27: Standalone ML trade-generation (not meta-labeling) — scoped and agreed, not started
+
+Follow-on from the probability-sizing thread below: user asked whether the ML system independently generates its own trade candidates from long+short window data. Confirmed directly it does not — `scripts/ml_meta_labeling/dataset.py`'s own header says "Training dataset extraction for the meta-labeling model," and it only grades candidates the existing ~190-setup_type rule engine already fired (joins against `active_setups` rows). A from-scratch detector, with no pre-existing rule-based candidate to grade, does not exist anywhere in this codebase.
+
+Scoped a real plan with the user, `OPEN_DECISION ml_standalone_detector_scoped_not_started_20260927` — full 5-step plan in the decision text (define the label on paper + DeepSeek critique first, walk-forward + day-block permutation-null stress test, independent code review for leakage, shadow-only for weeks, only then the standard new-setup-type checklist). Explicitly flagged as materially harder than the existing meta-label filter, with the Regime A/B/C classifier's own prior failure (passed every EV-split check, failed once independently validated) cited as the reason to be skeptical by default, not enthusiastic. **Not started at any step** — purely scoped and agreed as a real future thread, not begun.
+
 ## ✅ 2026-09-27: ML probability-based sizing — answered with real data, scoped, no build needed yet
 
 User asked whether ML + statistics (combining long and short window features) could fire high-probability trades. **This already exists and is live** — `scripts/ml_meta_labeling/` trains a LightGBM model on real outcomes combining prior-day features (long window: PD high/low/close/POC/VAH/VAL distance) and developing-value features (short window: today's developing POC/VWAP + recent-15-bar order-flow delta), outputs TAKE/VETO per real candidate via `ml_verdicts`, live-scoring real trades right now (`server/services/mlFireTimeScoring.js`).
