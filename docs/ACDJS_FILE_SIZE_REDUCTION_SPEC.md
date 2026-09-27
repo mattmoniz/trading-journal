@@ -43,6 +43,28 @@ that directly exercises these gates) returning 200 with no new entries in
 
 `server/routes/acd.js`: 9,388 → 8,721 lines (~7% further reduction on top of Phase A/B).
 
+## `/acd/correlation` and `/market/pulse` — same session, immediately after the risk-gates move
+
+Per this spec's own "Not yet started" list ("the smaller route handlers... worth doing
+opportunistically if touching those handlers anyway"), checked both while already in this file:
+
+- **`GET /acd/correlation`** (a trades-vs-ACD-signal correlation stat) — confirmed via grep
+  zero callers anywhere (frontend, scripts, `ARCHITECTURE.md`'s own route inventory) since it was
+  first written 2026-06-01, over 3.5 months untouched. Also read the raw `trades` table directly
+  for a PnL-vs-signal correlation, the same shape of analysis CLAUDE.md's standing rule on that
+  table cautions against without being explicitly asked. **Deleted outright**, not extracted —
+  same precedent as `GET /acd/live` (2026-09-20): dead code that touches a sensitive table gets
+  removed, not relocated.
+- **`GET /market/pulse`** — genuinely hot (polled every 30s by both `App.jsx` and
+  `MarketPulseBar.jsx`, plus fetched by `quick-check.html`) but confirmed self-contained (only
+  `query`/`getLatestBars`/`getCached`/`setCached`, no closure over `runSetupDetection`'s
+  `liveStats` or any other router-scoped state). Moved to `server/services/marketPulse.js`
+  (`computeMarketPulse()`), acd.js keeps a 5-line thin wrapper. Byte-diffed the live response
+  before and after (only the `ts` field, a fresh timestamp every call, differed) before trusting
+  it, given this is a hot path.
+
+`server/routes/acd.js`: 8,721 → 8,460 lines.
+
 ## Phase A — executed 2026-09-20, corrected the spec's own premise along the way
 
 The spec's original claim ("already decoupled enough to physically move with no logic changes")

@@ -84,6 +84,10 @@ import { buildAllCandidates, computeLevelFadeFactors, logGatedCandidate } from '
 // (Phase B of docs/ACDJS_FILE_SIZE_REDUCTION_SPEC.md) -- confirmed genuinely self-contained
 // (only query/getLatestBars needed) before moving, unlike Phase A's functions.
 import { computeUnifiedPerformanceAudit } from '../services/unifiedSignalTable.js';
+// /market/pulse's internal logic moved to server/services/marketPulse.js 2026-09-27
+// (acd.js file-size reduction, opportunistic pass) -- confirmed genuinely self-contained
+// (only query/getLatestBars/getCached/setCached) before moving.
+import { computeMarketPulse } from '../services/marketPulse.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -2160,61 +2164,12 @@ export default function createACDRouter(io) {
   });
 
   // GET /api/acd/correlation
-  router.get('/acd/correlation', async (req, res) => {
-    try {
-      const accounts = req.query.accounts ? req.query.accounts.split(',') : null;
-      const acctFilter = accounts?.length ? `AND t.custom_fields->>'account' = ANY($1::text[])` : '';
-      const params = accounts?.length ? [accounts] : [];
-
-      const trades = await query(`
-        SELECT t.id, t.entry_time, t.exit_time, t.pnl, t.setup_type,
-               t.entry_time::date::text as trade_date
-        FROM trades t
-        WHERE t.exit_time IS NOT NULL AND t.pnl IS NOT NULL
-          ${acctFilter}
-        ORDER BY t.entry_time
-      `, params);
-
-      const acdDays = await query('SELECT trade_date::text as trade_date, daily_score, a_up_fired, a_down_fired, c_up_confirmed, c_down_confirmed FROM acd_daily_log');
-
-      const acdMap = {};
-      for (const d of acdDays.rows) { acdMap[d.trade_date] = d; }
-
-      const tagged = trades.rows.map(t => {
-        const rawDate = t.trade_date;
-        const dateKey = typeof rawDate === 'string' ? rawDate : rawDate?.toISOString?.()?.split('T')[0] ?? '';
-        const acd = acdMap[dateKey];
-        const signal = acd?.a_up_fired ? 'A_UP' : acd?.a_down_fired ? 'A_DOWN' : acd ? 'NO_SIGNAL' : null;
-        const confirmed = acd?.c_up_confirmed || acd?.c_down_confirmed;
-        const pnl = parseFloat(t.pnl);
-        return { ...t, pnl, acdSignal: signal, acdConfirmed: confirmed, acdScore: acd?.daily_score ?? null };
-      });
-
-      const withSignal  = tagged.filter(t => t.acdSignal === 'A_UP' || t.acdSignal === 'A_DOWN');
-      const noSignal    = tagged.filter(t => t.acdSignal === 'NO_SIGNAL');
-      const untagged    = tagged.filter(t => t.acdSignal === null);
-      const aUpTrades   = tagged.filter(t => t.acdSignal === 'A_UP');
-      const aDownTrades = tagged.filter(t => t.acdSignal === 'A_DOWN');
-      const confirmed   = tagged.filter(t => t.acdConfirmed);
-
-      const stats = (arr) => arr.length === 0 ? { count: 0, winRate: null, avgPnl: null } : {
-        count: arr.length,
-        winRate: arr.filter(t => t.pnl > 0).length / arr.length,
-        avgPnl: arr.reduce((s, t) => s + t.pnl, 0) / arr.length,
-      };
-
-      res.json({
-        totalTrades: tagged.length,
-        acdLogDays: acdDays.rows.length,
-        withSignal:  stats(withSignal),
-        noSignal:    stats(noSignal),
-        aUp:         stats(aUpTrades),
-        aDown:       stats(aDownTrades),
-        confirmed:   stats(confirmed),
-        untagged: untagged.length,
-      });
-    } catch(e) { res.status(500).json({ error: e.message }); }
-  });
+  // GET /acd/correlation deleted 2026-09-27 (acd.js file-size reduction, opportunistic pass):
+  // confirmed zero callers anywhere (frontend, scripts, ARCHITECTURE.md's own route inventory)
+  // since it was first written 2026-06-01 -- same "confirmed dead, delete outright rather than
+  // extract" precedent as GET /acd/live (deleted 2026-09-20). Also read the raw `trades` table
+  // directly for a PnL-vs-ACD-signal correlation, the same shape of analysis CLAUDE.md's
+  // standing rule on the `trades` table cautions against doing without being explicitly asked.
 
   // ── Weekly ACD ──────────────────────────────────────────────────────────────
 
@@ -8417,223 +8372,7 @@ export default function createACDRouter(io) {
   // Polled every 30s during RTH. Range/delta percentiles cached daily.
   router.get('/market/pulse', async (req, res) => {
     try {
-      // FIXED 2026-08-24 (DeepSeek quick-check.html audit): was a hardcoded `etOffset = -4`
-      // (EDT), silently correct only during EDT months -- would have been off by exactly 1hr
-      // every day of EST season (Nov-Mar), shifting the date rollover and RTH-window boundary
-      // an hour early, the same naive-offset bug class CLAUDE.md's hard rules document
-      // elsewhere. Now uses this file's own established DST-aware pattern (toLocaleString/
-      // toLocaleDateString with timeZone: 'America/New_York', e.g. runSetupDetection's
-      // nowET/todayET just above) instead of a hand-computed offset.
-      const etNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
-      const todayET = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
-      const etHour = etNow.getHours();
-      const etMin  = etNow.getMinutes();
-      const etMinTotal = etHour * 60 + etMin;
-      const isRTH = etMinTotal >= 570 && etMinTotal < 960 &&
-        etNow.getDay() >= 1 && etNow.getDay() <= 5;
-
-      // Current price + session bars + live setup + ACD state
-      const [priceQ, sessionQ, rthBarsQ, setupQ, acdQ] = await Promise.all([
-        getLatestBars('NQ', { limit: 1, columns: 'close::float' }, 'trend-watch.currentPrice').then(rows => ({ rows })),
-        query(`SELECT MAX(high)::float as h, MIN(low)::float as l FROM price_bars_primary
-               WHERE symbol='NQ' AND ts::date=$1
-               AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 959`, [todayET]),
-        query(`SELECT close::float, COALESCE(ask_volume,0)::int as ask_vol, COALESCE(bid_volume,0)::int as bid_vol, volume::int,
-               (EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts))::int as et_min
-               FROM price_bars_primary WHERE symbol='NQ' AND ts::date=$1
-               AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 959
-               ORDER BY ts`, [todayET]),
-        query(`SELECT setup_type, status FROM active_setups
-               WHERE trade_date=$1 AND status IN ('PENDING','ACTIVE','ACTIVE_MANAGING')
-               ORDER BY fired_at DESC LIMIT 1`, [todayET]),
-        query(`SELECT a_up_fired, a_down_fired, c_up_confirmed, c_down_confirmed, day_type
-               FROM acd_daily_log WHERE trade_date=$1 LIMIT 1`, [todayET]),
-      ]);
-
-      const currentPrice = priceQ.rows[0]?.close ?? null;
-      const sessionHigh = sessionQ.rows[0]?.h ?? null;
-      const sessionLow  = sessionQ.rows[0]?.l ?? null;
-      const bars = rthBarsQ.rows;
-      const sessionOpen = bars[0]?.close ?? null;
-      const sessionRange = sessionHigh && sessionLow ? +(sessionHigh - sessionLow).toFixed(1) : null;
-      const ptsFromOpen = currentPrice && sessionOpen ? +(currentPrice - sessionOpen).toFixed(1) : null;
-
-      // Cumulative delta
-      const sessionDelta = bars.reduce((s, b) => s + (b.ask_vol - b.bid_vol), 0);
-      const sessionVolume = bars.reduce((s, b) => s + (b.volume || 0), 0);
-
-      // Cached daily: range percentiles + delta percentiles + avg volume
-      let rangeP25 = null, rangeP50 = null, rangeP75 = null;
-      let deltaP25 = null, deltaP75 = null;
-      let avgSessionVol = null;
-
-      const cached = getCached(todayET, 'marketPulse');
-      if (cached) {
-        ({ rangeP25, rangeP50, rangeP75, deltaP25, deltaP75, avgSessionVol } = cached);
-      } else {
-        const [rangeQ, deltaQ, volQ] = await Promise.all([
-          query(`
-            WITH daily AS (
-              SELECT ts::date as d, MAX(high)-MIN(low) as rng
-              FROM price_bars_primary WHERE symbol='NQ'
-                AND ts::date < $1
-                AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 959
-                AND EXTRACT(DOW FROM ts) BETWEEN 1 AND 5
-              GROUP BY 1 HAVING COUNT(*)>200
-            )
-            SELECT
-              PERCENTILE_CONT(0.25) WITHIN GROUP (ORDER BY rng)::float as p25,
-              PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY rng)::float as p50,
-              PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY rng)::float as p75
-            FROM daily`, [todayET]),
-          query(`
-            WITH daily AS (
-              SELECT ts::date as d,
-                ABS(SUM(COALESCE(ask_volume,0)-COALESCE(bid_volume,0)))::float as abs_delta
-              FROM price_bars_primary WHERE symbol='NQ'
-                AND ts::date < $1
-                AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 959
-                AND EXTRACT(DOW FROM ts) BETWEEN 1 AND 5
-              GROUP BY 1 HAVING COUNT(*)>200
-            )
-            SELECT
-              PERCENTILE_CONT(0.25) WITHIN GROUP (ORDER BY abs_delta)::float as p25,
-              PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY abs_delta)::float as p75
-            FROM daily`, [todayET]),
-          query(`
-            WITH daily AS (
-              SELECT ts::date as d, SUM(volume)::float as total_vol
-              FROM price_bars_primary WHERE symbol='NQ'
-                AND ts::date < $1
-                AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 959
-                AND EXTRACT(DOW FROM ts) BETWEEN 1 AND 5
-              GROUP BY 1 HAVING COUNT(*)>200
-              ORDER BY d DESC LIMIT 20
-            )
-            SELECT AVG(total_vol)::float as avg FROM daily`, [todayET]),
-        ]);
-        rangeP25 = rangeQ.rows[0]?.p25 ?? null;
-        rangeP50 = rangeQ.rows[0]?.p50 ?? null;
-        rangeP75 = rangeQ.rows[0]?.p75 ?? null;
-        deltaP25 = deltaQ.rows[0]?.p25 ?? null;
-        deltaP75 = deltaQ.rows[0]?.p75 ?? null;
-        avgSessionVol = volQ.rows[0]?.avg ?? null;
-        setCached(todayET, 'marketPulse', { rangeP25, rangeP50, rangeP75, deltaP25, deltaP75, avgSessionVol });
-      }
-
-      // Derived signals
-      const absDelta = Math.abs(sessionDelta);
-      const deltaSign = sessionDelta > 0 ? 'BUYING' : sessionDelta < 0 ? 'SELLING' : 'NEUTRAL';
-      let deltaClass = 'NORMAL';
-      if (deltaP25 != null && absDelta < deltaP25) deltaClass = 'QUIET';
-      else if (deltaP75 != null && absDelta > deltaP75) deltaClass = 'HIGH';
-
-      // Range extension: where is today's range relative to historical?
-      let rangeClass = 'NORMAL';
-      if (rangeP25 != null && sessionRange < rangeP25) rangeClass = 'QUIET';
-      else if (rangeP75 != null && sessionRange > rangeP75) rangeClass = 'EXTENDED';
-
-      // RVol: time-of-day adjusted — last bar vs 90-day per-minute baseline (same method as VOLUME_SPIKE alert)
-      // This makes the chip consistent with the VOLUME SPIKE banner in TradeAlertBanner.
-      let rvol = null, rvolSigma = null;
-      const last3 = bars.slice(-3);
-      if (last3.length > 0) {
-        try {
-          const minLo = Math.min(...last3.map(b => b.et_min));
-          const minHi = Math.max(...last3.map(b => b.et_min));
-          const volBaseQ = await query(`
-            SELECT (EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts))::int as et_min,
-                   AVG(volume::float) as avg_vol, STDDEV(volume::float) as std_vol
-            FROM price_bars_primary WHERE symbol='NQ'
-            AND (EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts)) BETWEEN $1 AND $2
-            AND ts::date >= $3::date - 90 AND ts::date < $3
-            GROUP BY et_min
-          `, [minLo, minHi, todayET]);
-          const baseline = {};
-          for (const r of volBaseQ.rows) baseline[r.et_min] = { avg: +r.avg_vol, std: +r.std_vol };
-          let maxSigma = -Infinity, maxRatio = 1;
-          for (const b of last3) {
-            const bl = baseline[b.et_min];
-            if (!bl || bl.avg <= 0) continue;
-            const sig = bl.std > 0 ? (b.volume - bl.avg) / bl.std : 0;
-            if (sig > maxSigma) { maxSigma = sig; maxRatio = b.volume / bl.avg; }
-          }
-          if (maxSigma > -Infinity) {
-            rvol = +maxRatio.toFixed(2);
-            rvolSigma = +maxSigma.toFixed(2);
-          }
-        } catch (_) {}
-      }
-
-      // Engagement verdict — uses active setup, ACD signals, delta/range, time of day
-      const liveSetup = setupQ.rows[0] ?? null;
-      const acd       = acdQ.rows[0]  ?? null;
-
-      // Direction from setup_type name (e.g. IB_MID_SCALP_FADE_LONG → LONG)
-      const setupDir = liveSetup?.setup_type?.includes('_LONG')  ? 'LONG'
-        :              liveSetup?.setup_type?.includes('_SHORT') ? 'SHORT'
-        : null;
-
-      // ACD directional read — C-confirmed is strong, A-only is softer
-      const aUpStrong   = acd?.a_up_fired   && acd?.c_up_confirmed;
-      const aDownStrong = acd?.a_down_fired  && acd?.c_down_confirmed;
-      const acdDir = aUpStrong   ? 'LONG'
-        :            aDownStrong ? 'SHORT'
-        :            acd?.a_up_fired   ? 'LONG'
-        :            acd?.a_down_fired ? 'SHORT'
-        : null;
-
-      // After 3:30 PM ET with nothing live — wind down
-      const isWindDown = etMinTotal >= 930 && !liveSetup;
-
-      let verdict    = 'WAIT';
-      let verdictDir = null;
-
-      if (isWindDown) {
-        verdict = 'STAND_ASIDE';
-      } else if (liveSetup) {
-        // Active fired setup is the clearest signal we have — go
-        verdict    = 'ENGAGE';
-        verdictDir = setupDir;
-      } else if ((aUpStrong || aDownStrong) && deltaClass !== 'QUIET') {
-        // A+C confirmed with some participation — high conviction directional
-        verdict    = 'ENGAGE';
-        verdictDir = acdDir;
-      } else if (acdDir && rangeClass !== 'QUIET' && deltaClass === 'HIGH') {
-        // A-only + strong flow — engage but softer
-        verdict    = 'ENGAGE';
-        verdictDir = acdDir;
-      } else if (deltaClass === 'QUIET' && rangeClass === 'QUIET' && !acdDir) {
-        // No flow, no range expansion, no ACD — nothing to trade
-        verdict = 'STAND_ASIDE';
-      } else if (deltaClass === 'HIGH' && rangeClass !== 'QUIET') {
-        // Strong flow even without a named setup — worth watching
-        verdict    = 'ENGAGE';
-        verdictDir = deltaSign === 'BUYING' ? 'LONG' : 'SHORT';
-      }
-
-      res.json({
-        currentPrice,
-        sessionOpen,
-        sessionHigh,
-        sessionLow,
-        sessionRange,
-        ptsFromOpen,
-        sessionDelta,
-        deltaSign,
-        deltaClass,
-        absDelta,
-        deltaP25, deltaP75,
-        rangeP25, rangeP50, rangeP75,
-        rangeClass,
-        rvol,
-        rvolSigma,
-        verdict,
-        verdictDir,
-        isRTH,
-        barsLoaded: bars.length,
-        ts: new Date().toISOString(),
-      });
+      res.json(await computeMarketPulse());
     } catch (e) {
       console.error('market/pulse error:', e);
       res.status(500).json({ error: e.message });
