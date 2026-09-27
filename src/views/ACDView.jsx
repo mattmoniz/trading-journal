@@ -336,13 +336,20 @@ function OvernightContextStrip() {
             {inv === 'LONG_TRAPPED' && 'Yesterday\'s buyers underwater — bearish fuel. '}
             {inv === 'SHORT_TRAPPED' && 'Yesterday\'s sellers squeezed — bullish fuel. '}
             {inv === 'NEUTRAL' && 'No trapped participants. '}
-            {ovp === 'BELOW_VALUE' && 'Below yesterday\'s VA — IB_BEARISH 88% WR. '}
-            {ovp === 'ABOVE_VALUE' && 'Above yesterday\'s VA — bullish setups 61% WR. '}
+            {/* WR%/N literals removed 2026-09-27 (DeepSeek review, "never hand-type a WR%/N/$
+                literal" hard rule): these were 100% hardcoded strings with zero connection to
+                any query -- auction_reads only carries overnight_inventory/open_vs_prior_value/
+                prior_day_profile, no WR/N columns at all. "IB_BEARISH 88% WR" was also
+                actively wrong, not just unbacked -- IB_BEARISH is a confirmed real loser under
+                a deliberate manual suppress override. See docs/OPEN_THREADS.md's 2026-09-27
+                entry before re-adding a number here -- it needs a real query, not a literal. */}
+            {ovp === 'BELOW_VALUE' && 'Below yesterday\'s VA. '}
+            {ovp === 'ABOVE_VALUE' && 'Above yesterday\'s VA. '}
             {ovp === 'INSIDE_VALUE' && 'Inside VA — no directional tilt. '}
-            {pdp === 'NONTREND' && 'Yesterday balanced — first directional move today is high conviction (61% WR).'}
+            {pdp === 'NONTREND' && 'Yesterday balanced — first directional move today is often high conviction.'}
             {pdp === 'TREND' && 'Yesterday trended — continuation or reversal, wait for OR to confirm.'}
           </div>
-          {aligned && <div style={{ fontSize: 12, color: '#22c55e', fontWeight: 700, marginTop: 3 }}>Both aligned — 63% WR (N=113). Size up.</div>}
+          {aligned && <div style={{ fontSize: 12, color: '#22c55e', fontWeight: 700, marginTop: 3 }}>Inventory and open both aligned.</div>}
         </>
       )}
     </div>
