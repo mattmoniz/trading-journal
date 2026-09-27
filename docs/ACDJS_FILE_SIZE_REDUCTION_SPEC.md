@@ -242,7 +242,12 @@ force a split that hurts readability just to hit a number).
 1. Exhaustive free-variable grep (see Phase A above) before finalizing any extraction boundary.
 2. Byte-diff old vs. new output over real data for whatever endpoint/function moved.
 3. `node scripts/test_invariants.mjs` against the current baseline — no new failures.
-4. `npm run lint` / `npm run build` clean.
+4. `npm run lint` / `npm run build` clean — **not sufficient on its own for a fresh export**:
+   ESLint's `no-undef` cannot see whether a name added to satisfy it is actually exported by
+   the target module. After adding `export` to any relocated function/const, separately
+   confirm it resolves via a real module import (`node -e "import('./file.js').then(m =>
+   console.log(Object.keys(m)))"`) — found 2026-09-27 the hard way (see
+   [docs/CONVENTIONS_DETAIL.md#eslints-no-undef-does-not-catch-a-genuinely-missing-es-module-export--verify-by-actually-importing-the-module](docs/CONVENTIONS_DETAIL.md#eslints-no-undef-does-not-catch-a-genuinely-missing-es-module-export--verify-by-actually-importing-the-module)).
 5. Live server restart, confirm process postdates the edit, health-check the affected
    endpoint(s).
 6. No behavior change is the goal at every phase — this is a maintainability investment, not a
