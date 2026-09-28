@@ -73,7 +73,7 @@ import { computeIbBullBear } from '../services/caseEngine.js';
 import { computeVWAP } from '../../scripts/backtest_confluence.js';
 import { stepWiderTarget, WIDER_TARGET_MULT, MAX_BARS_TO_T1_FOR_WIDER } from '../services/widerTargetWalker.js';
 import { isPastMechanismSessionEnd, firedAtToMod, isFiredInRTH } from '../services/sessionBoundary.js';
-import { computeSuppressionSets, isLiveEligible, getCanonicalLiveStatus, CAPITAL_EXPOSURE_OVERRIDE, isLiveTimeWindowBlocked, ALL_LEVELS_LIVE, isLevelForcedLive } from '../services/setupEligibility.js';
+import { computeSuppressionSets, isLiveEligible, getCanonicalLiveStatus, CAPITAL_EXPOSURE_OVERRIDE, isLiveTimeWindowBlocked, ALL_LEVELS_LIVE, isLevelForcedLive, SUPPRESS_ALL_DISABLED, suppressAllDisabledOverrides } from '../services/setupEligibility.js';
 import { tagEntryOrderFlowShadow } from '../services/entryOrderFlowShadow.js';
 import { tagTouchOrderflowPressureShadow } from '../services/touchOrderflowPressureShadow.js';
 // buildAllCandidates/computeLevelFadeFactors/logGatedCandidate moved to
@@ -806,21 +806,17 @@ async function detectGlobexSetup(sessionDate, io) {
       if (live.status !== 'SHADOW' && await isSameSetupRefireBlocked(sessionDate, c.type, 'GLOBEX')) {
         live = { status: 'SHADOW', reason: 'SAME_TYPE_REFIRE' };
       }
-      // Globex pause (2026-09-16, user's explicit call) -- unconditional, forces every Globex
-      // candidate to SHADOW regardless of any check above. NOT based on a confirmed "Globex is
-      // net negative" finding -- checked directly first and the real numbers didn't support that
-      // specific claim (full history and the last 14 days were both flat/positive for Globex;
-      // RTH was the bigger recent drag in the 30/45-day windows). User chose to pause anyway.
-      // Same "force SHADOW, never skip" convention as every other gate in this file -- Globex
-      // candidates still insert, still resolve, still accumulate real SHADOW-origin data (the
-      // user's explicit ask: "keep tracking overnight trades"). Forcing SHADOW also means these
-      // rows no longer show on quick-check.html's default view (which filters to
-      // origin_status='ACTIVE' only) without any separate frontend change. To resume live
-      // Globex firing, delete/comment out this block -- it's a single, self-contained override,
-      // deliberately not a flag threaded through config so there's exactly one place to look.
-      if (live.status !== 'SHADOW') {
-        live = { status: 'SHADOW', reason: 'GLOBEX_PAUSED' };
-      }
+      // Globex pause (2026-09-16 through 2026-09-28) -- REMOVED 2026-09-28 per explicit user
+      // request, after discovering live it had been silently overriding SUPPRESS_ALL_DISABLED
+      // (2026-09-25's "move everything to live" override never actually reached Globex, since
+      // this unconditional block sat after and overrode every other check including that one --
+      // confirmed live 2026-09-28: 100% of that night's 15 Globex fires were force-SHADOWed here
+      // despite SUPPRESS_ALL_DISABLED being on). The pause itself was never based on a confirmed
+      // "Globex is net negative" finding -- checked directly at the time and the numbers didn't
+      // support that (full history and the last 14 days were both flat/positive for Globex; RTH
+      // was the bigger recent drag). Globex candidates now flow through the same live-eligibility
+      // path as everything else (getOvernightLevelLiveStatus() above, still real-SETUP_STATUS-
+      // gated unless SUPPRESS_ALL_DISABLED is on). See docs/OPEN_THREADS.md's 2026-09-28 entry.
 
       // Minimal Globex sizeMultiplier: just the validated pair-bonus factor, matching
       // RTH's +0.15x convention exactly (single check, doesn't stack across multiple
@@ -4903,6 +4899,28 @@ export default function createACDRouter(io) {
                 : liveStats._dowSuppressToday?.has(type) ? 'DOW_SUPPRESSED'
                 : isS2DoubleCounter(dir) ? 'S2_DOUBLE_COUNTER'
                 : isTrendCounterFade(dir) ? 'TREND_COUNTER_FADE' : 'SUPPRESSED_OTHER';
+              // FIXED 2026-09-28 (user-caught live, "why aren't all trades firing live" after
+              // confirming SUPPRESS_ALL_DISABLED is on): this branch previously hardcoded
+              // status/origin_status='SHADOW' unconditionally, regardless of SUPPRESS_ALL_
+              // DISABLED -- unlike the main sortedCandidates winner path and the
+              // CLUSTER_SIBLING_TOUCH_CREDIT branch, both of which already respect the flag.
+              // This was a real, previously-undocumented 3rd gap of the exact same shape as the
+              // GLOBEX_PAUSED incident earlier tonight (a global override silently not reaching
+              // every insert site). User confirmed this is fine to simplify uniformly (no real
+              // order-placement is wired to origin_status today -- that will be a separate,
+              // independently-built orderEligibility.js gate later, not this flag directly):
+              // promote regardless of WHICH reason landed here (CLUSTER_ALREADY_FIRED,
+              // SAME_TYPE_REFIRE_COOLDOWN, SUPPRESSED_FADE, etc.), except CAPITAL_EXPOSURE_
+              // OVERRIDE (a data-integrity gate on uncalibrated/day-clustered stops, never
+              // bypassed anywhere else in this codebase either). Logic extracted to
+              // setupEligibility.js's suppressAllDisabledOverrides() -- see that function's own
+              // header for why this is deliberately narrower than calling isLiveEligible()
+              // directly (which would also incorrectly promote these same candidates even when
+              // the flag is OFF, since isLiveEligible() has no way to know about non-SETUP_STATUS
+              // reasons like clusterAlreadyFired/sameTypeRecentlyFired).
+              const auditCanPromote = suppressAllDisabledOverrides(type);
+              const auditStatus = auditCanPromote ? 'ACTIVE' : 'SHADOW';
+              const auditStoredReason = auditCanPromote ? 'SUPPRESS_ALL_DISABLED' : suppressReason;
               const auditOptStop = getOptStopForType(liveStats._opt, type);
               const auditStopPts = auditOptStop?.stop ?? Math.round(lv.mae_p75 ?? STOP);
               const auditTargetPts = auditOptStop?.target ?? Math.round(lv.mfe ?? TARGET);
@@ -4976,7 +4994,7 @@ export default function createACDRouter(io) {
                   ${REGIME_STAMP_COLS.join(', ')}, ${FIRE_TAG_COLS.join(', ')}, bet_class, vol_building_signal, va_overlap_streak,
                   cluster_touch_id, breakeven_stop_eligible
                 )
-                VALUES ($1,$2,NOW(),$3,'SHADOW','SHADOW',$4,$5,$6,$7,$7,$8,$9,$10,$11,$12,$13,$14,$15,
+                VALUES ($1,$2,NOW(),$3,$${21 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length},$${21 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length},$4,$5,$6,$7,$7,$8,$9,$10,$11,$12,$13,$14,$15,
                   ${REGIME_STAMP_COLS.map((_, i) => `$${16 + i}`).join(', ')},
                   ${FIRE_TAG_COLS.map((_, i) => `$${16 + REGIME_STAMP_COLS.length + i}`).join(', ')},
                   $${16 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length}, $${17 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length}, $${18 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length},
@@ -4984,7 +5002,7 @@ export default function createACDRouter(io) {
                 ON CONFLICT DO NOTHING
                 RETURNING id, fired_at::text as fired_at
               `, [
-                todayET, type, currentPrice, suppressReason,
+                todayET, type, currentPrice, auditStoredReason,
                 nearLevels.length,
                 // FIXED 2026-08-20 (DeepSeek design review, vwap_not_structurally_persisted_
                 // like_other_levels): was nearLevels.map(l => l.name) -- unstripped, unlike
@@ -5019,6 +5037,7 @@ export default function createACDRouter(io) {
                 // own row stayed permanently unlinked from the sibling rows it beat (which
                 // DO carry this same clusterTouchId via the touch-credit INSERT above).
                 clusterTouchId, isBreakevenStopEligible(type),
+                auditStatus,
               ]).catch(() => ({ rows: [] }));
               // Shadow-tag wiring (2026-09-16, found live: the SUPPRESSED_FADE/CLUSTER_ALREADY_
               // FIRED/etc. audit-insert branch -- this file's OWN comment a few lines up already

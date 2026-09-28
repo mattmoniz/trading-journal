@@ -334,6 +334,27 @@ export const SUPPRESS_ALL_DISABLED = {
     'DLL, cooldowns, or any risk-discipline gate -- only SETUP_STATUS/DOW/time-window suppression.',
 };
 
+// Whether SUPPRESS_ALL_DISABLED alone is sufficient to promote a candidate that landed in an
+// audit/non-winner insert branch for a NON-SETUP_STATUS reason (a risk-discipline or structural
+// gate -- e.g. CLUSTER_ALREADY_FIRED, SAME_TYPE_REFIRE_COOLDOWN -- not a performance judgment).
+// Extracted 2026-09-28 from acd.js's "suppressed near-level audit" insert branch (user request,
+// "Extract from acd") -- that branch previously hardcoded status/origin_status='SHADOW'
+// unconditionally, never checking this flag at all, a 3rd instance of the same shape as the
+// GLOBEX_PAUSED gap found earlier the same night (a global override silently not reaching every
+// insert site). Deliberately NOT the same thing as calling isLiveEligible() directly: that
+// function's own SUPPRESS_ALL_DISABLED short-circuit only means "SETUP_STATUS/DOW suppression is
+// bypassed" -- it says nothing about clusterAlreadyFired/sameTypeRecentlyFired/S2_DOUBLE_COUNTER/
+// TREND_COUNTER_FADE style reasons, which aren't SETUP_STATUS-based at all. Calling
+// isLiveEligible() unconditionally from a branch like this would incorrectly promote those
+// risk-discipline/structural candidates even when the flag is OFF, since isLiveEligible() has no
+// way to know about them. This helper is deliberately narrower: "does the flag alone override,"
+// nothing else -- callers remain responsible for deciding WHICH of their own failure reasons are
+// even eligible to ask this question (see acd.js's own auditCanPromote comment for the current
+// call site's reasoning on that point).
+export function suppressAllDisabledOverrides(setupType) {
+  return SUPPRESS_ALL_DISABLED.enabled && !CAPITAL_EXPOSURE_OVERRIDE.has(setupType);
+}
+
 export function isLiveTimeWindowBlocked(setupType, etMin) {
   if (SUPPRESS_ALL_DISABLED.enabled) return false;
   const o = LIVE_TIME_WINDOW_OVERRIDE.get(setupType);
