@@ -1,5 +1,15 @@
 # Open Threads / Pending Work
 
+## 🔄 2026-09-27: Time-of-day / level-interplay market-structure mining — Gemini dispatch queued, never ran (quota); direct look came back empty
+
+User asked (independent of the existing setup roster) whether raw historical price action shows anything statistically real — time-of-day patterns, or level-touch interplay ("if we touch X, does Y happen... if X and Y are both breached, Z happens Z% of the time").
+
+**Level-touch cascade** (tested directly, 3 rounds): a raw "does touching level A raise the odds of touching level B later" scan looked interesting at first, but died across a distance-adjusted control and a same-side-adjusted control — survivors had weak reward:risk (mostly 0.3-0.9, reward smaller than a real ATR-based risk unit), and the one pair that looked strong (`WEEKLY_OPEN`-involving) turned out to correlate with `WEEKLY_OPEN` itself being a marker for modestly bigger-range days, not a real causal relationship. **Closed, not recorded** (explicit user call — genuinely dead, not worth a `RESEARCH_CLAIM` row).
+
+**Time-of-day, direct quick look** (`scratch/time_of_day_direction_volatility_20260927.mjs`, bounded to `ts >= '2025-11-20'`): hour-to-hour directional persistence is flat (50.5%/49.5%, no real edge in any individual hour). One candidate — a 14:00 ET negative bias (t-stat ≈ -2.05) — failed a 3-way chronological stability check (flat/near-zero in the first third of the data, only appeared in the more recent two-thirds). Not trustworthy, not recorded.
+
+**Broader mining, queued but never ran**: dispatched Gemini for a genuinely different, more thorough sweep (finer 15/30-min buckets across the full week not just RTH, whether the *timing* of a level touch changes the rest of the session's character, and time-of-day effects at already-validated confluence zones from `confluence_pair_proximity_2yr_backtest`) — hit `RESOURCE_EXHAUSTED` (quota), empty response, zero work done. **Resets ~9-10am ET 2026-09-28.** The request file is fully written and staged at `scratch/claude_request.md` (includes the full "already tried, don't redo" list above) — just re-fire `./scripts/invoke_gemini.sh` once quota clears, no rescoping needed. **This is the real next step on this thread, not yet done.**
+
 ## 🔄 2026-09-27: Scoped (not started) — connecting this app to Sierra Chart to actually place orders
 
 User asked to scope out placing real trades via Sierra Chart from this app — a genuine escalation from everything else in this codebase, which only ever *watches* (file-based TAL/price-bar imports, one-way). Current state confirmed: **zero outbound connection exists today.**
