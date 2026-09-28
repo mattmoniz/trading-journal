@@ -306,6 +306,31 @@ export function isBreakevenStopEligible(setupType) {
   return typeof setupType === 'string' && /_FADE_(LONG|SHORT)$/.test(setupType);
 }
 
+// Extracted 2026-09-28 (DeepSeek code review, "duplicated ternary" minor finding on the
+// PROMOTABLE_SUPPRESS_REASONS fix) -- acd.js had 2 near-identical precedence ternaries for
+// classifying WHY a level-fade candidate was suppressed: the suppressed-near-level-audit
+// branch's `suppressReason` (7 reasons, includes clusterAlreadyFired/sameTypeRecentlyFired)
+// and the winner loop's own `skipReason` (5 reasons, no cluster-level concept since it's
+// already inside the per-candidate sortedCandidates iteration). Both are currently harmless
+// on their own (skipReason only feeds an informational log + touch-credit gating, never an
+// eligibility decision) -- but they share the SAME precedence order for their 5 overlapping
+// reasons, and a future 3rd reason added to one without the other would silently let them
+// diverge, exactly the class of bug the PROMOTABLE_SUPPRESS_REASONS fix itself was patching.
+// One shared function, called with whichever booleans each site actually has in scope --
+// `clusterAlreadyFired`/`recentlyFired` are optional (default false) for callers like the
+// winner loop that don't have a cluster-level concept at their call site.
+export function classifySuppressionReason({
+  clusterAlreadyFired = false, recentlyFired = false, suppressed, dowSuppressed, s2Double, trendCounterFade,
+}) {
+  if (clusterAlreadyFired) return 'CLUSTER_ALREADY_FIRED';
+  if (recentlyFired) return 'SAME_TYPE_REFIRE_COOLDOWN';
+  if (suppressed) return 'SUPPRESSED_FADE';
+  if (dowSuppressed) return 'DOW_SUPPRESSED';
+  if (s2Double) return 'S2_DOUBLE_COUNTER';
+  if (trendCounterFade) return 'TREND_COUNTER_FADE';
+  return 'SUPPRESSED_OTHER';
+}
+
 // No-new-entries dead zone: 4:00-6:00 PM ET (user directive, 2026-07-31 -- "seems to be noise
 // and bad trades"; full-skip behavior since 2026-09-16, see acd.js's own `inNewEntryDeadZone`
 // comment). Extracted 2026-09-16 after the same `etMin >= 16*60 && etMin < 18*60` boundary got

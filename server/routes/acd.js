@@ -22,7 +22,7 @@ import multer from 'multer';
 import { query } from '../db.js';
 import { computeVolumeBuildingMeasures, classifyVolumeBuilding, computeSizeMultiplier } from '../services/touchQuality.js';
 import { cacheGet, cacheSet } from '../lib/cache.js';
-import { getCached, setCached, getGlobalCalib, DAY_CACHE_TTL, getTouchQualityCalib, getTouchQualityBaseline, dropToTimeline, lookupRunnerTrailWidth, fmtETStr, computeSessionEndCapStr, getOptStopForType, tagClusterBatch, claimClusterRole, isFirstTradingDayAfterGap, isPdPriorDayType, isInNewEntryDeadZone, nextTradingDay, resolveRangeDates, getOpenStandalonePosition, isBreakevenStopEligible, isInRthOpenDeadZone } from '../services/acdShared.js';
+import { getCached, setCached, getGlobalCalib, DAY_CACHE_TTL, getTouchQualityCalib, getTouchQualityBaseline, dropToTimeline, lookupRunnerTrailWidth, fmtETStr, computeSessionEndCapStr, getOptStopForType, tagClusterBatch, claimClusterRole, isFirstTradingDayAfterGap, isPdPriorDayType, isInNewEntryDeadZone, nextTradingDay, resolveRangeDates, getOpenStandalonePosition, isBreakevenStopEligible, isInRthOpenDeadZone, classifySuppressionReason } from '../services/acdShared.js';
 import { getLatestBars, getCurrentPrice } from '../services/priceRetrieval.js';
 import { isOpeningDriveCounterTrade, OPENING_DRIVE_GATE } from '../services/openingDriveGate.js';
 import {
@@ -4409,11 +4409,14 @@ export default function createACDRouter(io) {
                 // active_setups row is no longer "orphaned with zero trace," and logging both
                 // is a documented-decision violation (two audit trails for one event). The
                 // active_setups row is the one that matters for N, so it wins.
-                const skipReason = candRecentlyFired ? 'SAME_TYPE_REFIRE_COOLDOWN'
-                  : candSuppressed ? 'SUPPRESSED_FADE'
-                  : candDowSuppressed ? 'DOW_SUPPRESSED'
-                  : s2Double ? 'S2_DOUBLE_COUNTER'
-                  : trendCounterFadeFlag ? 'TREND_COUNTER_FADE' : 'SUPPRESSED_OTHER';
+                // Shared classifier (acdShared.js's classifySuppressionReason()) -- see that
+                // function's header for why this was extracted 2026-09-28. No clusterAlreadyFired
+                // concept at this call site (already inside the per-candidate sortedCandidates
+                // loop), so it's simply omitted (defaults to false).
+                const skipReason = classifySuppressionReason({
+                  recentlyFired: candRecentlyFired, suppressed: candSuppressed,
+                  dowSuppressed: candDowSuppressed, s2Double, trendCounterFade: trendCounterFadeFlag,
+                });
                 const sibTrailVariant = CONDITIONAL_VARIANTS[candType];
                 const willGetTouchCredit = !candRecentlyFired && !sibTrailVariant?.trailSignalName;
                 if (!willGetTouchCredit) {
@@ -4901,12 +4904,17 @@ export default function createACDRouter(io) {
               // (non-suppressed) candidate would have gotten (same liveStats._opt[type] lookup,
               // same STOP/TARGET fallback), so these rows resolve normally and their outcome
               // actually answers "was this suppression decision correct" in dollar terms.
-              const suppressReason = clusterAlreadyFired ? 'CLUSTER_ALREADY_FIRED'
-                : sameTypeRecentlyFired ? 'SAME_TYPE_REFIRE_COOLDOWN'
-                : liveStats._suppressedSetups?.has(type) ? 'SUPPRESSED_FADE'
-                : liveStats._dowSuppressToday?.has(type) ? 'DOW_SUPPRESSED'
-                : isS2DoubleCounter(dir) ? 'S2_DOUBLE_COUNTER'
-                : isTrendCounterFade(dir) ? 'TREND_COUNTER_FADE' : 'SUPPRESSED_OTHER';
+              // Classification extracted to acdShared.js's classifySuppressionReason() 2026-09-28
+              // (DeepSeek review minor finding) -- was hand-duplicated here and in the winner
+              // loop's own skipReason ternary a few hundred lines up; one shared precedence order
+              // now, so the two can't silently diverge the next time a reason is added to one
+              // and not the other.
+              const suppressReason = classifySuppressionReason({
+                clusterAlreadyFired, recentlyFired: sameTypeRecentlyFired,
+                suppressed: liveStats._suppressedSetups?.has(type),
+                dowSuppressed: liveStats._dowSuppressToday?.has(type),
+                s2Double: isS2DoubleCounter(dir), trendCounterFade: isTrendCounterFade(dir),
+              });
               // FIXED 2026-09-28 (user-caught live, "why aren't all trades firing live" after
               // confirming SUPPRESS_ALL_DISABLED is on): this branch previously hardcoded
               // status/origin_status='SHADOW' unconditionally, regardless of SUPPRESS_ALL_
@@ -5917,6 +5925,12 @@ export default function createACDRouter(io) {
               // before (always implicitly NULL) -- added so a promoted row is traceable the
               // same way as every other insert site, not distinguishable only by resolution_method.
               const btCanPromote = suppressAllDisabledOverrides(bt.type);
+              // Reason disambiguation added 2026-09-28 (DeepSeek review, cosmetic minor finding):
+              // when NOT promoted, suppression_reason used to be unconditionally null regardless
+              // of WHY -- "flag off" and "flag on but blocked by CAPITAL_EXPOSURE_OVERRIDE" were
+              // indistinguishable. No functional consumer depends on this today, purely a tracing
+              // improvement to match every other insert site's real-reason reporting.
+              const btBlockedByExposureOverride = SUPPRESS_ALL_DISABLED.enabled && CAPITAL_EXPOSURE_OVERRIDE.has(bt.type);
               const btIns = await query(`
                 INSERT INTO active_setups (trade_date, setup_type, fired_at, expires_at,
                   entry_zone_low, entry_zone_high, stop_level, t1_level, t1_label,
@@ -5953,7 +5967,7 @@ export default function createACDRouter(io) {
                 btVaOverlapStreak,
                 isBreakevenStopEligible(bt.type),
                 btCanPromote ? 'ACTIVE' : 'SHADOW',
-                btCanPromote ? 'SUPPRESS_ALL_DISABLED' : null,
+                btCanPromote ? 'SUPPRESS_ALL_DISABLED' : btBlockedByExposureOverride ? 'CAPITAL_EXPOSURE_OVERRIDE' : null,
               ]);
               // Cluster role claimed AFTER the insert above actually succeeded -- see
               // acdShared.js's claimClusterRole() header and this loop's own comment (top of
