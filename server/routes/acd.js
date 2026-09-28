@@ -5856,19 +5856,34 @@ export default function createACDRouter(io) {
               // promoted out of THIN_N.
               const btTrailVariant = CONDITIONAL_VARIANTS[bt.type];
               const btRunnerTrailWidth = await lookupRunnerTrailWidth(btTrailVariant);
+              // FIXED 2026-09-28 (user-caught live, same incident as the near-level-audit
+              // branch a few hours earlier tonight): this was the 5th real insert site
+              // hardcoding status/origin_status='SHADOW' unconditionally, regardless of
+              // SUPPRESS_ALL_DISABLED -- confirmed live, it's exactly why OR5/OR10/5D_OR_MID
+              // early-RTH-open touches stayed SHADOW under the flag while the main candidate
+              // path's same-poll winner correctly went ACTIVE. Same suppressAllDisabledOverrides()
+              // reuse as the near-level-audit fix -- see that function's header in
+              // setupEligibility.js. suppression_reason wasn't a column on this INSERT at all
+              // before (always implicitly NULL) -- added so a promoted row is traceable the
+              // same way as every other insert site, not distinguishable only by resolution_method.
+              const btCanPromote = suppressAllDisabledOverrides(bt.type);
               const btIns = await query(`
                 INSERT INTO active_setups (trade_date, setup_type, fired_at, expires_at,
                   entry_zone_low, entry_zone_high, stop_level, t1_level, t1_label,
                   price_at_detection, historical_win_rate, historical_sessions, historical_avg_pnl, historical_t1_hit_rate,
                   confluence_score_at_detection, confluence_levels_at_detection,
                   status, origin_status, resolution_method, ${REGIME_STAMP_COLS.join(', ')}, ${FIRE_TAG_COLS.join(', ')}, bet_class, wider_target_mult, vol_building_signal, runner_trail_width, va_overlap_streak,
-                  breakeven_stop_eligible)
-                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,'SHADOW','SHADOW','EARLY_TOUCH_BACKFILL',
+                  breakeven_stop_eligible, suppression_reason)
+                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,
+                  $${17 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length + 6},
+                  $${17 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length + 6},
+                  'EARLY_TOUCH_BACKFILL',
                   ${REGIME_STAMP_COLS.map((_, i) => `$${17 + i}`).join(', ')},
                   ${FIRE_TAG_COLS.map((_, i) => `$${17 + REGIME_STAMP_COLS.length + i}`).join(', ')},
                   $${17 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length}, $${17 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length + 1},
                   $${17 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length + 2}, $${17 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length + 3},
-                  $${17 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length + 4}, $${17 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length + 5})
+                  $${17 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length + 4}, $${17 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length + 5},
+                  $${17 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length + 7})
                 ON CONFLICT DO NOTHING
                 RETURNING id
               `, [
@@ -5887,6 +5902,8 @@ export default function createACDRouter(io) {
                 btRunnerTrailWidth,
                 btVaOverlapStreak,
                 isBreakevenStopEligible(bt.type),
+                btCanPromote ? 'ACTIVE' : 'SHADOW',
+                btCanPromote ? 'SUPPRESS_ALL_DISABLED' : null,
               ]);
               // Cluster role claimed AFTER the insert above actually succeeded -- see
               // acdShared.js's claimClusterRole() header and this loop's own comment (top of
