@@ -75,6 +75,7 @@ import { stepWiderTarget, WIDER_TARGET_MULT, MAX_BARS_TO_T1_FOR_WIDER } from '..
 import { isPastMechanismSessionEnd, firedAtToMod, isFiredInRTH } from '../services/sessionBoundary.js';
 import { computeSuppressionSets, isLiveEligible, getCanonicalLiveStatus, CAPITAL_EXPOSURE_OVERRIDE, isLiveTimeWindowBlocked, ALL_LEVELS_LIVE, isLevelForcedLive } from '../services/setupEligibility.js';
 import { tagEntryOrderFlowShadow } from '../services/entryOrderFlowShadow.js';
+import { tagTouchOrderflowPressureShadow } from '../services/touchOrderflowPressureShadow.js';
 // buildAllCandidates/computeLevelFadeFactors/logGatedCandidate moved to
 // server/services/acdCandidateBuilder.js 2026-09-20 (Phase A of
 // docs/ACDJS_FILE_SIZE_REDUCTION_SPEC.md) -- see that file's own header for the real
@@ -964,6 +965,7 @@ async function detectGlobexSetup(sessionDate, io) {
 
       await tagDirectionGateShadow(ins.rows[0].id, c.dir);
       await tagMomentumAgainstFadeShadow(ins.rows[0].id, c.dir);
+      await tagTouchOrderflowPressureShadow(ins.rows[0].id, { direction: c.dir, firedAt: ins.rows[0].fired_at });
       // FIXED 2026-09-26 (DeepSeek week-review batch 3, MEDIUM finding): tagEntryOrderFlowShadow()
       // was awaited inline at all 6 real insert sites -- but getPriorClosedBarDelta() (the
       // function it calls) has an internal 8-SECOND sleep on a stale-bar retry (~1/3 of RTH SHORT
@@ -3084,6 +3086,7 @@ export default function createACDRouter(io) {
                   try { await dropToTimeline(ins.rows[0]); } catch (_) {}
                   await tagDirectionGateShadow(ins.rows[0].id, direction);
                   await tagMomentumAgainstFadeShadow(ins.rows[0].id, direction);
+                  await tagTouchOrderflowPressureShadow(ins.rows[0].id, { direction, firedAt: ins.rows[0].fired_at });
                   tagEntryOrderFlowShadow(ins.rows[0].id, { direction, setupType: svSetupType, entryPrice: svEntry }).catch(() => {}); // fire-and-forget -- see the first call site comment (line 1630) for why
                   if (live.status === 'ACTIVE' && io) {
                     io.emit('setup-fired', { setupId: ins.rows[0].id, setupType: svSetupType, entry: svEntry, stop: svStop, target: svT1, direction });
@@ -4524,7 +4527,7 @@ export default function createACDRouter(io) {
                       )
                       VALUES ($1,$2,NOW(),$3,$14,$14,'CLUSTER_SIBLING_TOUCH_CREDIT',$4,$5,$6,$6,$7,$8,$9,$10,$11,false,$12,$13)
                       ON CONFLICT DO NOTHING
-                      RETURNING id
+                      RETURNING id, fired_at::text as fired_at
                     `, [
                       todayET, candType, currentPrice, nearLevels.length,
                       nearLevels.map(l => canonicalConfluenceLevelName(l.name)),
@@ -4541,6 +4544,7 @@ export default function createACDRouter(io) {
                       const sibDir = isLong ? 'LONG' : 'SHORT';
                       await tagDirectionGateShadow(sibIns.rows[0].id, sibDir);
                       await tagMomentumAgainstFadeShadow(sibIns.rows[0].id, sibDir);
+                      await tagTouchOrderflowPressureShadow(sibIns.rows[0].id, { direction: sibDir, firedAt: sibIns.rows[0].fired_at });
                       tagEntryOrderFlowShadow(sibIns.rows[0].id, { direction: sibDir, setupType: candType, entryPrice: sibLevel }).catch(() => {}); // fire-and-forget -- see the first call site comment (line 1630) for why
                     }
                   } catch (e) {
@@ -4978,7 +4982,7 @@ export default function createACDRouter(io) {
                   $${16 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length}, $${17 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length}, $${18 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length},
                   $${19 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length}, $${20 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length})
                 ON CONFLICT DO NOTHING
-                RETURNING id
+                RETURNING id, fired_at::text as fired_at
               `, [
                 todayET, type, currentPrice, suppressReason,
                 nearLevels.length,
@@ -5027,6 +5031,7 @@ export default function createACDRouter(io) {
               if (auditIns.rows[0]) {
                 await tagDirectionGateShadow(auditIns.rows[0].id, dir);
                 await tagMomentumAgainstFadeShadow(auditIns.rows[0].id, dir);
+                await tagTouchOrderflowPressureShadow(auditIns.rows[0].id, { direction: dir, firedAt: auditIns.rows[0].fired_at });
                 tagEntryOrderFlowShadow(auditIns.rows[0].id, { direction: dir, setupType: type, entryPrice: currentPrice }).catch(() => {}); // fire-and-forget -- see the first call site comment (line 1630) for why
               }
               // Tag the anchor trade with this attributed setup, so the trade detail modal can
@@ -6391,7 +6396,7 @@ export default function createACDRouter(io) {
             $${26 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length + 2}, $${26 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length + 3},
             $${26 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length + 4}, $${26 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length + 5},
             $${26 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length + 6}, $${26 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length + 7})
-          ON CONFLICT DO NOTHING RETURNING id, entry_zone_low, entry_zone_high, stop_level, t1_level, t1_label
+          ON CONFLICT DO NOTHING RETURNING id, fired_at::text as fired_at, entry_zone_low, entry_zone_high, stop_level, t1_level, t1_label
         `, [
           todayET, active.type, firedAtTs, computeExpiry(active.type),
           active.entry, active.entry, active.stop, safeT1Level, safeT1Label,
@@ -6450,6 +6455,7 @@ export default function createACDRouter(io) {
         if (ins.rows[0]) {
           await tagDirectionGateShadow(ins.rows[0].id, rthDir);
           await tagMomentumAgainstFadeShadow(ins.rows[0].id, rthDir);
+          await tagTouchOrderflowPressureShadow(ins.rows[0].id, { direction: rthDir, firedAt: ins.rows[0].fired_at });
           tagEntryOrderFlowShadow(ins.rows[0].id, { direction: rthDir, setupType: active.type, entryPrice: active.entry }).catch(() => {}); // fire-and-forget -- see the first call site comment (line 1630) for why
         }
         // Cluster touch credit Phase 1 fix #3 (docs/CLUSTER_TOUCH_CREDIT_SPEC.md): tag this
@@ -6719,6 +6725,7 @@ export default function createACDRouter(io) {
             if (shadowIns.rows[0]) {
               await tagDirectionGateShadow(shadowIns.rows[0].id, shadow.direction);
               await tagMomentumAgainstFadeShadow(shadowIns.rows[0].id, shadow.direction);
+              await tagTouchOrderflowPressureShadow(shadowIns.rows[0].id, { direction: shadow.direction, firedAt: firedAtTs });
               tagEntryOrderFlowShadow(shadowIns.rows[0].id, { direction: shadow.direction, setupType: shadow.type, entryPrice: shadow.entry }).catch(() => {}); // fire-and-forget -- see the first call site comment (line 1630) for why
               // Cluster role claimed HERE, after the insert actually succeeded -- not before
               // gating -- so a candidate that got risk-checked/cooldown/eligibility-gated out

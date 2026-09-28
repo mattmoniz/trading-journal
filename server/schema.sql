@@ -423,7 +423,8 @@ CREATE TABLE public.active_setups (
     breakeven_stop_eligible boolean,
     breakeven_stop_live jsonb,
     t1_floor_runner_shadow jsonb,
-    late_fill_past_expiry_basis boolean
+    late_fill_past_expiry_basis boolean,
+    touch_orderflow_pressure_shadow jsonb
 );
 
 

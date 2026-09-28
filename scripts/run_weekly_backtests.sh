@@ -66,6 +66,7 @@ echo "=== Weekly backtest run: $(date) ==="
 # --- Context + anticipation pipelines ---
 /usr/bin/node scripts/backtest_permission_slips.mjs
 /usr/bin/node scripts/backtest_level_approach.js
+/usr/bin/node scripts/calibrate_touch_orderflow_pressure.mjs
 # Monday override stats — used live in acd.js keepLevels for MON_BACKTEST signal_type
 /usr/bin/node scripts/backtest_monday_deep.js
 
