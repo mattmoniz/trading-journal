@@ -4906,19 +4906,42 @@ export default function createACDRouter(io) {
               // CLUSTER_SIBLING_TOUCH_CREDIT branch, both of which already respect the flag.
               // This was a real, previously-undocumented 3rd gap of the exact same shape as the
               // GLOBEX_PAUSED incident earlier tonight (a global override silently not reaching
-              // every insert site). User confirmed this is fine to simplify uniformly (no real
-              // order-placement is wired to origin_status today -- that will be a separate,
-              // independently-built orderEligibility.js gate later, not this flag directly):
-              // promote regardless of WHICH reason landed here (CLUSTER_ALREADY_FIRED,
-              // SAME_TYPE_REFIRE_COOLDOWN, SUPPRESSED_FADE, etc.), except CAPITAL_EXPOSURE_
-              // OVERRIDE (a data-integrity gate on uncalibrated/day-clustered stops, never
-              // bypassed anywhere else in this codebase either). Logic extracted to
-              // setupEligibility.js's suppressAllDisabledOverrides() -- see that function's own
-              // header for why this is deliberately narrower than calling isLiveEligible()
-              // directly (which would also incorrectly promote these same candidates even when
-              // the flag is OFF, since isLiveEligible() has no way to know about non-SETUP_STATUS
-              // reasons like clusterAlreadyFired/sameTypeRecentlyFired).
-              const auditCanPromote = suppressAllDisabledOverrides(type);
+              // every insert site).
+              //
+              // CORRECTED, same day, ~50min later (user-caught live: FLOOR_S3_FADE_LONG fired
+              // ACTIVE 9 times in 6 minutes, ~once/minute): the first version of this fix
+              // promoted regardless of WHICH suppressReason landed here, including
+              // SAME_TYPE_REFIRE_COOLDOWN and CLUSTER_ALREADY_FIRED -- but SUPPRESS_ALL_DISABLED's
+              // OWN documented scope (its header comment in setupEligibility.js, and the
+              // "Where to look" entry in CLAUDE.md) explicitly says it does NOT bypass "any
+              // risk-discipline gate ... same-type refire ... opposite-direction conflict"
+              // alongside DLL/profit-lock/cooldown -- same-type refire and cluster-dedup ARE
+              // exactly that family of gate, not a SETUP_STATUS-driven suppression verdict. The
+              // "promote regardless of which reason" interpretation directly contradicted the
+              // flag's own already-written scope and was never re-checked against it before
+              // shipping -- a real design-fork-not-surfaced mistake, not a re-litigation of a
+              // settled call. Now only promotes for the two reasons that ARE genuinely
+              // SETUP_STATUS/SETUP_STATUS_DOW-driven (SUPPRESSED_FADE, DOW_SUPPRESSED) --
+              // matching what computeSuppressionSets()/isLiveEligible() themselves gate on, i.e.
+              // exactly the thing this flag exists to override. CLUSTER_ALREADY_FIRED,
+              // SAME_TYPE_REFIRE_COOLDOWN, and S2_DOUBLE_COUNTER stay hardcoded SHADOW always --
+              // real risk-discipline dedup, not a calibration verdict, explicitly out of scope.
+              // TREND_COUNTER_FADE is a real backtested finding (N=484 TREND-day trades, dtClass/
+              // ibSetup-conditioned) closer in spirit to SUPPRESSED_FADE than to a dedup gate, but
+              // is NOT named in the flag's documented risk-discipline exclusion list either --
+              // left OUT of promotion here anyway (conservative default: only promote where the
+              // flag's own scope is unambiguous) pending an explicit user decision on it.
+              // SUPPRESSED_OTHER (the catch-all fallback) is also excluded for the same reason --
+              // unclear provenance, never promote by default. Logic in setupEligibility.js's
+              // suppressAllDisabledOverrides() is deliberately kept generic (flag-on AND not
+              // CAPITAL_EXPOSURE_OVERRIDE) -- the reason-scoping happens HERE, at the one call
+              // site that actually has multiple different suppression reasons to distinguish
+              // between; every other call site (the EARLY_TOUCH_BACKFILL branch, the Globex path)
+              // only has ONE possible reason to promote past (a real SETUP_STATUS verdict), so
+              // they don't need this extra check.
+              const PROMOTABLE_SUPPRESS_REASONS = new Set(['SUPPRESSED_FADE', 'DOW_SUPPRESSED']);
+              const auditCanPromote = PROMOTABLE_SUPPRESS_REASONS.has(suppressReason)
+                && suppressAllDisabledOverrides(type);
               const auditStatus = auditCanPromote ? 'ACTIVE' : 'SHADOW';
               const auditStoredReason = auditCanPromote ? 'SUPPRESS_ALL_DISABLED' : suppressReason;
               const auditOptStop = getOptStopForType(liveStats._opt, type);
