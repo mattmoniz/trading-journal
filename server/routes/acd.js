@@ -147,6 +147,14 @@ const _dtaGateLogged = new Set();
 // delete it silently.
 const STOP_SWEEP_PAUSED = new Set(['STOP_SWEEP_LONG', 'STOP_SWEEP_SHORT']);
 
+// Hoisted 2026-09-28 (DeepSeek review, minor finding) -- was declared inside the per-candidate
+// suppressed-near-level-audit else-branch, re-allocating a fresh Set on every suppressed
+// candidate on every ~15s poll. Fixed 2-value reason enum, belongs at module scope like every
+// other small config Set here -- see that call site (search PROMOTABLE_SUPPRESS_REASONS) for
+// why only these 2 of the 7 possible suppressReason values are safe to promote under
+// SUPPRESS_ALL_DISABLED.
+const PROMOTABLE_SUPPRESS_REASONS = new Set(['SUPPRESSED_FADE', 'DOW_SUPPRESSED']);
+
 // REFIRE_COOLDOWN_MINUTES through tagMomentumAgainstFadeShadow() (the cross-direction
 // fast-flip gate, post-win opposite-family gate, single-firing directional-conflict gate,
 // same-setup-type refire gate, direction-loss-alternation SHADOW tag, plain refire cooldown +
@@ -4939,8 +4947,27 @@ export default function createACDRouter(io) {
               // between; every other call site (the EARLY_TOUCH_BACKFILL branch, the Globex path)
               // only has ONE possible reason to promote past (a real SETUP_STATUS verdict), so
               // they don't need this extra check.
-              const PROMOTABLE_SUPPRESS_REASONS = new Set(['SUPPRESSED_FADE', 'DOW_SUPPRESSED']);
+              // FIXED same night (DeepSeek code review of the regression fix above found a
+              // real, more subtle version of the SAME bug class): suppressReason is a
+              // COLLAPSED single string from a precedence ternary (clusterAlreadyFired ->
+              // sameTypeRecentlyFired -> _suppressedSetups -> _dowSuppressToday ->
+              // isS2DoubleCounter -> isTrendCounterFade -> SUPPRESSED_OTHER). A candidate that
+              // is BOTH SETUP_STATUS-suppressed (or DOW-suppressed) AND S2-double-counter (or
+              // trend-counter-fade) collapses to 'SUPPRESSED_FADE'/'DOW_SUPPRESSED' -- which IS
+              // on the allowlist -- silently promoting it past a directional risk gate the
+              // ternary never even reaches for that candidate. CLUSTER_ALREADY_FIRED/
+              // SAME_TYPE_REFIRE_COOLDOWN are unaffected (checked first in the ternary, so if
+              // either is true the string can only be one of those two) -- the gap is
+              // specifically the 2 directional gates sitting BELOW the suppression checks.
+              // Fixed by gating on the independent flags directly (s2Double/
+              // trendCounterFadeFlag, computed once per poll at ~line 4296) instead of trusting
+              // the collapsed string alone -- same fix DeepSeek recommended, reusing the
+              // already-computed values rather than the ternary's own re-invocation of
+              // isS2DoubleCounter(dir)/isTrendCounterFade(dir). PROMOTABLE_SUPPRESS_REASONS
+              // itself is now a module-level const (~line 156) -- hoisted the same night per
+              // DeepSeek's minor finding, was re-allocated on every suppressed candidate here.
               const auditCanPromote = PROMOTABLE_SUPPRESS_REASONS.has(suppressReason)
+                && !s2Double && !trendCounterFadeFlag
                 && suppressAllDisabledOverrides(type);
               const auditStatus = auditCanPromote ? 'ACTIVE' : 'SHADOW';
               const auditStoredReason = auditCanPromote ? 'SUPPRESS_ALL_DISABLED' : suppressReason;
