@@ -191,7 +191,35 @@ const DAY_TYPE_CONDITIONAL = new Set([
 const MANUAL_SUPPRESS_OVERRIDE = new Map([
   ['IB_BULLISH', { reason: 'no_real_thesis_tested_plus_placebo_test_negative', addedDate: '2026-08-31' }],
   ['IB_BEARISH', { reason: 'no_real_thesis_tested_plus_placebo_test_negative', addedDate: '2026-08-31' }],
+  // Added 2026-09-28 alongside PROMOTE_ALL_MODE below -- the 4 setup_types found to be
+  // genuinely worst (real N, real losses, zero coverage from any of the loss-prevention
+  // shadow tags -- DirGate/MomFade/StepTrail/PitchCatch/RangeSlope/VolRoll/BreakevenStop/
+  // EntryFlow/OFP -- confirmed by direct dollar computation, not a guess). User's explicit
+  // decision, informed by the real aggregate math (see docs/OPEN_THREADS.md's same-day
+  // entry): promote everything else, keep only these 4 excluded and watched.
+  ['FAILED_SWEEP_REVERSAL_LONG', { reason: 'worst_of_the_120_real_losers_zero_risk_mitigation_coverage', addedDate: '2026-09-28' }],
+  ['FAILED_SWEEP_REVERSAL_SHORT', { reason: 'worst_of_the_120_real_losers_near_zero_risk_mitigation_coverage', addedDate: '2026-09-28' }],
+  ['BRACKET_BREAKOUT_SHORT', { reason: 'worst_of_the_120_real_losers_zero_risk_mitigation_coverage', addedDate: '2026-09-28' }],
+  ['VWAP_RECLAIM_SHORT', { reason: 'worst_of_the_120_real_losers_zero_risk_mitigation_coverage', addedDate: '2026-09-28' }],
 ]);
+
+// TEMPORARY, 2026-09-28: promote every setup_type to ACTIVE regardless of real N/EV, EXCEPT
+// MANUAL_SUPPRESS_OVERRIDE above (the 4 types just added) and the separate DAY_TYPE_CONDITIONAL/
+// bet_class mechanisms below (both left fully intact -- this flag only bypasses the per-type
+// SUPPRESS_MIN_N/SUPPRESS_MAX_EV/THIN_N logic, not those). User's explicit, informed decision
+// after extensive same-night real-dollar analysis (docs/OPEN_THREADS.md's 2026-09-28 entry has
+// the full numbers): removing the N-floor requirement entirely and promoting everything except
+// the 4 named exclusions computes to a real aggregate -$6,192 over full history (vs. the prior
+// 11-type roster's +$4,346) -- shown to and knowingly accepted by the user, who wants live
+// visibility into the full, currently-suppressed population regardless of that number, matching
+// the same "everything except a short named list" shape SUPPRESS_ALL_DISABLED had before being
+// turned off earlier the same night -- but implemented HERE, at the actual source of the
+// SETUP_STATUS recommendation, not as a downstream bypass flag in setupEligibility.js, so it
+// propagates correctly through every one of this codebase's ~18 real insert sites without
+// needing to individually patch each one (the exact class of bug SUPPRESS_ALL_DISABLED hit
+// repeatedly tonight). No auto-expiry -- someone has to remember to flip this back to
+// enabled:false (or remove it) if the real numbers going forward don't hold up.
+const PROMOTE_ALL_MODE = { enabled: true, addedDate: '2026-09-28' };
 
 async function run() {
   console.log('[backtest_setup_status] Starting...');
@@ -494,6 +522,22 @@ async function run() {
         unchanged++;
       }
       results.push({ type, n, wr, ev, totalPnl: +r.total_pnl, recommendation: rec, rec90, dayTypeBreakdown: buckets });
+      continue;
+    }
+
+    // PROMOTE_ALL_MODE bypass (see that flag's own header comment above for the full
+    // reasoning/verification trail) -- checked here, after MANUAL_SUPPRESS_OVERRIDE and
+    // DAY_TYPE_CONDITIONAL have both already had their chance to `continue` above, so those
+    // 2 mechanisms are completely untouched by this flag. Every other type just goes
+    // straight to ACTIVE, skipping the SUPPRESS_MIN_N/SUPPRESS_MAX_EV/THIN_N/bet_class/
+    // day-clustering logic below entirely -- not because those checks are wrong, but
+    // because the user explicitly chose to bypass them for now, with the real-dollar
+    // consequence already computed and shown before this shipped.
+    if (PROMOTE_ALL_MODE.enabled) {
+      promoted++;
+      const realEvForLog = r.real_ev != null ? +r.real_ev : null;
+      console.log(`  ACTIVE   ${type.padEnd(38)} PROMOTE_ALL_MODE: N=${n} (real=${realN}) EV=$${ev.toFixed(0)} (real=$${realEvForLog != null ? realEvForLog.toFixed(0) : 'n/a'})`);
+      results.push({ type, n, realN, wr, ev, realEv: realEvForLog, totalPnl: +r.total_pnl, recommendation: 'ACTIVE', rec90, betClassOverride: null });
       continue;
     }
 
