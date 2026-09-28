@@ -1,143 +1,32 @@
 // backtest_level_approach.js
 // ═══════════════════════════════════════════════════════════════════════
-// For each setup type, compute per (day_type, DOW):
-//   fire_rate   = P(setup fires today | day_type, DOW) = fires / total_days
-//   cond_wr     = P(win | setup fired)                 = wins / fires
-//   avg_pnl     = E[P&L | setup fired]
-//   expected_ev = fire_rate × avg_pnl — per-session P&L contribution
+// Thin wrapper — the real computation lives in server/services/levelApproach.js
+// (rebuilt 2026-09-27 after a real-data audit found the prior inline version had a
+// disqualifying suppression-blindness bug plus no rigor/day-clustering check at all —
+// see that file's own header for the full incident and RESEARCH_CLAIM
+// setup_anticipation_zero_decisive_picks_20260927 for the numbers).
 //
-// Answers: "On a BALANCE Wednesday, which setups are most likely to fire,
-// and what's their expected per-session contribution?"
+// For each (setup_type, day_type, dow): fire_rate x avg_pnl = expected per-session $
+// contribution, now gated on the setup_type's CURRENT (un-overridden) SETUP_STATUS
+// verdict and a real computeRigor() day-clustering/stability check — a row only carries
+// `decisive: true` once it clears N>=20 trades, distinctDates>=20, and rigor.clean.
 //
-// Source: active_setups (TARGET_HIT + STOP_HIT only; SHADOW excluded)
 // Output: performance_audit signal_type='SETUP_ANTICIPATION'
 //         signal_name = 'SETUP_TYPE|DAY_TYPE|DOW' e.g. 'IB_LOW_FADE_LONG|BALANCE|WED'
 // ═══════════════════════════════════════════════════════════════════════
 
 import { query } from '../server/db.js';
-import { REAL_TRADE_FILTER } from './backtest_setup_status.mjs';
+import { computeSetupAnticipation } from '../server/services/levelApproach.js';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
 dotenv.config({ path: path.join(path.dirname(fileURLToPath(import.meta.url)), '../.env') });
 
-const MIN_FIRES = 5;   // minimum resolved setups to report a row
-const DOW_LABEL = ['SUN','MON','TUE','WED','THU','FRI','SAT'];
-
 async function run() {
   console.log('Loading data...');
+  const derived = await computeSetupAnticipation();
+  console.log(`  ${derived.length} rows above the N>=20 floor (suppression/rigor computed per row)`);
 
-  // 1. Total trading days per (day_type, dow) — denominator for fire_rate
-  const daysRes = await query(`
-    SELECT day_type,
-           EXTRACT(dow FROM trade_date)::int AS dow,
-           COUNT(*)::int AS total_days
-    FROM acd_daily_log
-    WHERE day_type IS NOT NULL
-      AND trade_date < CURRENT_DATE
-    GROUP BY day_type, dow
-    ORDER BY day_type, dow
-  `);
-
-  // Also compute rollups: per day_type (all DOWs) and overall
-  const totalByDtDow = new Map();   // key: 'BALANCE|TUE'
-  const totalByDt    = new Map();   // key: 'BALANCE'
-  let totalAll = 0;
-  for (const r of daysRes.rows) {
-    const dow = DOW_LABEL[r.dow];
-    totalByDtDow.set(`${r.day_type}|${dow}`, r.total_days);
-    totalByDt.set(r.day_type, (totalByDt.get(r.day_type) || 0) + r.total_days);
-    totalAll += r.total_days;
-  }
-  console.log(`  ${daysRes.rows.length} (day_type, dow) buckets, ${totalAll} total days`);
-
-  // 2. Setup fires per (setup_type, day_type, dow)
-  const firesRes = await query(`
-    SELECT a.setup_type,
-           d.day_type,
-           EXTRACT(dow FROM (a.fired_at AT TIME ZONE 'America/New_York'))::int AS dow,
-           COUNT(*)::int                                                    AS fires,
-           COUNT(CASE WHEN a.resolution = 'TARGET_HIT' THEN 1 END)::int    AS wins,
-           ROUND(AVG(a.actual_pnl)::numeric, 2)::float                     AS avg_pnl,
-           ROUND(SUM(a.actual_pnl)::numeric, 2)::float                     AS total_pnl
-    FROM active_setups a
-    JOIN acd_daily_log d
-      ON d.trade_date = (a.fired_at AT TIME ZONE 'America/New_York')::date
-    WHERE a.status <> 'SHADOW'
-      AND a.resolution IN ('TARGET_HIT', 'STOP_HIT')
-      AND d.day_type IS NOT NULL
-      -- preflight_backtest_assertions.mjs check [1], roadmap Phase 0 sweep, 2026-08-10:
-      -- a.status<>'SHADOW' only excludes still-open shadow positions, a different column
-      -- from origin_status (immutable at insert) -- resolved BACKFILL rows passed this
-      -- filter unfiltered. REAL_TRADE_FILTER (unaliased -- its columns only exist on
-      -- active_setups, not the joined acd_daily_log, so no ambiguity) adds origin_status
-      -- alongside, not instead of, the existing check, plus the MTM/stale-basis exclusions
-      -- check [8] originally added by hand here (2026-08-11: MARK_TO_MARKET/RECOVERY_MTM are
-      -- uncapped by any stop, CLAUDE.md failure mode #9, and can distort avg_pnl/total_pnl).
-      AND ${REAL_TRADE_FILTER}
-    GROUP BY a.setup_type, d.day_type,
-             EXTRACT(dow FROM (a.fired_at AT TIME ZONE 'America/New_York'))::int
-  `);
-  console.log(`  ${firesRes.rows.length} (setup, day_type, dow) base rows`);
-
-  // 3. Build stats map — one entry per (setupType, contextKey)
-  //    contextKey = 'DAY_TYPE|DOW' e.g. 'BALANCE|WED'
-  //    rollups: 'BALANCE|ALL', 'ALL|WED', 'ALL|ALL'
-  //    stats[setupType][ctxKey] = { fires, wins, avg_pnl, total_pnl, total_days }
-
-  // Also compute total days per DOW across all day_types (for ALL|DOW denominator)
-  const totalByDow = new Map();
-  for (const r of daysRes.rows) {
-    const dow = DOW_LABEL[r.dow];
-    totalByDow.set(dow, (totalByDow.get(dow) || 0) + r.total_days);
-  }
-
-  const stats = {};
-
-  const add = (setupType, ctxKey, fires, wins, total_pnl) => {
-    if (!stats[setupType]) stats[setupType] = {};
-    if (!stats[setupType][ctxKey]) {
-      stats[setupType][ctxKey] = { fires: 0, wins: 0, total_pnl: 0 };
-    }
-    const s = stats[setupType][ctxKey];
-    s.fires     += fires;
-    s.wins      += wins;
-    s.total_pnl += total_pnl;
-  };
-
-  for (const r of firesRes.rows) {
-    const dowLabel = DOW_LABEL[r.dow];
-    add(r.setup_type, `${r.day_type}|${dowLabel}`, r.fires, r.wins, r.total_pnl);
-    add(r.setup_type, `${r.day_type}|ALL`,          r.fires, r.wins, r.total_pnl);
-    add(r.setup_type, `ALL|${dowLabel}`,             r.fires, r.wins, r.total_pnl);
-    add(r.setup_type, 'ALL|ALL',                     r.fires, r.wins, r.total_pnl);
-  }
-
-  // total_days lookup by ctxKey — set once, not accumulated
-  const getTotalDays = (ctxKey) => {
-    const [dt, dow] = ctxKey.split('|');
-    if (dt === 'ALL' && dow === 'ALL') return totalAll;
-    if (dt === 'ALL') return totalByDow.get(dow) || 0;
-    if (dow === 'ALL') return totalByDt.get(dt) || 0;
-    return totalByDtDow.get(ctxKey) || 0;
-  };
-
-  // 4. Compute derived metrics
-  const derived = [];
-  for (const [setupType, ctxMap] of Object.entries(stats)) {
-    for (const [ctxKey, s] of Object.entries(ctxMap)) {
-      if (s.fires < MIN_FIRES) continue;
-      const total_days = getTotalDays(ctxKey);
-      const avg_pnl    = s.fires > 0 ? s.total_pnl / s.fires : null;
-      const cond_wr    = s.fires > 0 ? s.wins / s.fires : null;
-      const fire_rate  = total_days > 0 ? s.fires / total_days : null;
-      const exp_ev     = (fire_rate != null && avg_pnl != null) ? fire_rate * avg_pnl : null;
-      derived.push({ setupType, ctxKey, fires: s.fires, wins: s.wins, avg_pnl, cond_wr, fire_rate, exp_ev, total_days });
-    }
-  }
-  console.log(`  ${derived.length} rows above MIN_FIRES=${MIN_FIRES}`);
-
-  // 5. Write to performance_audit
   const runDate = (await query(`SELECT CURRENT_DATE::text as today`)).rows[0].today;
   await query(`DELETE FROM performance_audit WHERE signal_type='SETUP_ANTICIPATION' AND run_date=$1 AND window_days=0`, [runDate]);
 
@@ -151,55 +40,35 @@ async function run() {
       ON CONFLICT (run_date, window_days, signal_type, signal_name)
       DO UPDATE SET sample_size=$3, win_rate=$4, ev_per_trade=$5, notes=$6
     `, [
-      runDate,
-      signalName,
-      d.fires,
-      d.cond_wr,
-      d.avg_pnl,
+      runDate, signalName, d.fires, d.cond_wr, d.avg_pnl,
       JSON.stringify({
-        setup: d.setupType,
-        day_type: d.ctxKey.split('|')[0],
-        dow: d.ctxKey.split('|')[1],
-        fire_rate: d.fire_rate,
-        expected_ev: d.exp_ev,
-        total_days: d.total_days,
+        setup: d.setupType, day_type: d.ctxKey.split('|')[0], dow: d.ctxKey.split('|')[1],
+        fire_rate: d.fire_rate, expected_ev: d.exp_ev, total_days: d.total_days,
+        suppressed: d.suppressed, distinctDates: d.distinctDates, top5DayPct: d.top5DayPct,
+        clustered: d.clustered, stable: d.stable, decisive: d.decisive,
       }),
     ]);
     rowsWritten++;
   }
   console.log(`\nWrote ${rowsWritten} rows to performance_audit (signal_type=SETUP_ANTICIPATION)`);
 
-  // 6. Print rankings
-
   const printSection = (label, ctxKey) => {
-    const rows = derived
-      .filter(d => d.ctxKey === ctxKey && d.exp_ev != null)
-      .sort((a, b) => b.exp_ev - a.exp_ev);
+    const rows = derived.filter(d => d.ctxKey === ctxKey && d.exp_ev != null).sort((a, b) => b.exp_ev - a.exp_ev);
     if (!rows.length) { console.log(`\n  ── ${label}: no data ──`); return; }
-    console.log(`\n═══════════════════════════════════════════════════════════════════════`);
-    console.log(`${label}  (${rows[0].total_days} days)`);
-    console.log(`═══════════════════════════════════════════════════════════════════════`);
-    console.log(`  ${'Setup'.padEnd(35)} ${'FireRate'.padStart(9)} ${'WR'.padStart(6)} ${'AvgPnl'.padStart(8)} ${'ExpEV'.padStart(8)} ${'N'.padStart(5)}`);
-    console.log(`  ${'─'.repeat(35)} ${'─'.repeat(9)} ${'─'.repeat(6)} ${'─'.repeat(8)} ${'─'.repeat(8)} ${'─'.repeat(5)}`);
+    console.log(`\n${'═'.repeat(90)}\n${label}  (${rows[0].total_days} days)\n${'═'.repeat(90)}`);
+    console.log(`  ${'Setup'.padEnd(30)} ${'FireRate'.padStart(9)} ${'WR'.padStart(6)} ${'AvgPnl'.padStart(8)} ${'ExpEV'.padStart(8)} ${'N'.padStart(5)} ${'Days'.padStart(5)} Flag`);
     for (const r of rows.slice(0, 15)) {
-      const fr  = r.fire_rate != null ? (r.fire_rate * 100).toFixed(1) + '%' : '   N/A';
-      const wr  = r.cond_wr   != null ? (r.cond_wr * 100).toFixed(0) + '%'  : ' N/A';
-      const ap  = r.avg_pnl   != null ? '$' + r.avg_pnl.toFixed(0)          : '    N/A';
-      const ev  = r.exp_ev    != null ? '$' + r.exp_ev.toFixed(1)            : '    N/A';
-      console.log(`  ${r.setupType.padEnd(35)} ${fr.padStart(9)} ${wr.padStart(6)} ${ap.padStart(8)} ${ev.padStart(8)} ${String(r.fires).padStart(5)}`);
+      const fr = r.fire_rate != null ? (r.fire_rate * 100).toFixed(1) + '%' : '   N/A';
+      const wr = r.cond_wr != null ? (r.cond_wr * 100).toFixed(0) + '%' : ' N/A';
+      const ap = r.avg_pnl != null ? '$' + r.avg_pnl.toFixed(0) : '    N/A';
+      const ev = r.exp_ev != null ? '$' + r.exp_ev.toFixed(1) : '    N/A';
+      const flag = r.suppressed ? 'SUPPRESSED' : r.decisive ? 'DECISIVE' : 'thin/clustered';
+      console.log(`  ${r.setupType.padEnd(30)} ${fr.padStart(9)} ${wr.padStart(6)} ${ap.padStart(8)} ${ev.padStart(8)} ${String(r.fires).padStart(5)} ${String(r.distinctDates).padStart(5)} ${flag}`);
     }
   };
-
   printSection('ALL DAYS', 'ALL|ALL');
-  for (const dt of ['BALANCE', 'TREND', 'TURBULENT']) {
-    printSection(`${dt} DAYS`, `${dt}|ALL`);
-  }
+  for (const dt of ['BALANCE', 'TREND', 'TURBULENT']) printSection(`${dt} DAYS`, `${dt}|ALL`);
 }
 
-run().then(() => {
-  console.log('\nDone.');
-  process.exit(0);
-}).catch(err => {
-  console.error('Fatal:', err);
-  process.exit(1);
-});
+run().then(() => { console.log('\nDone.'); process.exit(0); })
+  .catch(err => { console.error('Fatal:', err); process.exit(1); });

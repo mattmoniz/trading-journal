@@ -1165,6 +1165,20 @@ router.get('/level-approach/today', async (req, res) => {
       const expected_ev = notes.expected_ev ?? null;
       const total_days = notes.total_days  ?? null;
 
+      // FIXED 2026-09-27 (real-data audit, user question "prepared stats... armed with
+      // statistical validation to fire"): this endpoint used to rank EVERY row above a
+      // trivial N>=5 floor with zero awareness of the setup_type's current SETUP_STATUS
+      // verdict -- live-caught recommending IB_BULLISH/IB_BEARISH (both explicitly killed
+      // 2026-08-31) as the #1/#2 "best TREND-day picks." `notes.decisive` is now computed
+      // upstream (server/services/levelApproach.js) from the CURRENT suppression state
+      // plus a real computeRigor() day-clustering/stability check (N>=20 trades AND
+      // distinctDates>=20 AND rigor.clean) -- only decisive rows are ranked/returned here.
+      // See RESEARCH_CLAIM setup_anticipation_zero_decisive_picks_20260927: as of this
+      // fix, day-type-conditioned rows almost never clear this bar (a real data-maturity
+      // ceiling, not a bug) -- an empty/short `setups` array most mornings is the honest
+      // result, not a broken endpoint.
+      if (notes.suppressed || !notes.decisive) continue;
+
       rows.push({
         setup:       setupType,
         day_type:    rowDt,
@@ -1174,6 +1188,7 @@ router.get('/level-approach/today', async (req, res) => {
         avg_pnl:     r.ev_per_trade,
         expected_ev,
         n:           r.sample_size,
+        distinctDates: notes.distinctDates ?? null,
         total_days,
         context_specificity: (rowDt !== 'ALL' ? 1 : 0) + (rowDow !== 'ALL' ? 1 : 0),
       });

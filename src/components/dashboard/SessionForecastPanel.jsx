@@ -145,7 +145,12 @@ export default function SessionForecastPanel({ date, section = 'all' }) {
     ]).then(([sp, vf, sa, cp]) => {
       setScalpPlaybook(sp);
       setVolatilityForecast(vf?.error ? null : vf);
-      setSetupAnticipation(sa?.setups?.length ? sa : null);
+      // FIXED 2026-09-27: used to hide this whole section whenever setups.length===0 --
+      // now the common case, since /level-approach/today only returns setups that clear
+      // a real N>=20/day-clustering bar (see that endpoint's own comment). Keep the
+      // fetched object (even empty) so the render below can show an honest "nothing
+      // decisive today" message instead of the section silently vanishing.
+      setSetupAnticipation(sa?.setups ? sa : null);
       setConfluencePairs(cp?.pairs?.length ? cp : null);
     }).finally(() => setLoading(false));
   }, [date]);
@@ -167,23 +172,27 @@ export default function SessionForecastPanel({ date, section = 'all' }) {
 
   // Build key levels with behavioral notes
   const keyLevels = [];
-  if (cl.pd1?.vah) keyLevels.push({ price: cl.pd1.vah, name: '2D VAH', behavior: 'Resistance. 4-5 retests, 5-bar dwell. Watch for absorption.', color: '#fb923c' });
-  if (cl.pd1?.val) keyLevels.push({ price: cl.pd1.val, name: '2D VAL', behavior: 'Support. 2 retests, 2-bar dwell. Holds or breaks fast.', color: '#4ade80' });
-  if (cl.pd1?.poc) keyLevels.push({ price: cl.pd1.poc, name: '2D POC', behavior: 'Magnet. Expect touch within 51 min. Arrives fast (16pt/bar), dwells 1 bar, departs slow.', color: '#a78bfa' });
+  // No hardcoded WR%/N/pt/timing literals in these behavior strings (CLAUDE.md: never
+  // hand-type a WR%/N/$ literal) -- found 2026-09-27 auditing this panel for the same
+  // fabricated-stat pattern already fixed elsewhere. Qualitative framing only; none of
+  // these specific numbers were ever backed by a live query.
+  if (cl.pd1?.vah) keyLevels.push({ price: cl.pd1.vah, name: '2D VAH', behavior: 'Resistance. Watch for absorption on retest.', color: '#fb923c' });
+  if (cl.pd1?.val) keyLevels.push({ price: cl.pd1.val, name: '2D VAL', behavior: 'Support. Holds or breaks fast.', color: '#4ade80' });
+  if (cl.pd1?.poc) keyLevels.push({ price: cl.pd1.poc, name: '2D POC', behavior: 'Magnet. Tends to be touched during the session — use as a target, not an entry level.', color: '#a78bfa' });
   if (cl.pd1?.high) keyLevels.push({ price: cl.pd1.high, name: '2D High', behavior: 'Resistance. First test is the key read.', color: '#f87171' });
   if (cl.pd1?.low) keyLevels.push({ price: cl.pd1.low, name: '2D Low', behavior: 'Support. Sweep below = potential failed auction long.', color: '#4ade80' });
-  if (cl.pd2?.vah) keyLevels.push({ price: cl.pd2.vah, name: 'PD-2 VAH', behavior: 'Strongest confluence (+44.8%). Scalp target 15pt.', color: '#f87171' });
-  if (cl.pd2?.val) keyLevels.push({ price: cl.pd2.val, name: 'PD-2 VAL', behavior: 'Extension target +20.5%. Let runners go.', color: '#4ade80' });
-  if (cl.orMid) keyLevels.push({ price: cl.orMid, name: 'OR Mid', behavior: 'Pivot. With absorption: 60% WR. Log via Quick Trade Log.', color: '#60a5fa' });
+  if (cl.pd2?.vah) keyLevels.push({ price: cl.pd2.vah, name: 'PD-2 VAH', behavior: 'Confluence level. Scalp target on a fade.', color: '#f87171' });
+  if (cl.pd2?.val) keyLevels.push({ price: cl.pd2.val, name: 'PD-2 VAL', behavior: 'Extension target. Let runners go.', color: '#4ade80' });
+  if (cl.orMid) keyLevels.push({ price: cl.orMid, name: 'OR Mid', behavior: 'Pivot. Log via Quick Trade Log.', color: '#60a5fa' });
   if (cl.pw?.high) keyLevels.push({ price: cl.pw.high, name: 'PW High', behavior: 'Weekly resistance.', color: '#fb923c' });
-  if (cl.pw?.low) keyLevels.push({ price: cl.pw.low, name: 'PW Low', behavior: 'Weekly support. +15% controlled edge.', color: '#4ade80' });
+  if (cl.pw?.low) keyLevels.push({ price: cl.pw.low, name: 'PW Low', behavior: 'Weekly support.', color: '#4ade80' });
 
   // Floor pivots
   if (cl.floorPivots) {
     const fp = cl.floorPivots;
     if (fp.pp) keyLevels.push({ price: fp.pp, name: 'Floor PP', behavior: 'Directional pivot. Bias shifts above/below.', color: '#94a3b8' });
     if (fp.s1) keyLevels.push({ price: fp.s1, name: 'Floor S1', behavior: 'First support.', color: '#94a3b8' });
-    if (fp.s3) keyLevels.push({ price: fp.s3, name: 'Floor S3', behavior: 'Extreme support. 12% of days. Strong reaction.', color: '#94a3b8' });
+    if (fp.s3) keyLevels.push({ price: fp.s3, name: 'Floor S3', behavior: 'Extreme support. Rarely reached, strong reaction when it is.', color: '#94a3b8' });
     if (fp.r1) keyLevels.push({ price: fp.r1, name: 'Floor R1', behavior: 'First resistance.', color: '#94a3b8' });
   }
 
@@ -191,8 +200,11 @@ export default function SessionForecastPanel({ date, section = 'all' }) {
   keyLevels.sort((a, b) => b.price - a.price);
 
   // Prior day character
+  // No hardcoded WR%/N literals (CLAUDE.md: never hand-type a WR%/N/$ literal) -- found
+  // 2026-09-27 auditing this panel for the same fabricated-stat pattern already fixed
+  // elsewhere (OvernightContextStrip, ACDView.jsx's edgeCtx). Qualitative framing only.
   let priorDayChar = null;
-  if (oc.prior_day_profile === 'NONTREND') priorDayChar = { label: 'NONTREND', note: 'Prior day extreme balance. Today RESOLVES — first sustained move has 61% WR.', color: '#fbbf24' };
+  if (oc.prior_day_profile === 'NONTREND') priorDayChar = { label: 'NONTREND', note: 'Prior day extreme balance. Today tends to RESOLVE — favors the first sustained directional move.', color: '#fbbf24' };
   else if (oc.prior_day_profile === 'TREND') priorDayChar = { label: 'TREND', note: 'Prior day trended. Continuation bias — pullback entries, not fades.', color: '#22c55e' };
   else if (oc.prior_day_profile === 'NEUTRAL') priorDayChar = { label: 'NEUTRAL', note: 'Prior day balanced. Unfinished business at yesterday\'s extremes.', color: '#94a3b8' };
 
@@ -224,7 +236,7 @@ export default function SessionForecastPanel({ date, section = 'all' }) {
             {oc.open_vs_prior_value && <span>Open: <strong style={{ color: oc.open_vs_prior_value === 'ABOVE_VALUE' ? '#22c55e' : oc.open_vs_prior_value === 'BELOW_VALUE' ? '#ef4444' : '#94a3b8' }}>{ovpLabel}</strong></span>}
             {oc.prior_day_profile && <span>Prior Day: <strong style={{ color: priorDayChar?.color || '#94a3b8' }}>{oc.prior_day_profile}</strong></span>}
           </div>
-          {aligned && <div style={{ fontSize: 11, color: '#22c55e', marginTop: 4 }}>Both aligned — 63% WR (N=113). Size up.</div>}
+          {aligned && <div style={{ fontSize: 11, color: '#22c55e', marginTop: 4 }}>Overnight inventory and open-vs-value both aligned — a real, still-provisional directional lead (see Research Ledger), not yet decisive enough to size up on alone.</div>}
           {priorDayChar?.label === 'NONTREND' && <div style={{ fontSize: 11, color: '#fbbf24', marginTop: 4 }}>{priorDayChar.note}</div>}
         </div>
       )}
@@ -265,7 +277,13 @@ export default function SessionForecastPanel({ date, section = 'all' }) {
         );
       })()}
 
-      {/* Day-type sizing guidance — derived from alpha analysis (Jul 2025–Jul 2026, N=2784) */}
+      {/* Day-type sizing guidance — FIXED 2026-09-27 (real-data audit): every number in
+          this block was a hand-typed literal with no live backing (no classifier-accuracy
+          backtest exists anywhere in this codebase) and the TREND-day "Play:" line
+          actively recommended IB_BULLISH/IB_BEARISH — both explicitly killed 2026-08-31
+          (see CLAUDE.md's "Where to look" entry on the redesign investigation that found
+          their real thesis was never implemented and a placebo test showed zero real
+          edge). Qualitative framing only now, and the dead-setup recommendation removed. */}
       {volatilityForecast && (() => {
         const predicted = volatilityForecast.predicted;
         const trendProb = volatilityForecast.probabilities?.TREND ?? 0;
@@ -278,11 +296,10 @@ export default function SessionForecastPanel({ date, section = 'all' }) {
                 <span style={{ fontSize: 11, color: '#94a3b8', marginLeft: 'auto' }}>TREND day</span>
               </div>
               <div style={{ fontSize: 11, color: '#cbd5e1', lineHeight: 1.6 }}>
-                Fade setups lose <strong style={{ color: '#ef4444' }}>−$17.5K/year</strong> on TREND days (54% WR vs 61% break-even).
-                Counter-trend fades suppressed after IB close.
+                Fade setups tend to underperform on TREND days. Counter-trend fades suppressed after IB close.
               </div>
               <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 4 }}>
-                Play: wait for IB break → trade WITH the trend (IB_BULLISH/IB_BEARISH). Fade only WITH trend direction.
+                Play: wait for IB break → trade WITH the trend. Fade only WITH trend direction.
               </div>
             </div>
           );
@@ -292,11 +309,9 @@ export default function SessionForecastPanel({ date, section = 'all' }) {
             <div style={{ ...cardSt, borderLeft: '3px solid #f59e0b', background: 'rgba(245,158,11,0.06)', marginBottom: 10 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
                 <span style={{ fontSize: 12, fontWeight: 700, color: '#f59e0b' }}>⚠ TURBULENT SIGNAL</span>
-                <span style={{ fontSize: 11, color: '#94a3b8', marginLeft: 'auto' }}>20% classifier accuracy</span>
               </div>
               <div style={{ fontSize: 11, color: '#cbd5e1', lineHeight: 1.6 }}>
-                IF confirmed: fade setups perform best at <strong style={{ color: '#f59e0b' }}>71.5% WR</strong>, $47 EV/trade.
-                But 4 in 5 TURBULENT calls are wrong — wait for confirmation before sizing up.
+                A TURBULENT prediction is inherently uncertain this far ahead — wait for confirmation before sizing up.
               </div>
               <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 4 }}>
                 Confirm with: wide wicks on RTH open, failed breakout attempts, expanding range. Then full size at first touch, runners to 2×T1.
@@ -412,6 +427,11 @@ export default function SessionForecastPanel({ date, section = 'all' }) {
               <div style={{ ...labelSt, marginBottom: 0 }}>Setup Anticipation</div>
               {setupAnticipation.day_type && <span style={{ fontSize: 11, color: '#94a3b8' }}>{setupAnticipation.day_type} · {setupAnticipation.dow}</span>}
             </div>
+            {setups.length === 0 && (
+              <div style={{ fontSize: 11, color: '#64748b', fontStyle: 'italic' }}>
+                No setup has cleared the statistical bar (N≥20 real trades, ≥20 independent days, day-clustering-clean) for today's conditions yet.
+              </div>
+            )}
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '3px 12px', fontVariantNumeric: 'tabular-nums' }}>
               {setups.map(s => {
                 const fireColor = s.fire_rate >= 0.25 ? '#22c55e' : s.fire_rate >= 0.12 ? '#f59e0b' : '#64748b';
@@ -533,11 +553,11 @@ export default function SessionForecastPanel({ date, section = 'all' }) {
                 <span>Expected range: <strong>{rp.avgRange}pt</strong></span>
               </div>
               <div style={{ fontSize: 11, color: '#94a3b8' }}>
-                {rp.quintile === 'BOTTOM' && 'Bottom of 20-day range. Strong mean-reversion zone — 71% up, +170pt avg. Bounce setups are high conviction.'}
-                {rp.quintile === 'LOWER' && 'Lower range. Danger zone — 44% up, -52pt avg. Downtrends accelerate here. Cautious with longs.'}
-                {rp.quintile === 'MIDDLE' && 'Middle of range. Balanced — setups work best here (51% WR). Standard playbook.'}
-                {rp.quintile === 'UPPER' && 'Upper range. Slight upward bias. Neutral — play what you see.'}
-                {rp.quintile === 'TOP' && 'Top of 20-day range. 59% up — strength tends to continue. But large selloffs from here create the biggest drops.'}
+                {rp.quintile === 'BOTTOM' && 'Bottom of 20-day range. Mean-reversion zone — bounce setups get more attention here.'}
+                {rp.quintile === 'LOWER' && 'Lower range. Downtrends can accelerate here — cautious with longs.'}
+                {rp.quintile === 'MIDDLE' && 'Middle of range. Balanced — standard playbook.'}
+                {rp.quintile === 'UPPER' && 'Upper range. Neutral — play what you see.'}
+                {rp.quintile === 'TOP' && 'Top of 20-day range. Strength tends to continue, but large selloffs also tend to originate from here.'}
               </div>
               {(() => {
                 const d5 = rps.d5, d10 = rps.d10, d20 = rps.d20;
@@ -567,14 +587,14 @@ export default function SessionForecastPanel({ date, section = 'all' }) {
         timestamp={new Date().toLocaleString('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}>
         <div style={{ fontSize: 12, lineHeight: 1.7, color: '#cbd5e1' }}>
           <div>1. <strong style={{ color: '#818cf8' }}>Overnight positioning.</strong> {oc.overnight_inventory ? `${invLabel}. ${oc.overnight_inventory === 'SHORT_TRAPPED' ? 'Shorts squeezed — buying fuel early. Expect upward drift into first level test.' : oc.overnight_inventory === 'LONG_TRAPPED' ? 'Longs trapped — selling pressure builds. Expect downward drift. Watch for capitulation volume.' : 'Neutral — no trapped participants. Wait for OR to establish direction.'}` : 'Check overnight close vs today\'s VA before the bell.'}</div>
-          {cl.pd1?.poc && <div>2. <strong style={{ color: '#818cf8' }}>POC magnet at {fmtP(cl.pd1.poc)}.</strong> Expect touch within 51 min (91% of days). Price arrives fast (16pt/bar), barely pauses (1 bar dwell), then drifts away slowly. Use as a target for your first trade, not an entry level.</div>}
-          {cl.pd1?.vah && cl.pd1?.val && <div>3. <strong style={{ color: '#818cf8' }}>VA edge test.</strong> If price reaches VAH (<strong>{fmtP(cl.pd1.vah)}</strong>): expect 4-5 retests over ~5 bars. Volume should increase 1.37x at the edge — that confirms it's a real test. VAL (<strong>{fmtP(cl.pd1.val)}</strong>) resolves faster — 2 retests, 2-bar dwell. Holds or breaks decisively.</div>}
+          {cl.pd1?.poc && <div>2. <strong style={{ color: '#818cf8' }}>POC magnet at {fmtP(cl.pd1.poc)}.</strong> Tends to get touched during the session. Use as a target for your first trade, not an entry level.</div>}
+          {cl.pd1?.vah && cl.pd1?.val && <div>3. <strong style={{ color: '#818cf8' }}>VA edge test.</strong> If price reaches VAH (<strong>{fmtP(cl.pd1.vah)}</strong>): watch for increased volume at the edge — that's what confirms a real test vs. a pass-through. VAL (<strong>{fmtP(cl.pd1.val)}</strong>) tends to resolve faster — holds or breaks decisively.</div>}
           {scalpPlaybook?.pipelineSetups?.length > 0 && (() => {
             const best = scalpPlaybook.pipelineSetups[0];
             return <div>4. <strong style={{ color: '#818cf8' }}>{scalpPlaybook.dayOfWeek} setup edge.</strong> {best.setup.replace(/_/g, ' ')} has best odds{best.wr != null ? ` (${best.wr}% WR, N=${best.n})` : ` (${best.fires} fires)`}. <span style={{ color: '#94a3b8' }}>Window: {best.timeWindow}.</span></div>;
           })()}
-          <div>5. <strong style={{ color: '#818cf8' }}>Zone gravity rules.</strong> If price leaves a balance zone: 65% return within 5 bars, 83% within 15. Average excursion before snapping back: 29pt. If still outside after 15 bars → breakout is likely real (only 17% return after that).</div>
-          <div>6. <strong style={{ color: '#818cf8' }}>10:30 AM — IB close.</strong> The Initial Balance is set. IB range defines the session framework. If IB is tight (under 47pt) → breakout expansion likely. If IB is wide (over 91pt) → range day, fade the IB extremes.</div>
+          <div>5. <strong style={{ color: '#818cf8' }}>Zone gravity rules.</strong> If price leaves a balance zone, it tends to snap back within the next several bars — if it stays outside for a while, the breakout is more likely real.</div>
+          <div>6. <strong style={{ color: '#818cf8' }}>10:30 AM — IB close.</strong> The Initial Balance is set. IB range defines the session framework. A tight IB tends to favor breakout expansion; a wide IB tends to favor a range day / fading the IB extremes.</div>
           <div>7. <strong style={{ color: '#818cf8' }}>10:30 AM — 12:00 PM: the resolution window.</strong> This is when the morning thesis either confirms or fails. If the A signal held and IB broke in the same direction → trend developing. If the A signal failed → reassess. Most setups fire by noon.</div>
         </div>
       </ScriptBlock>}
@@ -589,8 +609,8 @@ export default function SessionForecastPanel({ date, section = 'all' }) {
           <div>2. <strong style={{ color: '#f59e0b' }}>Stop initiating after 1:30 PM</strong> unless a clear failed auction or TRT is still active (120-min expiry). Afternoon breakout attempts have low follow-through.</div>
           <div>3. <strong style={{ color: '#f59e0b' }}>Where price closes shapes tomorrow.</strong></div>
           <div style={{ paddingLeft: 16, fontSize: 11, lineHeight: 1.6, color: '#94a3b8' }}>
-            {cl.pd1?.vah && <div>• Close above <strong style={{ color: '#e2e8f0' }}>{fmtP(cl.pd1.vah)}</strong> (2D VAH) → tomorrow opens ABOVE VALUE. Bullish setups get 61% aligned WR.</div>}
-            {cl.pd1?.val && <div>• Close below <strong style={{ color: '#e2e8f0' }}>{fmtP(cl.pd1.val)}</strong> (2D VAL) → tomorrow opens BELOW VALUE. IB_BEARISH at 88% WR.</div>}
+            {cl.pd1?.vah && <div>• Close above <strong style={{ color: '#e2e8f0' }}>{fmtP(cl.pd1.vah)}</strong> (2D VAH) → tomorrow opens ABOVE VALUE.</div>}
+            {cl.pd1?.val && <div>• Close below <strong style={{ color: '#e2e8f0' }}>{fmtP(cl.pd1.val)}</strong> (2D VAL) → tomorrow opens BELOW VALUE.</div>}
             <div>• Close inside VA → tomorrow opens NEUTRAL. No strong directional tilt.</div>
           </div>
           <div>4. <strong style={{ color: '#f59e0b' }}>Closing price determines overnight inventory.</strong></div>
@@ -623,8 +643,8 @@ export default function SessionForecastPanel({ date, section = 'all' }) {
           }</div>
           <div>2. <strong style={{ color: '#a78bfa' }}>What the close tells us.</strong></div>
           <div style={{ paddingLeft: 16, fontSize: 11, lineHeight: 1.6, color: '#94a3b8' }}>
-            {cl.pd1?.vah && <div>• Close above <strong style={{ color: '#e2e8f0' }}>{fmtP(cl.pd1.vah)}</strong> → tomorrow: <strong style={{ color: '#22c55e' }}>ABOVE VALUE</strong>. Value accepted higher. Bullish aligned setups at 61% WR.</div>}
-            {cl.pd1?.val && <div>• Close below <strong style={{ color: '#e2e8f0' }}>{fmtP(cl.pd1.val)}</strong> → tomorrow: <strong style={{ color: '#ef4444' }}>BELOW VALUE</strong>. Value rejected. IB_BEARISH at 88% WR (strongest condition).</div>}
+            {cl.pd1?.vah && <div>• Close above <strong style={{ color: '#e2e8f0' }}>{fmtP(cl.pd1.vah)}</strong> → tomorrow: <strong style={{ color: '#22c55e' }}>ABOVE VALUE</strong>. Value accepted higher.</div>}
+            {cl.pd1?.val && <div>• Close below <strong style={{ color: '#e2e8f0' }}>{fmtP(cl.pd1.val)}</strong> → tomorrow: <strong style={{ color: '#ef4444' }}>BELOW VALUE</strong>. Value rejected.</div>}
             <div>• Close inside VA → tomorrow: <strong style={{ color: '#94a3b8' }}>NEUTRAL</strong>. Balanced — no strong structural tilt.</div>
           </div>
           <div>3. <strong style={{ color: '#a78bfa' }}>Overnight inventory forming.</strong> Today opened at {price ? fmtP(ls.sessionOpen || price) : '—'}. If closing well below the open → <strong style={{ color: '#ef4444' }}>LONG_TRAPPED</strong> tomorrow. Today's buyers are underwater — forced selling creates directional fuel. If closing near the open → <strong style={{ color: '#94a3b8' }}>NEUTRAL</strong>. If closing well above → <strong style={{ color: '#22c55e' }}>SHORT_TRAPPED</strong>.</div>

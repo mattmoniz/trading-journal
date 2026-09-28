@@ -1955,16 +1955,22 @@ async function main() {
         'scripts/backtest_garch_dual_barrier_all_setups.mjs',
         'scripts/backtest_revert_split_legs.mjs',
       ];
+      // 2026-09-27: backtest_level_approach.js was rebuilt as a thin wrapper (the real
+      // computation, including the REAL_TRADE_FILTER import, moved to
+      // server/services/levelApproach.js -- a legitimate extraction, not drift). Check
+      // the file that actually does the work for scripts that delegate this way.
+      const DELEGATES_TO = { 'scripts/backtest_level_approach.js': 'server/services/levelApproach.js' };
       for (const f of MIGRATED_FILTER_FILES) {
-        const src = fs.readFileSync(path.resolve(f), 'utf8');
-        const importsShared = /import\s*\{[^}]*\bREAL_TRADE_FILTER\b[^}]*\}\s*from\s*['"]\.\/backtest_setup_status\.mjs['"]/.test(src);
+        const checkFile = DELEGATES_TO[f] || f;
+        const src = fs.readFileSync(path.resolve(checkFile), 'utf8');
+        const importsShared = /import\s*\{[^}]*\bREAL_TRADE_FILTER\b[^}]*\}\s*from\s*['"](\.\/|\.\.\/\.\.\/scripts\/)backtest_setup_status\.mjs['"]/.test(src);
         const hasHandRolledCopy = /NOT IN\s*\(\s*'MARK_TO_MARKET'\s*,\s*'RECOVERY_MTM'\s*\)/.test(src) && !importsShared;
         if (!importsShared) {
-          fail(`[25] ${f} no longer imports REAL_TRADE_FILTER from backtest_setup_status.mjs -- check it hasn't reverted to a hand-rolled copy (this is exactly the drift class check [25] exists to catch).`);
+          fail(`[25] ${checkFile} (backing ${f}) no longer imports REAL_TRADE_FILTER from backtest_setup_status.mjs -- check it hasn't reverted to a hand-rolled copy (this is exactly the drift class check [25] exists to catch).`);
         } else if (hasHandRolledCopy) {
-          fail(`[25] ${f} imports REAL_TRADE_FILTER but ALSO still has a hand-rolled MARK_TO_MARKET/RECOVERY_MTM fragment -- likely a leftover from before the migration, or a new local copy re-added alongside the import.`);
+          fail(`[25] ${checkFile} (backing ${f}) imports REAL_TRADE_FILTER but ALSO still has a hand-rolled MARK_TO_MARKET/RECOVERY_MTM fragment -- likely a leftover from before the migration, or a new local copy re-added alongside the import.`);
         } else {
-          ok(`[25] ${f} imports REAL_TRADE_FILTER, no local hand-rolled copy`);
+          ok(`[25] ${f} imports REAL_TRADE_FILTER (via ${checkFile}), no local hand-rolled copy`);
         }
       }
     }
