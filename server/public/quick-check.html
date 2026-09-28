@@ -137,13 +137,27 @@
   .sweep-watch-note { font-size: 11px; color: var(--dim); margin-top: 6px; line-height: 1.5; }
 
   /* Session timeline */
-  #timeline-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; cursor: pointer; user-select: none; }
+  #timeline-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
   #timeline-head h2 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin: 0; }
-  #timeline-chevron { color: var(--dim); font-size: 11px; padding: 2px 4px; }
-  #timeline-body.collapsed { display: none; }
   #timeline-stats { display: flex; gap: 14px; font-size: 13px; margin-bottom: 12px; padding: 8px 12px; background: rgba(255,255,255,0.03); border-radius: 6px; border: 1px solid var(--border); }
-  #vb-filter-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
   #timeline-stats span b { font-family: monospace; }
+
+  /* Page tabs (2026-09-28, replaces the old collapse-to-reach-Performance mechanism -- user
+     request: "consolidate and move the session timeline feed to a separate tab besides
+     performance and i can just toggle between the two"). Only one of #tab-panel-timeline /
+     #sec-performance is ever display:block at a time; both keep polling underneath regardless
+     of which is hidden, matching this file's existing "hidden but still polling" convention
+     (see checkFlagsBanner/#sweep-watch). Persisted (like the collapse state it replaces) --
+     unlike performanceFilter/clusterView/liveAllFilter below, this is pure navigation state,
+     never hides real data within a view, so it doesn't carry that same footgun. */
+  #page-tabs { display: flex; gap: 1px; border-radius: 8px; overflow: hidden; border: 1px solid var(--border); margin-bottom: 12px; }
+  #page-tabs button { flex: 1; padding: 9px; font-size: 12.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; cursor: pointer; border: none; background: rgba(15,23,42,0.8); color: var(--dim); }
+  #page-tabs button.active { background: rgba(51,65,85,0.6); color: var(--text); }
+  /* Shared Live/All + Clustered/Declustered filter row (2026-09-28, user request: "they both
+     share a live and all tab i think... clustered and declustered too to make the filtering
+     easier") -- ONE control point above both tabs instead of each tab owning its own copy of
+     the same two toggles. */
+  #shared-filter-row { display: flex; gap: 8px; margin-bottom: 14px; flex-wrap: wrap; }
 
   .row {
     display: flex; align-items: center; gap: 8px; padding: 8px 0;
@@ -304,8 +318,8 @@
 <div id="nav-menu">
   <a onclick="jumpTo('top')">Market Pulse</a>
   <a onclick="jumpTo('setup-card')">Active Setup</a>
-  <a onclick="jumpTo('timeline-head')">Session Timeline</a>
-  <a onclick="jumpTo('sec-performance')">Performance</a>
+  <a onclick="switchPageTab('timeline')">Session Timeline</a>
+  <a onclick="switchPageTab('performance')">Performance</a>
   <a href="/setup-performance">Setup Performance →</a>
   <a href="/loss-prevention">Loss Prevention →</a>
   <a onclick="jumpTo('sec-models')">Models</a>
@@ -322,14 +336,25 @@
   <div id="standalone-position-card"></div>
   <div id="sweep-watch"></div>
 
-  <div id="timeline-head" onclick="toggleTimelineCollapse()">
-    <h2 id="timeline-title">Session Timeline</h2>
-    <span id="timeline-chevron">▾</span>
+  <!-- Timeline/Performance tab switch + shared Live/All + Clustered/Declustered filter row
+       (2026-09-28) -- see the CSS comment above for the full rationale. -->
+  <div id="page-tabs">
+    <button data-ptab="timeline">Timeline</button>
+    <button data-ptab="performance">Performance</button>
   </div>
-  <div id="timeline-body">
-    <div id="vb-filter-row"></div>
-    <div id="timeline-stats"></div>
-    <div id="timeline-list"><div class="loading">Loading…</div></div>
+  <div id="shared-filter-row">
+    <div id="liveall-toggle" class="perf-toggle"></div>
+    <div id="cluster-toggle" class="perf-toggle"></div>
+  </div>
+
+  <div id="tab-panel-timeline">
+    <div id="timeline-head">
+      <h2 id="timeline-title">Session Timeline</h2>
+    </div>
+    <div id="timeline-body">
+      <div id="timeline-stats"></div>
+      <div id="timeline-list"><div class="loading">Loading…</div></div>
+    </div>
   </div>
 
   <div class="section-block" id="sec-performance">
@@ -345,11 +370,6 @@
 
     <div class="perf-head-row">
       <div class="perf-subhead">Performance <span id="perf-subcount" class="perf-subcount"></span></div>
-      <div id="perf-toggle" class="perf-toggle"></div>
-    </div>
-    <div class="perf-head-row" style="margin-top:4px;">
-      <div class="perf-subhead" style="font-size:10px;color:var(--dim);" title="Clustered = one row per real market touch (a confluence cluster's siblings excluded). Declustered = every cluster-sibling trade counted individually too.">Cluster view</div>
-      <div id="cluster-toggle" class="perf-toggle"></div>
     </div>
     <div id="range-stats" class="range-stats-row"></div>
     <canvas id="range-equity" class="equity"></canvas>
@@ -1390,65 +1410,19 @@ function isLossRow(s) {
 
 let timelineRows = []; // full setup rows (already session+filter scoped), keyed for the modal lookup
 let allTimelineRows = []; // unfiltered fetch, so toggling live/all doesn't require a re-fetch
-// FORCED default, 2026-09-25 (same fix as performanceFilter/clusterView above -- a stale
-// localStorage 'live' value from before this page defaulted to 'all' kept winning on every
-// load, so this now ignores stored history entirely and always starts on 'all').
-let timelineFilter = 'all'; // 'live' | 'all'
-// Top-5-by-$-impact tag filter (2026-09-16, user request: replaced the Vol Building filter --
-// "add filters in the same spot, one for each of the top 5 tags that save us the most pnl").
-// Purely a client-side display filter on the already-fetched rows, same as the Vol Building
-// filter it replaces -- changing this NEVER affects what fires. TAG_META's `test` predicates
-// mirror server/routes/setups.js's loss-prevention-summary gateStat/altExitStat flag checks
-// EXACTLY (same field paths, same conditions) so a row counted as "flagged" server-side for the
-// $ ranking is counted identically client-side for the filter -- see that endpoint if either
-// side ever needs to change, and change both together.
-const TAG_META = {
-  dirGate:        { label: 'DG',  test: s => s.direction_gate_shadow?.wouldBeBlocked === true },
-  momFade:        { label: 'MF',  test: s => s.momentum_against_fade_shadow?.against === true },
-  stepTrail:      { label: 'ST',  test: s => s.step_trail_shadow?.hypothetical_pnl != null },
-  pitchCatch:     { label: 'PC',  test: s => s.pitch_catch_shadow?.qualified === true && s.pitch_catch_shadow?.hypothetical_pnl != null },
-  rangeSlope:     { label: 'RS',  test: s => s.post_entry_exit_signals?.range_slope?.hypothetical_pnl != null },
-  volRollover:    { label: 'VR',  test: s => s.post_entry_exit_signals?.vol_rollover?.hypothetical_pnl != null },
-  breakevenStop:  { label: 'BS',  test: s => s.breakeven_stop_shadow?.classification === 'REWARDED' && s.breakeven_stop_shadow?.hypothetical_pnl != null },
-  entryFlowLong:  { label: 'EFL', test: s => s.entry_orderflow_shadow?.rule === 'LONG_REPEAT_ADVERSE_FLOW' && s.entry_orderflow_shadow?.wouldBeFlagged === true },
-  entryFlowShort: { label: 'EFS', test: s => s.entry_orderflow_shadow?.rule === 'SHORT_MORNING_ADVERSE_FLOW' && s.entry_orderflow_shadow?.wouldBeFlagged === true },
-};
-let tagFilter = localStorage.getItem('tagFilter') || 'all'; // 'all' | one of TAG_META's keys
-let topTagKeys = []; // populated by loadTagRanking(), ranked by real $ lossPrevented (today), top 5
-function setTagFilter(f) {
-  tagFilter = f;
-  localStorage.setItem('tagFilter', f);
-  loadTimeline();
-}
-// Ranks by TODAY's lossPrevented (user request, 2026-09-16 -- was YTD, switched same day) --
-// the real-tier/thin-tier N split below already absorbs most of the "can jump around on thin
-// same-day N" risk this was originally guarding against.
-async function loadTagRanking() {
-  try {
-    const data = await fetch('/api/setups/loss-prevention-summary', { cache: 'no-store' }).then(r => r.json());
-    const todayStats = data.mechanisms?.today || {};
-    // Sort real (N>=20, this codebase's own "never fabricate a stat" floor) mechanisms ahead of
-    // thin ones, ranked by lossPrevented within that real tier -- but within the THIN (N<20)
-    // tier, rank by N instead of lossPrevented. Found live 2026-09-16 (user: "I dont see EFS
-    // there are alot of EFS tags"): a plain lossPrevented sort let RangeSlope's $531 (from just
-    // N=2 trades) edge out EntryFlow-S's $503 (N=16) -- a 2-trade total swings wildly and isn't
-    // more real just because it happens to currently add up slightly higher; a first attempt at
-    // this fix that only split real-vs-thin but still sorted the thin tier by $ made the exact
-    // same mistake one level down and didn't actually change the outcome (verified before
-    // shipping, not assumed). Ranking the thin tier by N instead means "more data, even if not
-    // yet enough" beats "less data that happens to sum higher."
-    topTagKeys = Object.entries(todayStats)
-      .filter(([key, s]) => TAG_META[key] && s.n > 0)
-      .sort((a, b) => {
-        const aReal = a[1].n >= 20, bReal = b[1].n >= 20;
-        if (aReal !== bReal) return (bReal ? 1 : 0) - (aReal ? 1 : 0);
-        return aReal ? b[1].lossPrevented - a[1].lossPrevented : b[1].n - a[1].n;
-      })
-      .slice(0, 5)
-      .map(([key]) => key);
-  } catch (e) { /* keep whatever was there (empty on first load -> no filter row shown yet) */ }
-  loadTimeline();
-}
+// Shared Live/All filter (2026-09-28, user request: "they both share a live and all tab i
+// think... to make the filtering easier") -- previously two independent vars (timelineFilter/
+// performanceFilter), one per section; consolidated into one so Session Timeline and
+// Performance always agree and the user only sets it once. FORCED default (carried over from
+// the pre-consolidation 2026-09-25 fix -- a stale localStorage 'live' value from before this
+// page defaulted to 'all' kept winning on every load): never persisted, always starts on 'all'.
+let liveAllFilter = 'all'; // 'live' | 'all'
+// Shared Clustered/Declustered view (2026-09-28, same consolidation -- previously Performance-
+// only; now also scopes Session Timeline's own row list + stats). 'collapsed' = one row per
+// real market touch (CLAUDE.md's is_cluster_primary hard rule). 'declustered' (forced default,
+// 2026-09-25 user request) = every confluence-cluster sibling counted as its own trade too --
+// see getDecidedRows()'s header comment for the full incident this exists to prevent.
+let clusterView = 'declustered'; // 'collapsed' | 'declustered'
 
 async function loadTimeline() {
   try {
@@ -1564,18 +1538,11 @@ function renderSweepWatch() {
   el.className = 'visible';
 }
 
-function setTimelineFilter(f) {
-  timelineFilter = f;
-  // No longer persisted -- timelineFilter now always starts on the forced 'all' default above
-  // (a reload no longer re-reads any stored value, so writing one here would be dead code).
-  renderTimeline();
-}
-
 // Globex-watch toggle (2026-09-16, user request, added the same session Globex firing was
 // paused): a THIRD, fully INDEPENDENT toggle -- deliberately not a third value on
-// timelineFilter, because the user explicitly does not want this to touch the Live/All-driven
+// liveAllFilter, because the user explicitly does not want this to touch the Live/All-driven
 // Performance stats (Wins/Losses/Net P&L/Gross/Comm/Worst Trade) at all. Those stay computed
-// from `resolved` (the normal timelineFilter-based set) unconditionally, regardless of this
+// from `resolved` (the normal liveAllFilter-based set) unconditionally, regardless of this
 // toggle's state -- see renderTimeline()'s own comment at the point it branches on
 // `globexWatch` for exactly where the two paths split.
 let globexWatch = localStorage.getItem('globexWatch') === 'true';
@@ -1640,7 +1607,12 @@ function renderTimeline() {
     // (actual_pnl always null) flowing into this array does NOT get counted in Wins/Losses/
     // Net P&L/Worst Trade -- verified before making this change, not assumed.
     .filter(s => s.fired_at_str)
-    .filter(s => tagFilter === 'all' || TAG_META[tagFilter]?.test(s))
+    // Clustered/Declustered (2026-09-28, now SHARED with Performance -- see clusterView's own
+    // declaration comment above for the consolidation rationale). 'collapsed' keeps only each
+    // confluence touch's one real primary row (CLAUDE.md's is_cluster_primary hard rule);
+    // 'declustered' (forced default) keeps every cluster-sibling row too, same population this
+    // list has always shown by default.
+    .filter(s => clusterView === 'declustered' || s.is_cluster_primary !== false)
     // Globex omitted from the main timeline entirely (2026-09-16, user request, same session
     // Globex firing was paused) -- unconditional, not tied to the globexWatch toggle below, so
     // it stays out of both the row list AND Performance/timeline-stats regardless of Live/All.
@@ -1651,17 +1623,17 @@ function renderTimeline() {
     // !isRthAdjacent filter below, unchanged) AND here, same row/same P&L in both, since it
     // genuinely spans both sessions rather than belonging to just one.
     .filter(s => isRthAdjacent(s) || s.setup_type?.startsWith('OVERNIGHT_ORDERFLOW_'));
-  const liveCount = baseFiltered.filter(s => s.origin_status === 'ACTIVE').length;
-  const allCount = baseFiltered.length;
   const resolved = baseFiltered
-    .filter(s => timelineFilter === 'all' || s.origin_status === 'ACTIVE')
+    .filter(s => liveAllFilter === 'all' || s.origin_status === 'ACTIVE')
     .sort((a, b) => (b.fired_at_str || '').localeCompare(a.fired_at_str || ''));
   timelineRows = resolved;
 
   // Reuses computeRangeStats() (defined below, hoisted) for wins/losses/netPnl/grossPnl/
   // commission -- per this codebase's "share modules instead of reimplementing" convention,
-  // same population/sort as the Performance section below.
-  const rangeStats = computeRangeStats(resolved);
+  // same population/sort as the Performance section below. `resolved` above is already
+  // clusterView-scoped, so declustered=true here just tells computeRangeStats() not to
+  // re-filter what's already been filtered (nothing left to collapse either way).
+  const rangeStats = computeRangeStats(resolved, true);
   const { wins, losses, netPnl, grossPnl, commission } = rangeStats;
 
   // Max single-trade drawdown (2026-08-31, user correction): computeRangeStats()'s maxDD is
@@ -1698,10 +1670,11 @@ function renderTimeline() {
   // Globex-watch rows -- computed regardless of globexWatch's current state (cheap, and the
   // toggle button below needs the count either way) but NEVER folded into `resolved`/
   // `rangeStats` -- those stay Live/All-driven and untouched, per the user's explicit ask.
-  // Base filters mirror `resolved` (session-scoped, resolved, not stale-priced, respects the
-  // Vol Building filter) but deliberately NOT the timelineFilter live/all restriction --
-  // Globex is now paused (force-SHADOW, see acd.js's GLOBEX_PAUSED override), so a Globex-only
-  // view restricted to origin_status='ACTIVE' would always be empty.
+  // Base filters mirror `resolved` (session-scoped, resolved, not stale-priced, cluster-view-
+  // scoped) but deliberately NOT the liveAllFilter live/all restriction -- Globex's
+  // GLOBEX_PAUSED force-SHADOW override was removed 2026-09-28 (acd.js), but this tab still
+  // deliberately shows both ACTIVE and SHADOW Globex rows regardless -- a real Globex fire is
+  // worth seeing here either way, not just once it clears the live-eligibility bar.
   // FIXED 2026-09-22 (user-caught live: "I don't see a globex trade" -- two real Globex
   // fires from minutes earlier, both still genuinely open, were invisible here): this used
   // to explicitly EXCLUDE still-open (SHADOW/ACTIVE status) rows -- the opposite of the
@@ -1714,49 +1687,28 @@ function renderTimeline() {
     .filter(s => !s.late_fill_past_expiry_basis)
     .filter(s => s.fired_at_str)
     .filter(s => !isRthAdjacent(s))
-    .filter(s => tagFilter === 'all' || TAG_META[tagFilter]?.test(s))
+    .filter(s => clusterView === 'declustered' || s.is_cluster_primary !== false)
     .sort((a, b) => (b.fired_at_str || '').localeCompare(a.fired_at_str || ''));
   const displayRows = globexWatch ? globexRows : resolved;
 
   $('timeline-title').textContent = (globexWatch ? 'Globex Watch (' : 'Session Timeline (') + displayRows.length + ')';
+  // Live/All + the old top-5-$-impact tag filter row were both LIFTED OUT of this per-poll
+  // rebuild 2026-09-28 (moved to the shared #liveall-toggle/#cluster-toggle above both tabs;
+  // the tag filter row was removed outright per user request -- see removed TAG_META/tagFilter/
+  // loadTagRanking()). Only the Globex-watch toggle stays here, since its count is genuinely
+  // poll-driven and it has no equivalent on the Performance side to share with.
   $('timeline-head').querySelector('#timeline-toggle')?.remove();
   const toggle = document.createElement('div');
   toggle.id = 'timeline-toggle';
-  toggle.style.cssText = 'display:flex;gap:1px;border-radius:6px;overflow:hidden;border:1px solid var(--border);';
-  toggle.innerHTML = [['live', 'Live', liveCount], ['all', 'All', allCount]].map(([val, label, count]) =>
-    '<button data-tf="' + val + '" style="padding:3px 9px;font-size:10px;font-weight:600;cursor:pointer;border:none;' +
-    'background:' + (timelineFilter === val ? 'rgba(51,65,85,0.6)' : 'rgba(15,23,42,0.8)') + ';' +
-    'color:' + (timelineFilter === val ? 'var(--text)' : 'var(--dim)') + '">' + label + ' (' + count + ')</button>'
-  ).join('')
-  // Globex-watch button -- visually separated (margin-left) from the Live/All pair since it's
-  // an independent toggle, not a third value in that same group. Count shown inline so it's
-  // obvious there's something to look at even before tapping it.
-  + '<button data-gw="' + (globexWatch ? 'off' : 'on') + '" style="margin-left:4px;padding:3px 9px;font-size:10px;font-weight:600;cursor:pointer;border:none;' +
+  toggle.innerHTML = '<button data-gw="' + (globexWatch ? 'off' : 'on') + '" style="padding:3px 9px;font-size:10px;font-weight:600;cursor:pointer;border:none;border-radius:6px;' +
     'background:' + (globexWatch ? 'rgba(147,51,234,0.30)' : 'rgba(15,23,42,0.8)') + ';' +
     'color:' + (globexWatch ? '#d8b4fe' : 'var(--dim)') + '">🌙 Globex (' + globexRows.length + ')</button>';
   $('timeline-head').appendChild(toggle);
   // Click handled via delegation below (document-level listener) -- NOT attached per-button here.
-  // These buttons are recreated by innerHTML on every 20s loadTimeline() poll; a listener bound
-  // directly to a button can be destroyed mid-tap if a poll lands between touchstart and click,
+  // This button is recreated by innerHTML on every 20s loadTimeline() poll; a listener bound
+  // directly to it can be destroyed mid-tap if a poll lands between touchstart and click,
   // silently swallowing the tap (found live 2026-08-28, user reported "I see it but can't click
-  // on it" on the vol-building toggle -- same risk applies here, fixed for both at once).
-
-  // Top-5-by-$-impact tag filter (2026-09-16, replaced Vol Building) -- pure display filter,
-  // never affects firing. Counts shown per option so it's obvious how much data exists at each
-  // bar before clicking. No label text (user request: "remove these words") -- just the
-  // buttons, "All" plus one per top-5-ranked tag from loadTagRanking().
-  const scopedForTags = s => s.fired_at_str && s.status !== 'SHADOW' && s.status !== 'ACTIVE' && (timelineFilter === 'all' || s.origin_status === 'ACTIVE') && isRthAdjacent(s);
-  const tagOptions = [['all', 'All', scoped.filter(scopedForTags).length]]
-    .concat(topTagKeys.map(key => [key, TAG_META[key].label, scoped.filter(s => scopedForTags(s) && TAG_META[key].test(s)).length]));
-  $('vb-filter-row').innerHTML = topTagKeys.length === 0 ? '' :
-    '<div style="display:flex;gap:1px;border-radius:6px;overflow:hidden;border:1px solid var(--border);">' +
-    tagOptions.map(([val, label, count]) =>
-      '<button data-tag="' + val + '" style="padding:3px 9px;font-size:10px;font-weight:600;cursor:pointer;border:none;' +
-      'background:' + (tagFilter === val ? 'rgba(59,130,246,0.25)' : 'rgba(15,23,42,0.8)') + ';' +
-      'color:' + (tagFilter === val ? '#93c5fd' : 'var(--dim)') + '">' + label + ' (' + count + ')</button>'
-    ).join('') + '</div>';
-  // Click handled via delegation below (document-level listener) -- see comment on the
-  // Live/All toggle above for why per-button listeners are unreliable here.
+  // on it" on the vol-building toggle -- same risk applies here).
 
   // Stats shown are ENTIRELY independent per view (2026-09-16, user: "I want to track Globex
   // but totally separate") -- when globexWatch is on, every number below is recomputed from
@@ -1764,7 +1716,7 @@ function renderTimeline() {
   // blended with or falling back to the RTH-based rangeStats/maxTradeDD above. Without this,
   // the Globex row list would sit directly under RTH's own Wins/Losses/Net P&L, which reads as
   // if those numbers described the list below them when they don't.
-  const shownStats = globexWatch ? computeRangeStats(globexRows) : rangeStats;
+  const shownStats = globexWatch ? computeRangeStats(globexRows, true) : rangeStats;
   const shownMaxDD = globexWatch ? worstTradeDD(globexRows) : maxTradeDD;
   $('timeline-stats').innerHTML =
     '<span>Wins <b style="color:var(--green)">' + shownStats.wins + '</b></span>' +
@@ -1781,13 +1733,8 @@ function renderTimeline() {
     '<span title="Worst adverse excursion (MAE) within any ONE trade today, scaled by that trade\'s own live sizing recommendation (size_multiplier) -- NOT the cumulative peak-to-trough (see Max DD in Performance below for that)">Worst Trade <b class="mono" style="color:' + (shownMaxDD > 0 ? 'var(--amber)' : 'var(--dim)') + '">-$' + shownMaxDD.toFixed(0) + '</b></span>';
 
   if (displayRows.length === 0) {
-    // FIXED 2026-08-28 (DeepSeek code QA): this only checked timelineFilter, so filtering to
-    // "Building"/"Strong" with zero matches showed "No live trades fired yet this session" even
-    // when trades clearly had fired (visible in the stats above) -- read as the toggle being
-    // broken rather than an honest "nothing matches this filter" message.
     const emptyMsg = globexWatch ? 'No Globex trades fired yet this session' :
-      tagFilter !== 'all' ? 'No trades match this tag filter' :
-      timelineFilter === 'live' ? 'No live trades fired yet this session' : 'Nothing fired yet this session';
+      liveAllFilter === 'live' ? 'No live trades fired yet this session' : 'Nothing fired yet this session';
     $('timeline-list').innerHTML = '<div class="loading">' + emptyMsg + '</div>';
     return;
   }
@@ -2984,21 +2931,16 @@ function renderEquityCurve(canvasId, rows, range, declustered = false) {
 // with live to show when i toggle live and i want the equity chart for all when i toggle
 // all" -- i.e. switch which one is shown, don't show both.
 let currentRange = 'today';
-// FORCED default, 2026-09-25 (explicit user request: "I want ungrouped or declustered to be
-// number 1" -- a prior fix that only changed the localStorage FALLBACK wasn't enough, since
-// this browser already had 'live'/'collapsed' stored from before this page defaulted to
-// 'all'/'declustered', so the old stored value kept winning on every load ("you just keep
-// reverting back to grouped"). This now ignores any stored value entirely on load -- ALWAYS
-// starts on 'all'/'declustered' regardless of localStorage history. Toggling within a session
-// still works normally (see setPerformanceFilter/setClusterView below); it just no longer
+// liveAllFilter/clusterView themselves are declared once, shared with Session Timeline (see
+// their declaration comments near loadTimeline() above) -- FORCED default, 2026-09-25
+// (explicit user request: "I want ungrouped or declustered to be number 1" -- a prior fix that
+// only changed the localStorage FALLBACK wasn't enough, since this browser already had
+// 'live'/'collapsed' stored from before this page defaulted to 'all'/'declustered', so the old
+// stored value kept winning on every load ("you just keep reverting back to grouped"). Neither
+// var reads stored history on load -- ALWAYS starts on 'all'/'declustered'. Toggling within a
+// session still works normally (see setLiveAllFilter/setClusterView below); it just no longer
 // persists across a reload, since the whole point is that declustered/all IS the default, not
 // a rememberable preference that can drift back to the old one.
-let performanceFilter = 'all'; // 'live' | 'all'
-// 'collapsed' = one row per real market touch, matching account-level reality.
-// 'declustered' (forced default) = every confluence-cluster sibling counted as its own trade
-// too -- see getDecidedRows()'s header comment for why this exists and what it's the same
-// population as.
-let clusterView = 'declustered'; // 'collapsed' | 'declustered'
 let currentRangeRowsLive = [];
 let currentRangeRowsAll = [];
 let currentLiveData = null, currentAllData = null;
@@ -3034,17 +2976,14 @@ function renderToggle(elId, options, currentVal, onSelect) {
   el.querySelectorAll('button').forEach(b => b.addEventListener('click', () => onSelect(b.dataset.tval)));
 }
 
-function renderPerfToggle() {
-  renderToggle('perf-toggle', [['live', 'Live'], ['all', 'All']], performanceFilter, setPerformanceFilter);
-}
-
-function setPerformanceFilter(f) {
-  performanceFilter = f;
-  // No longer persisted -- see the forced-default comment on performanceFilter's declaration.
-  renderPerformance();
-}
-
-function renderClusterToggle() {
+// Both toggles below are SHARED between Session Timeline and Performance (2026-09-28, user
+// request: "they both share a live and all tab i think... clustered and declustered too to
+// make the filtering easier") -- one physical button row each (#liveall-toggle/#cluster-toggle,
+// in the shared filter bar above both tabs), one state each, so switching either re-renders
+// BOTH sections rather than just whichever tab happens to be visible -- otherwise the hidden
+// tab would silently show a stale filter the next time it's switched to.
+function renderSharedFilters() {
+  renderToggle('liveall-toggle', [['live', 'Live'], ['all', 'All']], liveAllFilter, setLiveAllFilter);
   // Label renamed 2026-09-25 (user request: "Collapsed vs Declustered isn't a clean pair,
   // Clustered vs Declustered reads better") -- display text only, the internal value ('collapsed')
   // and localStorage key are unchanged since nothing compares against it directly (only
@@ -3052,9 +2991,19 @@ function renderClusterToggle() {
   renderToggle('cluster-toggle', [['collapsed', 'Clustered'], ['declustered', 'Declustered']], clusterView, setClusterView);
 }
 
+function setLiveAllFilter(f) {
+  liveAllFilter = f;
+  // No longer persisted -- see the forced-default comment near liveAllFilter's declaration.
+  renderSharedFilters();
+  renderTimeline();
+  renderPerformance();
+}
+
 function setClusterView(v) {
   clusterView = v;
-  // No longer persisted -- see the forced-default comment on clusterView's declaration.
+  // No longer persisted -- see the forced-default comment near clusterView's declaration.
+  renderSharedFilters();
+  renderTimeline();
   renderPerformance();
 }
 
@@ -3238,15 +3187,13 @@ async function openOrdinalHistoryModal() {
 // Re-renders from already-fetched cached data -- no network call, so the Live/All toggle
 // switches instantly.
 function renderPerformance() {
-  renderPerfToggle();
-  renderClusterToggle();
-  const rows = performanceFilter === 'live' ? currentRangeRowsLive : currentRangeRowsAll;
-  const data = performanceFilter === 'live' ? currentLiveData : currentAllData;
+  const rows = liveAllFilter === 'live' ? currentRangeRowsLive : currentRangeRowsAll;
+  const data = liveAllFilter === 'live' ? currentLiveData : currentAllData;
   if (!data) return; // nothing fetched yet
 
   const declustered = clusterView === 'declustered';
   const decidedN = getDecidedRows(rows, declustered).length;
-  if (performanceFilter === 'live') {
+  if (liveAllFilter === 'live') {
     $('perf-subcount').textContent = '(' + decidedN.toLocaleString() + ' real trade' + (decidedN === 1 ? '' : 's') + (declustered ? ', declustered' : '') + ')';
   } else {
     const info = subcountLabel(data);
@@ -3305,37 +3252,44 @@ document.addEventListener('click', (e) => {
   }
 });
 
-// Delegated click handler for the timeline toggles (Live/All, Vol Building). Both toggles'
-// buttons are recreated by innerHTML on every loadTimeline() poll (20s) -- a listener bound
-// directly to a button node is lost if that node gets replaced mid-tap, which reads to a user
-// as "I see it but can't click on it" (found live 2026-08-28). Binding to `document` once and
-// matching via closest() means the handler survives every re-render, since it's never attached
-// to the buttons themselves.
+// Delegated click handler for the Globex-watch toggle -- its button is recreated by innerHTML
+// on every loadTimeline() poll (20s), so a listener bound directly to the button node would be
+// lost if that node gets replaced mid-tap, which reads to a user as "I see it but can't click
+// on it" (found live 2026-08-28). Binding to `document` once and matching via closest() means
+// the handler survives every re-render. CAPTURE-phase (the `true` 3rd arg), a defensive holdover
+// from the same shape of bug this fixed live 2026-09-28 for the (now-removed) Live/All toggle
+// that used to live inside #timeline-head alongside this one -- #timeline-head no longer has its
+// own onclick (the collapse-to-reach-Performance mechanism was replaced by the page-tab switcher
+// below), so the original ancestor-onclick conflict can't recur here either way, but capture
+// phase is still a safe, correct choice for a delegated listener regardless.
 document.addEventListener('click', (e) => {
-  const tfBtn = e.target.closest('[data-tf]');
-  if (tfBtn) { setTimelineFilter(tfBtn.dataset.tf); return; }
-  const tagBtn = e.target.closest('[data-tag]');
-  if (tagBtn) { setTagFilter(tagBtn.dataset.tag); return; }
   const gwBtn = e.target.closest('[data-gw]');
-  if (gwBtn) { setGlobexWatch(gwBtn.dataset.gw === 'on'); return; }
-});
+  if (gwBtn) { e.stopPropagation(); setGlobexWatch(gwBtn.dataset.gw === 'on'); return; }
+}, true);
 
-// Session Timeline collapse (2026-09-24 user request -- reaching Performance below it took a
-// lot of scrolling). Purely a display toggle -- loadTimeline()'s own 20s poll keeps running
-// underneath regardless of collapsed state, same as any other hidden-but-still-polling card
-// in this file (#sweep-watch, #standalone-position-card). Persisted so a manual collapse
-// survives a reload, matching the clusterView/performanceFilter convention.
-let timelineCollapsed = localStorage.getItem('timelineCollapsed') === '1';
-function applyTimelineCollapseState() {
-  $('timeline-body').classList.toggle('collapsed', timelineCollapsed);
-  $('timeline-chevron').textContent = timelineCollapsed ? '▸' : '▾';
+// Timeline/Performance page tabs (2026-09-28, replaces the 2026-09-24 collapse-to-reach-
+// Performance mechanism -- user wanted a real toggle between the two, not just a collapse).
+// Both panels stay mounted and keep polling underneath regardless of which is hidden, same
+// "hidden but still polling" convention as #sweep-watch/#standalone-position-card. Persisted
+// (like the collapse state it replaces) -- pure navigation state, never hides real data within
+// a view the way performanceFilter/clusterView/liveAllFilter's OWN persistence used to (that's
+// why those are forced-default/not persisted, and this is different).
+let pageTab = localStorage.getItem('pageTab') === 'performance' ? 'performance' : 'timeline';
+function applyPageTab() {
+  $('tab-panel-timeline').style.display = pageTab === 'timeline' ? '' : 'none';
+  $('sec-performance').style.display = pageTab === 'performance' ? '' : 'none';
+  document.querySelectorAll('#page-tabs button').forEach(b => b.classList.toggle('active', b.dataset.ptab === pageTab));
 }
-function toggleTimelineCollapse() {
-  timelineCollapsed = !timelineCollapsed;
-  localStorage.setItem('timelineCollapsed', timelineCollapsed ? '1' : '0');
-  applyTimelineCollapseState();
+function switchPageTab(tab) {
+  pageTab = tab;
+  localStorage.setItem('pageTab', tab);
+  applyPageTab();
+  $('nav-menu').classList.remove('open');
+  $('page-tabs').scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
-applyTimelineCollapseState();
+document.querySelectorAll('#page-tabs button').forEach(b => b.addEventListener('click', () => switchPageTab(b.dataset.ptab)));
+applyPageTab();
+renderSharedFilters();
 
 // SUPPRESS_ALL_DISABLED / ALL_LEVELS_LIVE banner (2026-09-26) -- see the #flags-banner div's
 // own comment above. Slow-changing (a manual code flip, not live data) but polled at the same
@@ -3381,14 +3335,12 @@ loadEntryFlowShadowSummary(); // slow-changing (live query over real trades) -- 
 loadVolRegime(); // slow-changing (nightly cron writes it) -- poll every 5min below, not every 15s like the live pulse
 loadModelsTab(); // consolidated Models section (2026-09-24) -- slow-changing (daily recheck/manual retrain), poll every 5min below
 loadPulseReading(); // live, but bar-level (5-min) not tick-level -- 60s poll is plenty, no need for loadPulse's 15s cadence
-loadTagRanking(); // top-5-by-$-impact filter row -- ranked off today's own data, 60s poll below keeps it current
 setInterval(loadPulse, 15000);
 setInterval(loadTimeline, 20000);
 setInterval(() => loadRange(currentRange), 60000);
 setInterval(loadVolRegime, 300000);
 setInterval(loadModelsTab, 300000);
 setInterval(loadPulseReading, 60000);
-setInterval(loadTagRanking, 60000);
 setInterval(checkFlagsBanner, 300000);
 
 // Mobile browsers throttle or fully suspend setInterval timers on a backgrounded tab (screen
@@ -3405,12 +3357,11 @@ document.addEventListener('visibilitychange', () => {
   loadVolRegime();
   loadModelsTab();
   loadPulseReading();
-  loadTagRanking();
 });
 
 window.addEventListener('resize', () => {
-  const rows = performanceFilter === 'live' ? currentRangeRowsLive : currentRangeRowsAll;
-  renderEquityCurve('range-equity', rows, currentRange);
+  const rows = liveAllFilter === 'live' ? currentRangeRowsLive : currentRangeRowsAll;
+  renderEquityCurve('range-equity', rows, currentRange, clusterView === 'declustered');
 });
 </script>
 </body>
