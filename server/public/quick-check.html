@@ -3304,7 +3304,11 @@ function switchPageTab(tab) {
   // re-renders of already-fetched data -- safe to call here, no extra network request.
   if (tab === 'timeline') renderTimeline(); else renderPerformance();
   $('nav-menu').classList.remove('open');
-  $('page-tabs').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  // Deliberately no scrollIntoView here (2026-09-28, user report: "it keeps scrolling down" --
+  // the tab buttons are already on screen when tapped, so force-scrolling back to them on every
+  // switch is pure annoyance, not a real navigation need). The nav-menu's own Session Timeline/
+  // Performance links call this same function and lose their scroll-to-tabs behavior too as a
+  // result -- accepted tradeoff, the reported complaint was specifically about the tab buttons.
 }
 document.querySelectorAll('#page-tabs button').forEach(b => b.addEventListener('click', () => switchPageTab(b.dataset.ptab)));
 applyPageTab();
