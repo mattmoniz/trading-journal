@@ -1448,6 +1448,39 @@ router.get('/setups/momentum-against-fade-shadow-summary', async (req, res) => {
   }
 });
 
+// GET /api/setups/touch-orderflow-pressure-shadow-summary — monitoring surface for the
+// touch-time order-flow-pressure tag (see server/services/touchOrderflowPressureShadow.js's
+// header for the full mechanism + backing research). Observation-only -- reports, for real
+// trades tagged wouldSkip=true (heavy adverse pressure approaching the touch), what they
+// actually did, vs. everything else. Same shape as momentum-against-fade-shadow-summary above.
+router.get('/setups/touch-orderflow-pressure-shadow-summary', async (req, res) => {
+  try {
+    const rowsQ = await query(`
+      SELECT actual_pnl::float as actual_pnl, touch_orderflow_pressure_shadow
+      FROM active_setups
+      WHERE touch_orderflow_pressure_shadow IS NOT NULL AND origin_status IN ('ACTIVE','SHADOW')
+        AND resolution IS NOT NULL AND actual_pnl IS NOT NULL
+    `);
+    const wouldSkip = rowsQ.rows.filter(r => r.touch_orderflow_pressure_shadow.wouldSkip === true);
+    const kept = rowsQ.rows.filter(r => r.touch_orderflow_pressure_shadow.wouldSkip === false);
+    const stat = rows => {
+      const n = rows.length;
+      if (!n) return { n: 0, wr: null, ev: null, total: 0 };
+      const total = rows.reduce((s, r) => s + r.actual_pnl, 0);
+      const wins = rows.filter(r => r.actual_pnl > 0).length;
+      return { n, wr: +(100 * wins / n).toFixed(1), ev: +(total / n).toFixed(2), total: +total.toFixed(2) };
+    };
+    res.json({
+      wouldSkip: stat(wouldSkip),
+      kept: stat(kept),
+      note: 'Observation-only -- these numbers reflect what actually happened, not a live skip. Flagged trades fired at full size for real.',
+    });
+  } catch (err) {
+    console.error('[setups/touch-orderflow-pressure-shadow-summary]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // GET /api/setups/loss-prevention-summary — Today/This-Week rollup across all 7 observation-
 // only shadow tags (DirGate, MomFade, StepTrail, PitchCatch, RangeSlope, VolRollover,
 // BreakevenStop added 2026-09-16), 2026-09-08

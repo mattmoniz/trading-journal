@@ -221,6 +221,12 @@
      visually distinguishable. PROVISIONAL (RESEARCH_CLAIM
      t1floor_runner_positive_slow_population_20260925) -- SHADOW-tracked, not yet promoted. */
   .t1floor-tag { color: #a3e635; background: rgba(101,163,13,0.16); }
+  /* Touch-time order-flow-pressure shadow tag (2026-09-27, touchOrderflowPressureShadow.js)
+     -- distinct hue from every tag above. PROVISIONAL (RESEARCH_CLAIM
+     orderflow_touch_time_adverse_pressure_worse_outcome_20260927) -- SHADOW-tracked, not yet
+     promoted. Only shown when wouldSkip is true (heavy adverse pressure approaching the touch,
+     the informative case), same convention as every tag above. */
+  .orderflowpressure-tag { color: #fb7185; background: rgba(225,29,72,0.16); }
   .sig-tag { cursor: pointer; }
 
   /* Modal */
@@ -1897,6 +1903,12 @@ function renderTimeline() {
     const efTag = s.entry_orderflow_shadow?.wouldBeFlagged
       ? '<span class="vb-tag entryflow-tag sig-tag" onclick="event.stopPropagation(); openEntryFlowPopup(' + s.id + ')">' + (s.entry_orderflow_shadow.rule === 'LONG_REPEAT_ADVERSE_FLOW' ? 'EFL' : 'EFS') + '</span>'
       : '';
+    // Touch-time order-flow-pressure shadow tag (2026-09-27, touchOrderflowPressureShadow.js)
+    // -- only shown when wouldSkip is true (heavy adverse pressure approaching the touch),
+    // same "only the informative case" convention as dgTag/mfTag above.
+    const ofpTag = s.touch_orderflow_pressure_shadow?.wouldSkip
+      ? '<span class="vb-tag orderflowpressure-tag sig-tag" onclick="event.stopPropagation(); openOrderflowPressurePopup(' + s.id + ')">OFP</span>'
+      : '';
     // Late-backfill tag (OPEN_DECISION poller_late_backfill_display_gap_20260914) -- see the
     // CSS comment above. late_backfill_min comes straight from the API (created_at minus
     // fired_at, both naive-timestamp columns diffed in SQL, no JS date-parsing needed here).
@@ -1918,7 +1930,7 @@ function renderTimeline() {
       '<span class="rdot" style="background:' + dotColor + '"></span>' +
       '<span class="time mono">' + timeLabel + '</span>' +
       '<span class="type">' + (s.setup_type || '').replace(/_/g, ' ') + '</span>' +
-      clusterBadge + vbTag + wideTag + rsTag + vrTag + stTag + pcTag + t1fTag + dgTag + mfTag + bsTag + efTag + lateTag +
+      clusterBadge + vbTag + wideTag + rsTag + vrTag + stTag + pcTag + t1fTag + dgTag + mfTag + bsTag + efTag + ofpTag + lateTag +
       '<span class="price mono">' + price + '</span>' +
       '<span class="badge ' + badgeClass + '">' + badgeText + '</span>' +
       '</div>';
@@ -2552,6 +2564,55 @@ function openMomentumFadePopup(id) {
   if (momentumFadeShadowSummary) {
     html += mfBucketRow('Against momentum (top quartile)', momentumFadeShadowSummary.against);
     html += mfBucketRow('With/neutral momentum', momentumFadeShadowSummary.withOrNeutral);
+  } else {
+    html += '<div class="m-row"><span class="m-k" style="color:var(--dim)">Still loading / not enough data yet</span></div>';
+  }
+
+  $('modal').innerHTML = html;
+  $('modal-backdrop').classList.add('open');
+}
+
+// ---- Touch-time order-flow-pressure shadow popup (2026-09-27, touchOrderflowPressureShadow.js)
+// -- see that file's header for the full mechanism + backing research (RESEARCH_CLAIM
+// orderflow_touch_time_adverse_pressure_worse_outcome_20260927). Observation-only: this trade
+// fired at full real size regardless of its reading -- nothing live is gated on this yet.
+let orderflowPressureShadowSummary = null;
+async function loadOrderflowPressureShadowSummary() {
+  try {
+    orderflowPressureShadowSummary = await fetch('/api/setups/touch-orderflow-pressure-shadow-summary', { cache: 'no-store' }).then(r => r.json());
+  } catch (e) { /* popup falls back to per-trade-only view below */ }
+}
+
+function ofpBucketRow(label, b) {
+  if (!b || b.n === 0) return '<div class="m-row"><span class="m-k" style="color:var(--dim)">' + label + ': no data yet</span></div>';
+  const evColor = b.ev >= 0 ? 'var(--green)' : 'var(--red)';
+  return '<div class="m-row"><span class="m-k">' + label + '</span><span class="m-v mono" style="color:' + evColor + '">' +
+    'N=' + b.n + ', WR ' + b.wr + '%, avg ' + (b.ev >= 0 ? '+' : '') + '$' + b.ev.toFixed(2) +
+    ', total ' + (b.total >= 0 ? '+' : '') + '$' + b.total.toFixed(2) + '</span></div>';
+}
+
+function openOrderflowPressurePopup(id) {
+  const s = timelineRows.find(r => r.id === id);
+  const shadow = s?.touch_orderflow_pressure_shadow;
+  if (!s || !shadow) return;
+
+  const real = s.actual_pnl != null ? Number(s.actual_pnl) : null;
+  let html = '<div class="m-head"><span class="m-title" style="color:#fb7185">Touch-Time Order-Flow Pressure — heavy adverse flow approaching this touch</span>' +
+    '<button class="m-close" onclick="closeTradeModal()">×</button></div>';
+  html += '<div class="m-sub">' + (s.setup_type || '').replace(/_/g, ' ') + ' · id ' + s.id + ' · OBSERVATION-ONLY, not a live filter — this trade fired for real, at full size</div>';
+
+  html += mSection('This touch (8-bar approach window)');
+  html += mRow('Net adverse delta', shadow.netAdverseDelta);
+  html += mRow('Calibrated cutoff (would-skip threshold)', shadow.cutoff);
+  html += mRow('Peak approach volume z-score', shadow.maxZ);
+  html += mRow('What actually happened', real != null ? (real >= 0 ? '+' : '') + '$' + real.toFixed(2) : null,
+    real != null ? (real >= 0 ? 'var(--green)' : 'var(--red)') : null);
+  html += mRow('Checked at', shadow.checkedAt);
+
+  html += mSection('Running total (all real trades this tag has seen)');
+  if (orderflowPressureShadowSummary) {
+    html += ofpBucketRow('Would have been SKIPPED (heavy adverse pressure)', orderflowPressureShadowSummary.wouldSkip);
+    html += ofpBucketRow('Would have been kept', orderflowPressureShadowSummary.kept);
   } else {
     html += '<div class="m-row"><span class="m-k" style="color:var(--dim)">Still loading / not enough data yet</span></div>';
   }
@@ -3314,6 +3375,7 @@ loadPitchCatchShadowSummary(); // slow-changing (weekly cron writes the filter c
 loadT1FloorRunnerSummary(); // slow-changing (live query over real trades, no calib row) -- fetch once, no poll
 loadDirectionGateSummary(); // slow-changing (this is a live query over real trades, not a calib row) -- fetch once, no poll
 loadMomentumFadeShadowSummary(); // slow-changing (live query over real trades) -- fetch once, no poll
+loadOrderflowPressureShadowSummary(); // slow-changing (live query over real trades) -- fetch once, no poll
 loadBreakevenStopShadowSummary(); // slow-changing (live query over real trades) -- fetch once, no poll
 loadEntryFlowShadowSummary(); // slow-changing (live query over real trades) -- fetch once, no poll
 loadVolRegime(); // slow-changing (nightly cron writes it) -- poll every 5min below, not every 15s like the live pulse
