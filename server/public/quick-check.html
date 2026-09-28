@@ -353,6 +353,7 @@
     </div>
     <div id="timeline-body">
       <div id="timeline-stats"></div>
+      <canvas id="timeline-equity" class="equity"></canvas>
       <div id="timeline-list"><div class="loading">Loading…</div></div>
     </div>
   </div>
@@ -1731,6 +1732,16 @@ function renderTimeline() {
     // bigger number. Reusing the same label for two different calculations on the same page
     // is exactly what caused the confusion -- see the tooltip for what THIS one actually is.
     '<span title="Worst adverse excursion (MAE) within any ONE trade today, scaled by that trade\'s own live sizing recommendation (size_multiplier) -- NOT the cumulative peak-to-trough (see Max DD in Performance below for that)">Worst Trade <b class="mono" style="color:' + (shownMaxDD > 0 ? 'var(--amber)' : 'var(--dim)') + '">-$' + shownMaxDD.toFixed(0) + '</b></span>';
+
+  // Equity curve, mirroring Performance's own chart (2026-09-28, user request: "can this chart
+  // appear on both performance and session timeline?") -- reuses the shared renderEquityCurve()
+  // function, fed `displayRows` (the EXACT same population shownStats/shownMaxDD above already
+  // describe, including the globexWatch branch), so this card's own chart, stats, and row list
+  // are always drawn from one consistent set rather than a second, independently-fetched one.
+  // range='today' is correct unconditionally -- Session Timeline is always the current session
+  // (RTH or, under Globex-watch, tonight's Globex session), never a selectable wider range like
+  // Performance's Today/Week/Month/Year/All, so the x-axis should always show times, not dates.
+  renderEquityCurve('timeline-equity', displayRows, 'today', true);
 
   if (displayRows.length === 0) {
     const emptyMsg = globexWatch ? 'No Globex trades fired yet this session' :
@@ -3284,6 +3295,14 @@ function switchPageTab(tab) {
   pageTab = tab;
   localStorage.setItem('pageTab', tab);
   applyPageTab();
+  // Re-render whichever panel just became visible (2026-09-28, found while verifying the new
+  // Session Timeline equity chart) -- a canvas measured while its container is display:none
+  // reports clientWidth 0, so renderEquityCurve() sizes it to a literal 0px-wide chart if the
+  // last render happened before this tab was ever switched to. Switching display alone doesn't
+  // retrigger a redraw, so the chart stayed broken until some OTHER trigger (a poll, a window
+  // resize) happened to fire afterward. Both renderTimeline()/renderPerformance() are pure
+  // re-renders of already-fetched data -- safe to call here, no extra network request.
+  if (tab === 'timeline') renderTimeline(); else renderPerformance();
   $('nav-menu').classList.remove('open');
   $('page-tabs').scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
