@@ -1,5 +1,19 @@
 # Open Threads / Pending Work
 
+## 🔄 2026-09-27: Scoped (not started) — connecting this app to Sierra Chart to actually place orders
+
+User asked to scope out placing real trades via Sierra Chart from this app — a genuine escalation from everything else in this codebase, which only ever *watches* (file-based TAL/price-bar imports, one-way). Current state confirmed: **zero outbound connection exists today.**
+
+**Two real, Sierra-Chart-documented mechanisms** (verified via Sierra Chart's own docs, not guessed — see `reference_sierra_chart_docs.md` memory for the fetch-first convention this followed):
+1. **DTC Protocol** — an external client connects directly to Sierra Chart over TCP (TLS required for trading), sends real order messages (`ORDER_UPDATE` family). No ready-made Node.js client exists — Sierra Chart only ships C++ headers + a Protocol Buffers spec, so the wire protocol would need implementing from scratch.
+2. **ACSIL custom study** — a C++ study compiled to a DLL, loaded inside Sierra Chart, places real orders via Sierra Chart's own order functions. Documented (if under-specified) ability to read from a web server, meaning a study could poll this app's own API (already on port 3002) for "place this trade now" signals. This is the path Sierra Chart's own docs point developers toward for automated trading.
+
+**User's answers so far**: data feed is **Rithmic** (AMP Futures). Automation posture: **"just exploring for now"** — no build decision yet. **Scope constraint, given mid-conversation**: this will go through a **prop firm's simulation/evaluation account first**, not live capital — since a prop firm's Rithmic-backed sim account uses the same real order-flow mechanics as a live one, the entire pipeline (connection, order messages, fills, error handling) can be built and proven out with zero real-capital risk before ever pointing at a funded/personal account. This meaningfully de-risks a first build.
+
+**Not yet decided/researched**: which of DTC vs. ACSIL to actually build (leaning ACSIL as the more standard/supported path, but not settled); Rithmic also has its own separate, independently-documented API (R|Trader Pro / RithmicApi) some traders use instead of going through Sierra Chart at all — not explored, since the user's ask was specifically "via Sierra Chart," but worth knowing it exists if the SC-mediated paths turn out to be too raw; real safeguards needed before ANY live-account use regardless of path (kill switch, position/size limits, a lot more testing) — not scoped in detail yet, correctly deferred since the user hasn't picked an automation posture.
+
+**Not started** — no code, no architecture decision, purely research + the two clarifying answers above on record.
+
 ## ✅ 2026-09-27: SETUP_ANTICIPATION rebuilt — found ranking dead setups as top picks, fixed suppression-blindness + added rigor
 
 User asked whether a real "prepared stats, statistically validated, armed and waiting" system exists. Found `/api/level-approach/today` (`SessionForecastPanel.jsx`'s "Setup Anticipation" card) — real, weekly-recomputed, but auditing it live found a disqualifying bug: it ranked every setup_type by raw all-time fire_rate×avg_pnl with zero awareness of current `SETUP_STATUS`. Live-caught `IB_BULLISH`/`IB_BEARISH` — both explicitly killed 2026-08-31 after a redesign investigation proved their real thesis was never implemented and a placebo test showed zero real edge — as the #1/#2 ranked "best TREND-day picks" (76%/67% WR).
