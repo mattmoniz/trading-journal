@@ -323,11 +323,20 @@ export const LIVE_TIME_WINDOW_OVERRIDE = new Map([
 // scripts/backtest_setup_status.mjs) -- this flag does not distinguish manual-override
 // suppression from statistically-derived suppression; both fire live while it's enabled.
 //
-// No auto-expiry -- someone has to remember to flip this back to enabled:false.
-// See docs/OPEN_THREADS.md's 2026-09-25 "SCOPED, NOT YET IMPLEMENTED" entry (now implemented)
-// and OPEN_DECISION suppress_all_disabled_temporary_override_20260925 for the revert plan.
+// TURNED OFF 2026-09-28 (explicit user request, after following Claude's own recommendation):
+// the original 2026-09-25 reason (confusion distinguishing live vs suppressed trades) is
+// resolved -- that confusion turned out to be caused by 5 real bugs in how this flag's
+// promotion reached different insert paths (docs/OPEN_THREADS.md's 2026-09-28 entry, bugs
+// #1/#4/#5/#6), all found and fixed the same night. With the actual bugs fixed, the flag's
+// remaining effect was just "let real SUPPRESS/THIN_N types fire live," which cost real
+// money today (-$244 on the newly-promoted trades vs. a positive background/SHADOW pool --
+// see that same day's Live-vs-All P&L investigation). No auto-expiry existed, so this had to
+// be flipped by hand -- exactly the situation that comment used to warn about.
+// User's explicit follow-up: keep ALL_LEVELS_LIVE on (a separate, narrower flag below) so
+// declustered confluence-cluster siblings still fire live -- this flag's own promotion never
+// touched that mechanism, so no change was needed there.
 export const SUPPRESS_ALL_DISABLED = {
-  enabled: true, addedDate: '2026-09-25',
+  enabled: false, addedDate: '2026-09-25', disabledDate: '2026-09-28',
   reason: 'explicit user request via AskUserQuestion, informed of the real-money risk -- ' +
     'too much confusion distinguishing live vs suppressed trades, wants everything trading ' +
     'live temporarily while the system is untangled. Does NOT bypass CAPITAL_EXPOSURE_OVERRIDE, ' +
