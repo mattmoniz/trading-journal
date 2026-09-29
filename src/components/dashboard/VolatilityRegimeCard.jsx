@@ -4,55 +4,33 @@ import { useViewActive } from '../../utils/useViewActive.js';
 
 import { API_URL } from '../../constants/api.js';
 
+// Stripped 2026-09-28 (DeepSeek Batch 1b review): every "63%"/"42%"/"87%"/"35%"/"362 NQ
+// sessions" figure below was a hand-typed literal frozen at whatever the backtest showed the
+// day this tooltip was written -- CLAUDE.md's "never hand-type a WR%/N/$ literal" rule,
+// recurred here as the 8th-9th+ instance. Kept the qualitative shape of each rule (what
+// texture/regime combination the playbook favors) since that's a real, live-computed
+// classification (see the Playbook section below, whose rules pull tier/rate figures from
+// vol_backtest_cache live) -- only the frozen numbers were removed, not the logic.
 const VOL_CARD_TOOLTIP = `HOW THIS CARD WORKS
 
-The card reads two things each morning:
+This card reads two things each morning:
 
-① VOL REGIME (z-score)
+① VOL REGIME (z-score) -- see "Morning Regime Playbook" below
   Measures how violent the opening drive is vs the last 20 sessions.
-  • HIGH-VOL-DIRECTIONAL — fast, trending open. Setups win 63% (vs 42% baseline).
-  • HIGH-VOL-CHOP — wide but directionless. Setups underperform baseline.
+  • HIGH-VOL-DIRECTIONAL — fast, trending open.
+  • HIGH-VOL-CHOP — wide but directionless. Historically the weaker regime for setups.
   • NORMAL-VOL — standard morning. No regime edge either way.
-  • LOW-VOL — narrow, compressed open. Breakout follow-through elevated.
+  • LOW-VOL — narrow, compressed open. Breakout follow-through tends to be elevated.
 
 ② MORNING TEXTURE (efficiency ratio)
   Measures how cleanly price moved — straight line vs zigzag.
-  • High Efficiency (above median) → 87% of days close in morning's direction.
-  • Low Efficiency (below median) → 35% reversal risk. Fades viable.
+  • High Efficiency (above the session median) → continuation more likely.
+  • Low Efficiency (below the session median) → reversal risk elevated, fades more viable.
 
-WHEN TO FIRE SETUPS
-
-HIGH-VOL-DIRECTIONAL + High Efficiency
-  → Highest conviction day. Fire trend/breakout setups in morning's direction.
-     Hold runners. 87% close in same direction. Do not fade.
-
-HIGH-VOL-DIRECTIONAL + Low Efficiency
-  → Wide range but no clean lean. 50% size. Wait for cleaner structure.
-     Prefer failed-breakout fades at session extremes.
-
-HIGH-VOL-CHOP (either texture)
-  → Fade mode only. No breakout chasing. Sell highs, buy lows inside range.
-     Take profit at value area midpoint. No runners.
-
-NORMAL-VOL + High Efficiency
-  → Standard trend day. Play pullbacks in morning's direction.
-     Do not fade the drive before 1:30 PM ET.
-
-NORMAL-VOL + Low Efficiency
-  → Balanced/rotational. Prefer failed-breakout setups.
-     Both directions in play — reduce size on breakouts.
-
-LOW-VOL + High Efficiency
-  → Narrow but trending. Follow IB breakout. Tight stops.
-     Post-IB expansion avg ~85 pts. Don't anticipate — let IB set, then follow.
-
-LOW-VOL + Low Efficiency
-  → Responsive trading only. Buy value area low, sell value area high.
-     No directional commitment until volume confirms a break.
-
-STATS (backtest, 362 NQ sessions)
-  Post-IB expansion targets are updated weekly (Sunday cron).
-  Efficiency cutoff is the session median — top 50% = High Efficiency.`;
+The live Cont/Rev %, N, and IB expansion figures shown in the Playbook section below are
+pulled fresh from the weekly backtest cache each load, with an "as of" date -- not fixed
+here, since a frozen number in this tooltip would silently go stale the next time that
+backtest updates.`;
 
 function InfoTooltip({ text }) {
   const [visible, setVisible] = useState(false);
@@ -99,9 +77,47 @@ function InfoTooltip({ text }) {
   );
 }
 
+// `note` stripped of its hand-typed WR%/N figures 2026-09-28 (DeepSeek Batch 1b review) --
+// see the Playbook section below for the live equivalent (Cont/Rev %, N, pulled fresh from
+// vol_backtest_cache with an "as of" date, not frozen prose).
+// GARCH forward-looking scale -- ADDED 2026-09-28 (DeepSeek Batch 1b review). Deliberately no
+// qualitative label (see CLAUDE.md's volatilityRegime.js entry: a HOT/WARM/NORMAL/COOL/COLD
+// label was tested and found non-predictive, removed the same day it was built) -- mirrors
+// quick-check.html's own GARCH card exactly (raw scale, band context, roll-week-pause note,
+// "informational only" framing), not a re-derived version of it.
+function GarchHeadline({ garch }) {
+  if (!garch?.regime) return null;
+  const { scale, band, rollWeekPaused, rollWeekResumesAfter, degenerateFallback, asOfClose } = garch.regime;
+  const favorable = (garch.favorableSetups || []).filter(s => s.favorableToday);
+  return (
+    <div style={{ ...cardStyle, marginBottom: 8 }}>
+      <div style={titleStyle}>Volatility (GARCH forward scale)</div>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' }}>
+        <span style={{ fontSize: 18, fontWeight: 800, color: '#e2e8f0', fontFamily: 'monospace' }}>
+          {scale.toFixed(2)}x{degenerateFallback ? ' ⚠' : ''}
+        </span>
+        <span style={{ fontSize: 11, color: '#64748b' }}>recent range {band.p01.toFixed(2)}–{band.p99.toFixed(2)}x</span>
+        {rollWeekPaused && (
+          <span style={{ fontSize: 11, fontWeight: 700, color: '#fbbf24' }}>
+            ⏸ paused for NQ's quarterly contract roll{rollWeekResumesAfter ? ` — resumes after ${rollWeekResumesAfter}` : ''}
+          </span>
+        )}
+        {!rollWeekPaused && favorable.length > 0 && (
+          <span style={{ fontSize: 11, fontWeight: 700, color: '#4ade80' }}>
+            ✓ favors {favorable[0].label}{favorable.length > 1 ? ` +${favorable.length - 1}` : ''}
+          </span>
+        )}
+      </div>
+      <div style={{ fontSize: 11, color: '#64748b', marginTop: 2 }}>
+        Informational only, not a trading signal — as of {asOfClose}.
+      </div>
+    </div>
+  );
+}
+
 const REGIME_STYLE = {
-  'HIGH-VOL-DIRECTIONAL': { label: 'High-Vol Directional', color: '#4ade80', note: 'Phase-1 backtest: setups win 63.5% (n=74) in this regime vs ~42% baseline.' },
-  'HIGH-VOL-CHOP':        { label: 'High-Vol Chop',        color: '#f87171', note: 'Phase-1 backtest: setups win 39.3% (n=117) in this regime, slightly below baseline.' },
+  'HIGH-VOL-DIRECTIONAL': { label: 'High-Vol Directional', color: '#4ade80', note: 'Fast, trending open — historically the stronger regime for setups. See Playbook below for live figures.' },
+  'HIGH-VOL-CHOP':        { label: 'High-Vol Chop',        color: '#f87171', note: 'Wide but directionless open — historically the weaker regime for setups. See Playbook below for live figures.' },
   'NORMAL-VOL':           { label: 'Normal Volatility',    color: '#94a3b8', note: null },
   'LOW-VOL':              { label: 'Low Volatility',       color: '#60a5fa', note: null },
 };
@@ -507,6 +523,15 @@ function PredictiveStats({ data, btStats }) {
 
   const playbook = getPlaybook(data.regime, isHighEff, tier, contRate, revRate, data.texture);
 
+  // Staleness caption -- ADDED 2026-09-28 (DeepSeek Batch 1b review, finding #6): btStats
+  // comes from vol_backtest_cache with no "as of" date previously surfaced anywhere -- if the
+  // weekly cron stops, this card would keep showing old expansion targets/rates indefinitely
+  // with no indication they'd gone stale. `cachedAt` was already returned by the backend
+  // (GET /api/acd/vol-backtest-stats), just never rendered.
+  const cachedAtStr = btStats.cachedAt
+    ? new Date(btStats.cachedAt).toLocaleDateString('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric' })
+    : null;
+
   return (
     <div style={{ marginTop: 8, paddingTop: 8, borderTop: '1px solid #1e293b' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6, flexWrap: 'wrap' }}>
@@ -525,6 +550,9 @@ function PredictiveStats({ data, btStats }) {
             <li key={i} style={{ fontSize: 12, color: '#94a3b8', lineHeight: 1.45, marginBottom: 1 }}>{r}</li>
           ))}
         </ul>
+        {cachedAtStr && (
+          <div style={{ fontSize: 10, color: '#475569', marginTop: 4, textAlign: 'right' }}>backtest as of {cachedAtStr}</div>
+        )}
       </div>
     </div>
   );
@@ -534,6 +562,32 @@ export default function VolatilityRegimeCard() {
   const isViewActive = useViewActive();
   const [data, setData] = useState(null);
   const [btStats, setBtStats] = useState(null);
+  // GARCH forward-looking scale -- ADDED 2026-09-28 (DeepSeek Batch 1b review, user's explicit
+  // call): this card previously showed ONLY the z-score morning-regime classifier
+  // (volatilityRegimeService.js) as "Volatility Regime (live)", a completely different, parallel
+  // system from the GARCH(1,1) walk-forward monitor (server/services/volatilityRegime.js) that
+  // CLAUDE.md documents as deliberately shipping WITHOUT a qualitative label after being tested
+  // and found non-predictive with one -- two sources of truth for "what is volatility doing
+  // right now" shown nowhere near each other. Now the card's own headline reading; the z-score
+  // regime (which DOES have a real, separately-validated use of its own -- gating C_STANDALONE,
+  // acdCandidateBuilder.js) is demoted to the "Morning Regime Playbook" section below, clearly
+  // labeled as a distinct, earlier mechanism rather than presented as if it were the same thing.
+  const [garch, setGarch] = useState(null);
+  // 5min cadence matches quick-check.html's own GARCH card -- nightly-cron-written, not
+  // meaningfully fresher than that between runs.
+  useEffect(() => {
+    if (!isViewActive) return;
+    let cancelled = false;
+    const loadGarch = () => {
+      fetch(`${API_URL}/volatility/regime`)
+        .then(r => r.json())
+        .then(d => !cancelled && setGarch(d))
+        .catch(() => {});
+    };
+    loadGarch();
+    const id = setInterval(loadGarch, 300000);
+    return () => { cancelled = true; clearInterval(id); };
+  }, [isViewActive]);
 
   useEffect(() => {
     if (!isViewActive) return;
@@ -575,10 +629,13 @@ export default function VolatilityRegimeCard() {
 
   if (!data) {
     return (
-      <div style={{ ...cardStyle, opacity: 0.5 }}>
-        <div style={titleStyle}>Volatility Regime (live)</div>
-        <div style={{ fontSize: 12, color: '#94a3b8' }}>Loading…</div>
-      </div>
+      <>
+        <GarchHeadline garch={garch} />
+        <div style={{ ...cardStyle, opacity: 0.5 }}>
+          <div style={titleStyle}>Morning Regime Playbook (z-score)</div>
+          <div style={{ fontSize: 12, color: '#94a3b8' }}>Loading…</div>
+        </div>
+      </>
     );
   }
 
@@ -592,18 +649,24 @@ export default function VolatilityRegimeCard() {
       // RTH-only by design (this classifier is computed from the RTH session's own opening
       // volatility baseline) — but "Market Closed" overclaims outside RTH, since Globex
       // trades most of the week and this system actively detects overnight level fades then.
-      // Found 2026-07-19 alongside a related bug in DayOfWeekPlaybookCard.jsx.
+      // Found 2026-07-19 alongside a related bug in DayOfWeekPlaybookCard.jsx. The GARCH
+      // headline above is NOT RTH-only (it's a daily forward reading), so it still renders here.
       return (
-        <div style={{ ...cardStyle, opacity: 0.6 }}>
-          <div style={titleStyle}>Volatility Regime (live)</div>
-          <div style={{ fontSize: 13, fontWeight: 600, color: '#94a3b8', marginBottom: 3 }}>RTH Only</div>
-          <div style={{ fontSize: 11, color: '#94a3b8' }}>Computed from the RTH open — available Mon–Fri 9:30 AM–4:00 PM ET</div>
-        </div>
+        <>
+          <GarchHeadline garch={garch} />
+          <div style={{ ...cardStyle, opacity: 0.6 }}>
+            <div style={titleStyle}>Morning Regime Playbook (z-score)</div>
+            <div style={{ fontSize: 13, fontWeight: 600, color: '#94a3b8', marginBottom: 3 }}>RTH Only</div>
+            <div style={{ fontSize: 11, color: '#94a3b8' }}>Computed from the RTH open — available Mon–Fri 9:30 AM–4:00 PM ET</div>
+          </div>
+        </>
       );
     }
 
     return (
-      <div style={cardStyle}>
+      <>
+        <GarchHeadline garch={garch} />
+        <div style={cardStyle}>
         <style>{`
           @keyframes pulse-yellow {
             0% {
@@ -620,7 +683,7 @@ export default function VolatilityRegimeCard() {
             }
           }
         `}</style>
-        <div style={titleStyle}>Volatility Regime (live)</div>
+        <div style={titleStyle}>Morning Regime Playbook (z-score)</div>
         {isForming ? (
           <div>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
@@ -651,7 +714,8 @@ export default function VolatilityRegimeCard() {
         ) : (
           <div style={{ fontSize: 12, color: '#94a3b8', lineHeight: 1.4 }}>{data.reason}</div>
         )}
-      </div>
+        </div>
+      </>
     );
   }
 
@@ -662,9 +726,11 @@ export default function VolatilityRegimeCard() {
   const zLow  = data.baselineSd ? (data.baselinePct20 - data.baselineMean) / data.baselineSd : -1.0;
 
   return (
+    <>
+    <GarchHeadline garch={garch} />
     <div style={cardStyle}>
       <div style={{ ...titleStyle, display: 'flex', alignItems: 'center' }}>
-        <span>Volatility Regime (live){!data.morningComplete && <span style={{ color: '#94a3b8', fontWeight: 400 }}> — morning window in progress</span>}</span>
+        <span>Morning Regime Playbook (z-score){!data.morningComplete && <span style={{ color: '#94a3b8', fontWeight: 400 }}> — morning window in progress</span>}</span>
         <InfoTooltip text={VOL_CARD_TOOLTIP} />
       </div>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
@@ -762,6 +828,7 @@ export default function VolatilityRegimeCard() {
       )}
       <PredictiveStats data={data} btStats={btStats} />
     </div>
+    </>
   );
 }
 

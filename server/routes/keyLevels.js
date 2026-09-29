@@ -1490,11 +1490,39 @@ router.get('/volatility-forecast', async (req, res) => {
       FROM bucketed GROUP BY p33, p67
     `);
 
+    // MIN_N=20 matches this codebase's project-wide "decisive" floor (CLAUDE.md "Never
+    // fabricate a stat") -- was 8, found 2026-09-28 (DeepSeek Batch 1b review), same exact
+    // gap already fixed once before in patternScannerService.js 2026-07-13. Below the floor,
+    // a cell simply doesn't populate `lookup` and the existing prev_dt|ALL -> ALL|ALL
+    // fallback chain (unchanged) naturally falls back to a coarser but still-decisive cell.
+    const MIN_N = 20;
     const lookup = {};
-    let p33on = 141, p67on = 238;
+    let p33on = null, p67on = null;
+    // Granular (non-ALL/ALL) cells only, for the HIGH/ELEVATED/NORMAL cutoffs below.
+    const granularVolatilities = [];
     for (const r of condRes.rows) {
       if (r.p33) { p33on = parseFloat(r.p33); p67on = parseFloat(r.p67); }
-      if (r.n >= 8) lookup[`${r.prev_dt}|${r.on_tier}`] = [parseFloat(r.p_balance), parseFloat(r.p_trend), parseFloat(r.p_turbulent)];
+      if (r.n >= MIN_N) {
+        lookup[`${r.prev_dt}|${r.on_tier}`] = [parseFloat(r.p_balance), parseFloat(r.p_trend), parseFloat(r.p_turbulent)];
+        if (r.prev_dt !== 'ALL' && r.on_tier !== 'ALL') {
+          granularVolatilities.push(parseFloat(r.p_trend) + parseFloat(r.p_turbulent));
+        }
+      }
+    }
+
+    // No hardcoded fallback (was p33on=141/p67on=238/[0.62,0.20,0.19]) -- FIXED 2026-09-28
+    // (DeepSeek Batch 1b review): those numbers would silently become the live classification
+    // boundary the moment the query ever returned zero rows (an empty acd_daily_log), which
+    // realistically only happens on a fresh/broken DB, not a case to paper over with an
+    // invented default. Report honestly instead, matching the SETUP_ANTICIPATION/
+    // BehavioralPatternsCard precedent (decisive:false / NO_DATA rather than a fabricated
+    // ranking).
+    if (p33on == null || condRes.rows.length === 0) {
+      return res.json({
+        date: todayET, prev_day: { date: prevDay?.trade_date, type: prevDayType },
+        overnight_range: overnightRange ? parseFloat(overnightRange.toFixed(1)) : null,
+        decisive: false, reason: 'NO_HISTORICAL_DATA',
+      });
     }
 
     const onTier = overnightRange == null ? null
@@ -1503,13 +1531,30 @@ router.get('/volatility-forecast', async (req, res) => {
 
     const key         = `${prevDayType ?? 'ALL'}|${onTier ?? 'ALL'}`;
     const fallbackKey = `${prevDayType ?? 'ALL'}|ALL`;
-    const [pBal, pTrend, pTurb] = lookup[key] ?? lookup[fallbackKey] ?? lookup['ALL|ALL'] ?? [0.62, 0.20, 0.19];
+    const cell = lookup[key] ?? lookup[fallbackKey] ?? lookup['ALL|ALL'] ?? null;
+    if (!cell) {
+      return res.json({
+        date: todayET, prev_day: { date: prevDay?.trade_date, type: prevDayType },
+        overnight_range: overnightRange ? parseFloat(overnightRange.toFixed(1)) : null,
+        decisive: false, reason: 'THIN_N',
+      });
+    }
+    const [pBal, pTrend, pTurb] = cell;
 
     const predicted = pBal >= pTrend && pBal >= pTurb ? 'BALANCE'
       : pTrend >= pTurb ? 'TREND' : 'TURBULENT';
     const volatility = pTrend + pTurb;
-    const volatileFlag = volatility >= 0.55 ? 'HIGH'
-      : volatility >= 0.42 ? 'ELEVATED' : 'NORMAL';
+    // HIGH/ELEVATED/NORMAL cutoffs derived from the rolling distribution of volatility
+    // (pTrend+pTurb) across this query's own granular (prev_dt, on_tier) cells -- FIXED
+    // 2026-09-28 (DeepSeek Batch 1b review), was a fixed 0.55/0.42. Falls back to the old
+    // fixed values only if there aren't enough distinct granular cells to derive real
+    // terciles from yet (a thin/early-roster edge case, not the steady state).
+    granularVolatilities.sort((a, b) => a - b);
+    const pct = (arr, p) => arr[Math.min(arr.length - 1, Math.floor(p * arr.length))];
+    const highCut = granularVolatilities.length >= 6 ? pct(granularVolatilities, 0.67) : 0.55;
+    const elevatedCut = granularVolatilities.length >= 6 ? pct(granularVolatilities, 0.33) : 0.42;
+    const volatileFlag = volatility >= highCut ? 'HIGH'
+      : volatility >= elevatedCut ? 'ELEVATED' : 'NORMAL';
 
     // Driver sentence
     const drivers = [];
@@ -1522,6 +1567,7 @@ router.get('/volatility-forecast', async (req, res) => {
 
     res.json({
       date: todayET,
+      decisive: true,
       prev_day: { date: prevDay?.trade_date, type: prevDayType },
       overnight_range: overnightRange ? parseFloat(overnightRange.toFixed(1)) : null,
       on_tier: onTier,
@@ -1533,6 +1579,7 @@ router.get('/volatility-forecast', async (req, res) => {
       },
       predicted,
       volatility_flag: volatileFlag,
+      volatility_flag_thresholds: { high: parseFloat(highCut.toFixed(2)), elevated: parseFloat(elevatedCut.toFixed(2)) },
       drivers,
     });
   } catch (err) {

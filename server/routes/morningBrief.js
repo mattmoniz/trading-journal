@@ -4,6 +4,7 @@ import { getSessionForecast } from '../services/sessionForecastService.js';
 import { getTrailingVwapStd, getTrailing24hrVwapDists, getTrailingRthVwapDists, rollingStats, getTrailingORWidths } from '../services/queries.js';
 import { cacheGet, cacheSet } from '../lib/cache.js';
 import { detectRotationLegs, ROTATION_LEG_THRESHOLD } from '../services/rotationDetector.js';
+import { LIVE_INSTRUMENT } from '../config/instruments.js';
 
 const router = express.Router();
 
@@ -696,12 +697,18 @@ router.get('/scalp-recap/:date', async (req, res) => {
       .map(s => ({ setup: s.setup_type, pnl: s.pnl, direction: s.direction }));
 
     // Scorecard
+    // Real $/pt + commission (LIVE_INSTRUMENT), not the hardcoded `*2`/`-1` this used to
+    // duplicate on the frontend -- FIXED 2026-09-28 (DeepSeek Batch 1b review), see
+    // src/components/dashboard/SessionForecastPanel.jsx's matching fix. Commission only
+    // applies to WIN/LOSS (a completed round trip) -- an EXPIRED simulated trade never
+    // resolved to a real exit within the 30-bar window, so no exit commission was incurred.
+    const DPP = LIVE_INSTRUMENT.dollarsPerPoint, COMM = LIVE_INSTRUMENT.commissionPerRoundTrip;
     const scalpWins = levelScalps.filter(s => s.result === 'WIN').length;
     const scalpLosses = levelScalps.filter(s => s.result === 'LOSS').length;
-    const scalpPnl = levelScalps.reduce((s, t) => s + t.pnl, 0) * 2;
+    const scalpPnl = levelScalps.reduce((s, t) => s + (t.result === 'EXPIRED' ? 0 : t.pnl * DPP - COMM), 0);
     const vwapWins = vwapTrades.filter(t => t.result === 'WIN').length;
     const vwapLosses = vwapTrades.filter(t => t.result === 'LOSS').length;
-    const vwapPnl = vwapTrades.reduce((s, t) => s + t.pnl, 0) * 2;
+    const vwapPnl = vwapTrades.reduce((s, t) => s + (t.result === 'EXPIRED' ? 0 : t.pnl * DPP - COMM), 0);
     const pipelineWins = firedSetups.rows.filter(s => s.resolution === 'WIN' || s.resolution === 'TARGET_HIT').length;
     const pipelineLosses = firedSetups.rows.filter(s => s.resolution === 'LOSS' || s.resolution === 'STOP_HIT').length;
     const pipelinePnl = firedSetups.rows.reduce((s, r) => s + (r.pnl || 0), 0);

@@ -2,9 +2,23 @@ import React, { useState, useEffect } from 'react';
 import { confidenceTier } from '../../utils/confidenceTier.js';
 import { useSharedPollData } from '../../utils/useSharedPollData.js';
 import { useViewActive } from '../../utils/useViewActive.js';
+import { LIVE_INSTRUMENT } from '../../constants/contract.js';
 
 import { API_URL } from '../../constants/api.js';
 const fmtP = (n) => n == null ? '—' : Number(n).toLocaleString('en-US', { maximumFractionDigits: 0 });
+// Real $/pt + commission (LIVE_INSTRUMENT), not a hardcoded `* 2 - 1` -- FIXED 2026-09-28
+// (DeepSeek Batch 1b review): the old literal both violated the no-hand-typed-constant rule
+// AND was wrong (real commissionPerRoundTrip is $2, this subtracted $1), and disagreed with
+// this same card's own scalpPnl/vwapMagnet header totals (server/routes/morningBrief.js),
+// which applied the $/pt multiplier but no commission at all -- both sides fixed together.
+// Also fixes a 2nd bug the ternary this replaces had: an EXPIRED trade (pnl=0, no realized
+// exit) fell into the "loss" branch and rendered as "EXPIRED $-1" in red -- a fabricated
+// result for a trade that never actually closed. Returns null for EXPIRED so the caller can
+// render "no result" instead of a dollar figure.
+function tradeDollars(t) {
+  if (t.result === 'EXPIRED') return null;
+  return t.pnl * LIVE_INSTRUMENT.dollarsPerPoint - LIVE_INSTRUMENT.commissionPerRoundTrip;
+}
 
 // DOW_PLAYBOOKS removed — replaced by live backtested data from /api/morning-brief/scalp-playbook
 
@@ -75,7 +89,7 @@ function DailyRecap({ date }) {
             <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '1px 0', borderBottom: '1px solid rgba(255,255,255,0.03)', fontSize: 11 }}>
               <span style={{ color: '#cbd5e1', fontFamily: 'monospace' }}>{s.time} {s.level} ({fmtP(s.levelPrice)})</span>
               <span>
-                <span style={{ color: s.result === 'WIN' ? '#4ade80' : '#f87171', fontWeight: 700 }}>{s.result} ${s.result === 'WIN' ? (s.pnl * 2 - 1) : (-Math.abs(s.pnl) * 2 - 1)}</span>
+                <span style={{ color: s.result === 'WIN' ? '#4ade80' : s.result === 'LOSS' ? '#f87171' : '#94a3b8', fontWeight: 700 }}>{s.result}{s.result !== 'EXPIRED' ? ` $${tradeDollars(s)}` : ''}</span>
                 <span style={{ color: '#94a3b8' }}> MFE {s.mfe}pt</span>
               </span>
             </div>
@@ -88,7 +102,7 @@ function DailyRecap({ date }) {
           {recap.vwapTrades.map((t, i) => (
             <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '1px 0', borderBottom: '1px solid rgba(255,255,255,0.03)', fontSize: 11 }}>
               <span style={{ color: '#cbd5e1', fontFamily: 'monospace' }}>{t.time} {t.direction} ({t.vwapDist}pt ext)</span>
-              <span style={{ color: t.result === 'WIN' ? '#4ade80' : '#f87171', fontWeight: 700 }}>{t.result} ${t.result === 'WIN' ? (t.pnl * 2 - 1) : (-Math.abs(t.pnl) * 2 - 1)}</span>
+              <span style={{ color: t.result === 'WIN' ? '#4ade80' : t.result === 'LOSS' ? '#f87171' : '#94a3b8', fontWeight: 700 }}>{t.result}{t.result !== 'EXPIRED' ? ` $${tradeDollars(t)}` : ''}</span>
             </div>
           ))}
         </>
@@ -241,8 +255,12 @@ export default function SessionForecastPanel({ date, section = 'all' }) {
         </div>
       )}
 
-      {/* Volatility forecast */}
-      {volatilityForecast && (() => {
+      {/* Volatility forecast -- `decisive` check added 2026-09-28 (DeepSeek Batch 1b review
+          fix): the backend now returns `{decisive: false, reason: ...}` instead of a
+          fabricated response when a cell is too thin (N<20) or there's no historical data at
+          all, replacing 3 previously-hardcoded fallback literals -- render nothing rather
+          than "predicted: undefined" off an incomplete response shape. */}
+      {volatilityForecast?.decisive && (() => {
         const vf = volatilityForecast;
         const flagColor = vf.volatility_flag === 'HIGH' ? '#ef4444' : vf.volatility_flag === 'ELEVATED' ? '#f59e0b' : '#22c55e';
         const flagBg    = vf.volatility_flag === 'HIGH' ? 'rgba(239,68,68,0.1)' : vf.volatility_flag === 'ELEVATED' ? 'rgba(245,158,11,0.1)' : 'rgba(34,197,94,0.1)';
@@ -284,7 +302,7 @@ export default function SessionForecastPanel({ date, section = 'all' }) {
           (see CLAUDE.md's "Where to look" entry on the redesign investigation that found
           their real thesis was never implemented and a placebo test showed zero real
           edge). Qualitative framing only now, and the dead-setup recommendation removed. */}
-      {volatilityForecast && (() => {
+      {volatilityForecast?.decisive && (() => {
         const predicted = volatilityForecast.predicted;
         const trendProb = volatilityForecast.probabilities?.TREND ?? 0;
         const turbProb  = volatilityForecast.probabilities?.TURBULENT ?? 0;
