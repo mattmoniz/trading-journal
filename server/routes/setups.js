@@ -1481,9 +1481,10 @@ router.get('/setups/touch-orderflow-pressure-shadow-summary', async (req, res) =
   }
 });
 
-// GET /api/setups/loss-prevention-summary — Today/This-Week rollup across all 7 observation-
+// GET /api/setups/loss-prevention-summary — Today/This-Week rollup across all 8 observation-
 // only shadow tags (DirGate, MomFade, StepTrail, PitchCatch, RangeSlope, VolRollover,
-// BreakevenStop added 2026-09-16), 2026-09-08
+// BreakevenStop added 2026-09-16, OFP/touchOrderflowPressure added 2026-09-28 -- found
+// missing from this rollup the night after it shipped, see that query's own comment), 2026-09-08
 // user request: "how much loss has each of these prevented, today and this week, perpetually
 // updated" + wanted on the Home Assistant page. Two mechanism shapes, one unified definition:
 //   - Gate-type (DirGate/MomFade): the hypothetical if honored is "no trade taken" ($0) --
@@ -1527,7 +1528,7 @@ router.get('/setups/loss-prevention-summary', async (req, res) => {
     // false keeps exactly one row per real touch instant, matching how quick-check.html's
     // Session Timeline itself would only ever have shown ONE live alert at that moment.
     const CLUSTER_PRIMARY_FILTER = `AND (is_cluster_primary IS NULL OR is_cluster_primary = true)`;
-    const [dirGateQ, momFadeQ, stepTrailQ, pitchCatchQ, postEntryQ, breakevenStopQ, entryFlowQ] = await Promise.all([
+    const [dirGateQ, momFadeQ, stepTrailQ, pitchCatchQ, postEntryQ, breakevenStopQ, entryFlowQ, ofpQ] = await Promise.all([
       query(`SELECT id, trade_date::text as trade_date, actual_pnl::float as actual_pnl, direction_gate_shadow
              FROM active_setups WHERE direction_gate_shadow IS NOT NULL AND origin_status IN ('ACTIVE','SHADOW')
                AND resolution IS NOT NULL AND actual_pnl IS NOT NULL AND trade_date >= $1 ${CLUSTER_PRIMARY_FILTER}`, [yearStartET]),
@@ -1543,11 +1544,32 @@ router.get('/setups/loss-prevention-summary', async (req, res) => {
       query(`SELECT id, trade_date::text as trade_date, actual_pnl::float as actual_pnl, post_entry_exit_signals
              FROM active_setups WHERE post_entry_exit_signals IS NOT NULL AND origin_status IN ('ACTIVE','SHADOW')
                AND resolution IS NOT NULL AND actual_pnl IS NOT NULL AND trade_date >= $1 ${CLUSTER_PRIMARY_FILTER}`, [yearStartET]),
-      query(`SELECT id, trade_date::text as trade_date, actual_pnl::float as actual_pnl, breakeven_stop_shadow
-             FROM active_setups WHERE breakeven_stop_shadow IS NOT NULL AND origin_status IN ('ACTIVE','SHADOW')
+      // FIXED 2026-09-29 (user-caught live, "are all being updated in loss prevention page?"):
+      // this used to read breakeven_stop_shadow -- the OLDER, retrospective-only classifier,
+      // which stopped getting written entirely the day breakeven_stop_live (the REAL, promoted-
+      // live mechanism, server/services/breakevenStopWalker.js) took over, 2026-09-21. This row
+      // had been silently frozen for a full week with zero indication anything was wrong -- a
+      // prior answer ("yes, be stop is wired in") was technically true (the code path exists)
+      // but missed that the data flowing through it was dead. Now reads breakeven_stop_live,
+      // scoped to rows where the counterfactual has actually been computed (only genuine
+      // BE_STOP_HIT rows ever get one -- see completeBreakevenStopCounterfactuals()'s header).
+      query(`SELECT id, trade_date::text as trade_date, actual_pnl::float as actual_pnl, breakeven_stop_live
+             FROM active_setups WHERE breakeven_stop_live IS NOT NULL
+               AND breakeven_stop_live->>'counterfactual_pnl' IS NOT NULL
+               AND origin_status IN ('ACTIVE','SHADOW')
                AND resolution IS NOT NULL AND actual_pnl IS NOT NULL AND trade_date >= $1 ${CLUSTER_PRIMARY_FILTER}`, [yearStartET]),
       query(`SELECT id, trade_date::text as trade_date, actual_pnl::float as actual_pnl, entry_orderflow_shadow
              FROM active_setups WHERE entry_orderflow_shadow IS NOT NULL AND origin_status IN ('ACTIVE','SHADOW')
+               AND resolution IS NOT NULL AND actual_pnl IS NOT NULL AND trade_date >= $1 ${CLUSTER_PRIMARY_FILTER}`, [yearStartET]),
+      // touchOrderflowPressure (2026-09-27, touchOrderflowPressureShadow.js) -- WIRED IN
+      // 2026-09-28, found missing from this rollup the night after it shipped (had its own
+      // standalone /touch-orderflow-pressure-shadow-summary endpoint, was never added here).
+      // Gate-type, same shape as dirGate/momFade/entryFlowLong/entryFlowShort (hypothetical if
+      // honored is "no trade taken") -- it's an ENTRY-time filter (order-flow pressure in the
+      // bars approaching the touch, before entry), never an exit-management tool, so gateStat()
+      // is the correct shape, not altExitStat().
+      query(`SELECT id, trade_date::text as trade_date, actual_pnl::float as actual_pnl, touch_orderflow_pressure_shadow
+             FROM active_setups WHERE touch_orderflow_pressure_shadow IS NOT NULL AND origin_status IN ('ACTIVE','SHADOW')
                AND resolution IS NOT NULL AND actual_pnl IS NOT NULL AND trade_date >= $1 ${CLUSTER_PRIMARY_FILTER}`, [yearStartET]),
     ]);
 
@@ -1581,12 +1603,22 @@ router.get('/setups/loss-prevention-summary', async (req, res) => {
       ? Number(r.post_entry_exit_signals.vol_rollover.hypothetical_pnl) : null;
     const stepTrailHyp = r => r.step_trail_shadow?.hypothetical_pnl != null ? Number(r.step_trail_shadow.hypothetical_pnl) : null;
     const pitchCatchHyp = r => r.pitch_catch_shadow?.hypothetical_pnl != null ? Number(r.pitch_catch_shadow.hypothetical_pnl) : null;
-    // Only REWARDED-classified rows ever carry a non-null hypothetical_pnl (see
-    // breakevenStopShadow.js's header) -- the extraFilter below is technically redundant with
-    // the hypGetter!=null filter altExitStat already applies, but kept explicit to match
-    // pitchCatch's own qualified===true convention and make the "only REWARDED counts" scoping
-    // visible at the call site, not just implied by the data shape.
-    const breakevenStopHyp = r => r.breakeven_stop_shadow?.hypothetical_pnl != null ? Number(r.breakeven_stop_shadow.hypothetical_pnl) : null;
+    // FIXED 2026-09-29, same incident as the query above -- breakeven_stop_live's payload has
+    // INVERTED semantics from the old shadow shape: it has no hypothetical_pnl field at all,
+    // because BE is no longer a hypothetical suggestion, it's the real, already-executed
+    // mechanism. `real_pnl` IS the real trade's actual_pnl (BE's real effect, if any, is
+    // already baked into it); `counterfactual_pnl` is what would have happened WITHOUT BE (the
+    // plain path); `delta = real_pnl - counterfactual_pnl` is already computed and stored (see
+    // completeBreakevenStopCounterfactuals()). altExitStat() expects a hypGetter shaped as "the
+    // ALTERNATE outcome if this were honored" so it can do `hypGetter(r) - actual_pnl` --
+    // reusing that shared helper (rather than hand-rolling a new stat function) means synthesizing
+    // hypGetter(r) = actual_pnl + delta, which algebraically makes altExitStat's own
+    // `hypGetter(r) - actual_pnl` compute exactly `delta` = how much BE's real engagement helped
+    // vs. the counterfactual no-BE path. Only ever non-null for genuine BE_STOP_HIT rows (the
+    // query above already filters to counterfactual_pnl IS NOT NULL), so this correctly reports
+    // $0 real N until BE_STOP_HIT actually starts happening, rather than a frozen historical
+    // number that looks alive but never changes.
+    const breakevenStopHyp = r => r.breakeven_stop_live?.delta != null ? r.actual_pnl + Number(r.breakeven_stop_live.delta) : null;
 
     const mechanisms = {};
     for (const period of ['today', 'week', 'ytd']) {
@@ -1597,7 +1629,10 @@ router.get('/setups/loss-prevention-summary', async (req, res) => {
         pitchCatch: altExitStat(pitchCatchQ.rows, pitchCatchHyp, period, r => r.pitch_catch_shadow?.qualified === true),
         rangeSlope: altExitStat(postEntryQ.rows, rangeSlopeHyp, period),
         volRollover: altExitStat(postEntryQ.rows, volRolloverHyp, period),
-        breakevenStop: altExitStat(breakevenStopQ.rows, breakevenStopHyp, period, r => r.breakeven_stop_shadow?.classification === 'REWARDED'),
+        // No extraFilter needed (unlike pitchCatch/the old shadow shape) -- the query above
+        // already scopes to counterfactual_pnl IS NOT NULL, which only genuine BE_STOP_HIT
+        // rows ever carry, so hypGetter's own != null check is sufficient.
+        breakevenStop: altExitStat(breakevenStopQ.rows, breakevenStopHyp, period),
         // entryFlowLong/Short (2026-09-16, entryOrderFlowShadow.js) -- gate-type, same shape as
         // dirGate/momFade (hypothetical if honored is "no trade taken"). Two separate rows, not
         // one, since the LONG and SHORT rules are genuinely different conditions (see that
@@ -1605,6 +1640,7 @@ router.get('/setups/loss-prevention-summary', async (req, res) => {
         // number shown here.
         entryFlowLong: gateStat(entryFlowQ.rows, r => r.entry_orderflow_shadow?.rule === 'LONG_REPEAT_ADVERSE_FLOW' && r.entry_orderflow_shadow?.wouldBeFlagged === true, period),
         entryFlowShort: gateStat(entryFlowQ.rows, r => r.entry_orderflow_shadow?.rule === 'SHORT_MORNING_ADVERSE_FLOW' && r.entry_orderflow_shadow?.wouldBeFlagged === true, period),
+        touchOrderflowPressure: gateStat(ofpQ.rows, r => r.touch_orderflow_pressure_shadow?.wouldSkip === true, period),
       };
     }
 
@@ -1634,8 +1670,9 @@ router.get('/setups/loss-prevention-summary', async (req, res) => {
       ...deltaRows(pitchCatchQ.rows, r => (r.pitch_catch_shadow?.qualified === true && pitchCatchHyp(r) != null) ? pitchCatchHyp(r) - r.actual_pnl : null),
       ...deltaRows(postEntryQ.rows, r => rangeSlopeHyp(r) != null ? rangeSlopeHyp(r) - r.actual_pnl : null),
       ...deltaRows(postEntryQ.rows, r => volRolloverHyp(r) != null ? volRolloverHyp(r) - r.actual_pnl : null),
-      ...deltaRows(breakevenStopQ.rows, r => (r.breakeven_stop_shadow?.classification === 'REWARDED' && breakevenStopHyp(r) != null) ? breakevenStopHyp(r) - r.actual_pnl : null),
+      ...deltaRows(breakevenStopQ.rows, r => breakevenStopHyp(r) != null ? breakevenStopHyp(r) - r.actual_pnl : null),
       ...deltaRows(entryFlowQ.rows, r => r.entry_orderflow_shadow?.wouldBeFlagged === true ? -r.actual_pnl : null),
+      ...deltaRows(ofpQ.rows, r => r.touch_orderflow_pressure_shadow?.wouldSkip === true ? -r.actual_pnl : null),
     ];
     const bestDeltaById = new Map(); // id -> { trade_date, delta } -- delta is the BEST (max) across every mechanism that flagged this row
     for (const r of allDeltaRows) {
@@ -1651,7 +1688,7 @@ router.get('/setups/loss-prevention-summary', async (req, res) => {
     }
     const combined = { today: combinedStat('today'), week: combinedStat('week'), ytd: combinedStat('ytd') };
 
-    const LABELS = { dirGate: 'DirGate', momFade: 'MomFade', stepTrail: 'StepTrail', pitchCatch: 'PitchCatch', rangeSlope: 'RangeSlope', volRollover: 'VolRoll', breakevenStop: 'BreakevenStop', entryFlowLong: 'EntryFlow-L', entryFlowShort: 'EntryFlow-S' };
+    const LABELS = { dirGate: 'DirGate', momFade: 'MomFade', stepTrail: 'StepTrail', pitchCatch: 'PitchCatch', rangeSlope: 'RangeSlope', volRollover: 'VolRoll', breakevenStop: 'BreakevenStop', entryFlowLong: 'EntryFlow-L', entryFlowShort: 'EntryFlow-S', touchOrderflowPressure: 'OFP' };
     function fmtBlock(period, title) {
       const lines = [title];
       for (const [key, s] of Object.entries(mechanisms[period])) {
