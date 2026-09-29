@@ -10,7 +10,9 @@ export function usePollData(url, intervalMs = 60000) {
   useEffect(() => {
     if (!url) return;
     let cancelled = false;
-    const load = () => fetch(url)
+    // cache: 'no-store' -- FIXED 2026-09-28, same pass as useSharedPollData.js's identical
+    // fix (see that file's comment for the full incident this bug class traces to).
+    const load = () => fetch(url, { cache: 'no-store' })
       .then(r => r.json())
       .then(d => { if (!cancelled) setData(d); })
       .catch(() => {});

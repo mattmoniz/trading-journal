@@ -16,7 +16,17 @@ function load(url) {
   const entry = _cache.get(url);
   if (!entry || entry.loading) return; // in-flight guard — see subscribe() below
   entry.loading = true;
-  fetch(url)
+  // cache: 'no-store' -- FIXED 2026-09-28 (DeepSeek design-critique review, found while
+  // scoping a Sierra Chart control dashboard, before that dashboard existed). This is the
+  // SAME stale-cache bug class already fixed for quick-check.html's 24 raw fetch() calls
+  // 2026-09-22 (browser HTTP cache + Express's default ETag can silently serve a stale
+  // revalidated response) -- that fix was applied per-callsite and never reached this
+  // shared hook, which most of the React app's own polling (Morning Prep, Dashboard, etc.)
+  // goes through. Real live impact even before Sierra Chart: any consumer of this hook
+  // could already be showing stale data with zero error/warning, the same silent failure
+  // mode as the original incident. See CLAUDE.md's Conventions entry on this bug class --
+  // now updated to cover this file, not just quick-check.html.
+  fetch(url, { cache: 'no-store' })
     .then(r => r.json())
     .then(d => {
       entry.loading = false;
