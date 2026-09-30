@@ -96,11 +96,23 @@ def compute_day_rank_pct(conn, model_version):
 
 
 def get_latest_model(conn):
+    # Despite the name (kept for now -- renaming touches every call site in this file),
+    # this now reads the CHECKPOINT model, not literally the newest-trained one. train.py
+    # still retrains a genuinely new model_version every night (that history is the
+    # drift-tracking signal: its own trained_at/test_auc columns), but re-scoring the
+    # WHOLE roster under a transient nightly model made this batch job the dominant
+    # driver of the 26.2% real verdict-flip rate found 2026-09-29 (RESEARCH_CLAIM
+    # ml_verdict_instability_from_daily_retrain_20260929) -- every night `already_scored`
+    # was empty under the brand-new model_version, so every one of ~5,300 rows got a fresh
+    # verdict that could disagree with the night before. Now this only re-scores the
+    # roster when promote_weekly_checkpoint.mjs actually flips the checkpoint (weekly),
+    # matching score_one.py's fire-time path exactly -- see
+    # migrate_add_ml_models_checkpoint_20260929.mjs's header for the full design.
     cur = conn.cursor()
     cur.execute("""
         SELECT model_version, model_path, approval_threshold,
             approval_threshold_rth, approval_threshold_globex
-        FROM ml_models ORDER BY trained_at DESC LIMIT 1
+        FROM ml_models ORDER BY is_checkpoint DESC, trained_at DESC LIMIT 1
     """)
     row = cur.fetchone()
     if not row:

@@ -136,9 +136,14 @@
   .sweep-watch-tag { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: var(--amber); background: rgba(245,158,11,0.15); padding: 2px 7px; border-radius: 4px; flex-shrink: 0; }
   .sweep-watch-note { font-size: 11px; color: var(--dim); margin-top: 6px; line-height: 1.5; }
 
-  /* Session timeline */
-  #timeline-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
-  #timeline-head h2 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin: 0; }
+  /* Session timeline -- .tab-head/.tab-body added 2026-09-29 (Shadow/Blocked tabs) so those
+     panels share this exact styling via a class instead of duplicating the #timeline-head ID
+     (IDs must be unique in the DOM; getElementById() would silently always resolve to the
+     FIRST one otherwise). #timeline-head itself is kept as an id, not just a class, since
+     renderTimeline() targets it directly (querySelector('#timeline-toggle')/appendChild) --
+     it now carries both. */
+  #timeline-head, .tab-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+  #timeline-head h2, .tab-head h2 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin: 0; }
   #timeline-stats { display: flex; gap: 14px; font-size: 13px; margin-bottom: 12px; padding: 8px 12px; background: rgba(255,255,255,0.03); border-radius: 6px; border: 1px solid var(--border); }
   #timeline-stats span b { font-family: monospace; }
 
@@ -341,6 +346,8 @@
   <div id="page-tabs">
     <button data-ptab="timeline">Timeline</button>
     <button data-ptab="performance">Performance</button>
+    <button data-ptab="shadow">Shadow</button>
+    <button data-ptab="blocked">Blocked</button>
   </div>
   <div id="shared-filter-row">
     <div id="liveall-toggle" class="perf-toggle"></div>
@@ -355,6 +362,37 @@
       <div id="timeline-stats"></div>
       <canvas id="timeline-equity" class="equity"></canvas>
       <div id="timeline-list"><div class="loading">Loading…</div></div>
+    </div>
+  </div>
+
+  <!-- Shadow/Blocked tabs (2026-09-29, user request) -- both show origin_status='SHADOW' rows
+       (real touches that never became a real live trade), same stale-price/late-fill exclusion
+       as Session Timeline above -- but NOT clusterView-scoped (corrected 2026-09-29; this
+       comment previously claimed the opposite, contradicting applyPageTab()'s own, correct
+       comment). getShadowRows() always returns the FULL population, cluster-sibling rows
+       included, unconditionally -- these two tabs exist specifically so a real touch that lost
+       a same-instant cluster competition (CLUSTER_LOSS) is never hidden, which is exactly what
+       a Clustered/Collapsed view would do. "Shadow" is the plain list; "Blocked" is the SAME
+       rows with an explicit plain-English reason line per card (derived from suppression_reason)
+       -- see blockedReasonText()'s own header for why these are two separate views of the same
+       population rather than one. -->
+  <div id="tab-panel-shadow" style="display:none">
+    <div class="tab-head">
+      <h2 id="shadow-title">Shadow</h2>
+    </div>
+    <div id="shadow-body">
+      <div id="shadow-stats"></div>
+      <div id="shadow-list"><div class="loading">Loading…</div></div>
+    </div>
+  </div>
+  <div id="tab-panel-blocked" style="display:none">
+    <div class="tab-head">
+      <h2 id="blocked-title">Blocked</h2>
+      <div id="blocked-view-toggle" class="perf-toggle"></div>
+    </div>
+    <div id="blocked-body">
+      <div id="blocked-stats"></div>
+      <div id="blocked-list"><div class="loading">Loading…</div></div>
     </div>
   </div>
 
@@ -1414,22 +1452,48 @@ let allTimelineRows = []; // unfiltered fetch, so toggling live/all doesn't requ
 // Shared Live/All filter (2026-09-28, user request: "they both share a live and all tab i
 // think... to make the filtering easier") -- previously two independent vars (timelineFilter/
 // performanceFilter), one per section; consolidated into one so Session Timeline and
-// Performance always agree and the user only sets it once. FORCED default (carried over from
-// the pre-consolidation 2026-09-25 fix -- a stale localStorage 'live' value from before this
-// page defaulted to 'all' kept winning on every load): never persisted, always starts on 'all'.
-let liveAllFilter = 'all'; // 'live' | 'all'
+// Performance always agree and the user only sets it once. FORCED default (never persisted via
+// localStorage, same discipline as clusterView below): changed 2026-09-29 from 'all' back to
+// 'live', per explicit user request after the same day's own audit found real, decisive reasons
+// -- not just intuition -- to prefer it: (1) 'all' includes UNKNOWN-origin legacy data (pre-
+// 2026-07-09, unrecoverable) that alone drags any wide-range view by roughly -$10.9k with zero
+// relationship to real trading, a known, standing artifact (see the 2026-07-29 incident this
+// same variable's history already documents); (2) even excluding that, real SHADOW-origin
+// trades average meaningfully worse per-trade than real ACTIVE ones by design (SHADOW is
+// disproportionately populated by MANUAL_SUPPRESS_OVERRIDE/DAY_TYPE_CONDITIONAL types and
+// candidates that lost their slot to a risk-discipline gate on a given touch), so 'all' isn't
+// just noisier than 'live', it's structurally diluted by populations that were never meant to
+// represent real account performance. The 2026-09-25 change to 'all' was specifically about
+// clusterView ("I want ungrouped or declustered to be number 1") -- liveAllFilter defaulting to
+// 'all' alongside it was a side effect of the same fix, not itself a considered choice at the
+// time.
+let liveAllFilter = 'live'; // 'live' | 'all'
 // Shared Clustered/Declustered view (2026-09-28, same consolidation -- previously Performance-
 // only; now also scopes Session Timeline's own row list + stats). 'collapsed' = one row per
 // real market touch (CLAUDE.md's is_cluster_primary hard rule). 'declustered' (forced default,
 // 2026-09-25 user request) = every confluence-cluster sibling counted as its own trade too --
 // see getDecidedRows()'s header comment for the full incident this exists to prevent.
 let clusterView = 'declustered'; // 'collapsed' | 'declustered'
+// Blocked tab view mode (2026-09-29, user request: grouped-by-reason totals). In-session only,
+// never persisted -- matches this file's own standing "no localStorage on a display filter"
+// convention (a stale 'reason' value hiding the list would be the exact bug class the
+// tagFilter/performanceFilter/clusterView fixes already exist to prevent).
+let blockedViewMode = 'list'; // 'list' | 'reason'
 
 async function loadTimeline() {
   try {
     const data = await fetch('/api/setups/today', { cache: 'no-store' }).then(r => r.json());
     allTimelineRows = Array.isArray(data?.setups) ? data.setups : [];
     renderTimeline();
+    // renderTimeline() always sets `timelineRows` (the openTradeModal() lookup array) to its OWN
+    // scoped population, regardless of which tab is actually visible -- this poll fires every
+    // 20s unconditionally (see this function's own fetch above), so without this, sitting on the
+    // Shadow/Blocked tab for more than one poll cycle would silently break tapping a row (the
+    // modal would look up the tapped id in Timeline's rows, not Shadow/Blocked's). Re-render
+    // whichever of those is actually active AFTER renderTimeline(), so its own timelineRows
+    // assignment wins last.
+    if (pageTab === 'shadow') renderShadowTab();
+    else if (pageTab === 'blocked') renderBlockedTab();
     renderSweepWatch();
   } catch (e) { /* keep last good render */ }
 }
@@ -1915,6 +1979,154 @@ function renderTimeline() {
   $('timeline-list').innerHTML = htmlParts.join('');
 }
 
+// ---- Shadow / Blocked tabs (2026-09-29, user request) ----
+// Both show the SAME population: every real (origin_status='SHADOW') touch this session --
+// setups that genuinely fired and were evaluated, but never became a real live trade. This is
+// deliberately NOT the same as "bad setups" -- see blockedReasonText()'s own per-reason
+// commentary. Unconditionally declustered (every cluster-sibling shown, not just one per touch)
+// and includes both RTH and Globex -- the whole point of these two tabs is completeness ("don't
+// let me miss one"), so neither the shared Live/All nor Clustered/Declustered toggle applies
+// here (see applyPageTab()'s own comment for why those are hidden on these two tabs).
+function getShadowRows() {
+  const sessionDate = currentSessionDateET();
+  return allTimelineRows
+    .filter(s => s.trade_date === sessionDate || s.status === 'SHADOW' || s.status === 'ACTIVE')
+    .filter(s => s.origin_status === 'SHADOW')
+    .filter(s => !s.stale_entry_price_basis)
+    .filter(s => !s.late_fill_past_expiry_basis)
+    .filter(s => s.fired_at_str)
+    .sort((a, b) => (b.fired_at_str || '').localeCompare(a.fired_at_str || ''));
+}
+
+// Plain-English explanation for why a real SHADOW touch never became a real live trade.
+// Checked in priority order: a cluster-sibling loss (structural -- it lost a same-instant
+// competition to another level, checked via is_cluster_primary/cluster_touch_id directly rather
+// than trusting suppression_reason alone, since the backfill/case-engine insert paths don't
+// always set suppression_reason for this case) takes priority over whatever suppression_reason
+// says, since that's the more informative, more common real answer (CLAUDE.md's own 2026-09-29
+// finding: ~48% of a typical day's SHADOW volume is cluster-related). Falls through to a mapping
+// of every real suppression_reason value seen in production; an unmapped/null reason says so
+// honestly rather than guessing.
+function blockedReasonText(s) {
+  if (s.cluster_touch_id && s.is_cluster_primary === false) {
+    return 'Lost a same-instant competition: another level touched at the exact same moment and won the single live slot instead. This level was real and eligible -- it just wasn\'t the pick this time.';
+  }
+  const reason = s.suppression_reason;
+  const MAP = {
+    CLUSTER_ALREADY_FIRED: 'This exact level already fired once today (as part of an earlier touch) -- it can\'t fire a second real trade on the same level today.',
+    CLUSTER_SIBLING_TOUCH_CREDIT: 'Lost a same-instant competition to another level, but still recorded as a real touch for its own calibration credit.',
+    OPPOSITE_DIRECTION_OPEN: 'A real trade in the opposite direction was already open at this moment -- taking this one too would have meant two conflicting positions at once.',
+    CROSS_DIRECTION_FAST_FLIP_5min: 'A real trade in the opposite direction resolved within the last few minutes -- blocked to avoid flipping direction too fast right after a close.',
+    SAME_TYPE_REFIRE_COOLDOWN: 'This exact setup type already fired very recently -- blocked from refiring again so soon.',
+    STOP_NEVER_SWEPT: 'A data-quality gate: this level\'s stop distance has never actually been tested/swept historically, so its calibration is not trusted yet.',
+    UNCALIBRATED_TRAIL_VARIANT: 'This setup uses a trailing-exit variant that hasn\'t cleared its own statistical validation yet.',
+    LIVE_TIME_WINDOW: 'This setup type is restricted to a specific time-of-day window, and this touch fell outside it.',
+    NEW_SIGNAL_UNDER_LIVE_EVALUATION: 'Still being evaluated for live eligibility -- not enough real data yet to decide either way.',
+    SUPPRESSED_OTHER: 'This setup type is currently suppressed (a prior real backtest found it net-negative, or it\'s still under a day-type-specific hold).',
+  };
+  if (reason && MAP[reason]) return MAP[reason];
+  if (reason) return 'Blocked (' + reason + ') -- reason not yet mapped to plain English here.';
+  return 'No specific reason recorded (this row came from a detector that doesn\'t yet log why) -- likely still just an uncalibrated/thin setup type, not necessarily blocked at the last moment.';
+}
+
+// Same priority logic as blockedReasonText() above (cluster loss checked directly via
+// is_cluster_primary/cluster_touch_id first, since the backfill/case-engine insert paths don't
+// always set suppression_reason for that case) but returns the short CODE, not the prose --
+// this is what the "By Reason" grouped view groups/counts by.
+function abbrevReasonCode(s) {
+  if (s.cluster_touch_id && s.is_cluster_primary === false) return 'CLUSTER_LOSS';
+  if (s.suppression_reason) return s.suppression_reason;
+  return 'NO_REASON_RECORDED';
+}
+
+function renderBlockedReasonGroups(rows) {
+  const byReason = {};
+  for (const s of rows) {
+    const reason = abbrevReasonCode(s);
+    if (!byReason[reason]) byReason[reason] = { total: 0, bySetup: {} };
+    byReason[reason].total++;
+    byReason[reason].bySetup[s.setup_type] = (byReason[reason].bySetup[s.setup_type] || 0) + 1;
+  }
+  const sorted = Object.entries(byReason).sort((a, b) => b[1].total - a[1].total);
+  if (!sorted.length) return '<div class="loading">Nothing blocked yet this session</div>';
+  return sorted.map(([reason, data]) => {
+    const setups = Object.entries(data.bySetup).sort((a, b) => b[1] - a[1]);
+    const setupRows = setups.map(([setup, count]) =>
+      '<div class="row" style="padding:4px 12px 4px 30px;">' +
+        '<span class="type" style="flex:1;">' + setup.replace(/_/g, ' ') + '</span>' +
+        '<span class="mono" style="color:var(--dim);">' + count + '</span>' +
+      '</div>'
+    ).join('');
+    return '<details style="border-bottom:1px solid var(--border);">' +
+      '<summary style="padding:8px 12px;cursor:pointer;display:flex;justify-content:space-between;align-items:center;list-style:none;">' +
+        '<span class="mono" style="font-size:12px;">' + reason + '</span>' +
+        '<b class="mono">' + data.total + '</b>' +
+      '</summary>' +
+      setupRows +
+    '</details>';
+  }).join('');
+}
+
+function shadowBlockedRowHtml(s, showReason) {
+  const rowPnl = s.actual_pnl != null ? parseFloat(s.actual_pnl) : null;
+  const isOpen = s.status === 'SHADOW' || s.status === 'ACTIVE';
+  const isWin = isWinRow(s), isLoss = isLossRow(s);
+  const badgeClass = isOpen ? 'open' : isWin ? 'win' : isLoss ? 'loss' : 'other';
+  const badgeText = isOpen ? 'open' : rowPnl != null ? (rowPnl >= 0 ? '+$' : '-$') + Math.abs(rowPnl).toFixed(0) : '—';
+  const isLong = isLongSetupType(s.setup_type);
+  const dotColor = isLong ? 'var(--green-soft)' : 'var(--red-soft)';
+  const time = s.fired_at_str ? s.fired_at_str.slice(11, 16) : '';
+  const timeLabel = to12Hour(time);
+  const price = s.entry_zone_low != null ? '@ ' + Number(s.entry_zone_low).toLocaleString(undefined, {maximumFractionDigits: 0}) : '';
+  const reasonLine = showReason
+    ? '<div class="row-reason" style="padding:2px 12px 8px 30px;font-size:11px;color:var(--dim);line-height:1.4;">' + blockedReasonText(s) + '</div>'
+    : '';
+  return '<div class="row" onclick="openTradeModal(' + s.id + ')" style="flex-wrap:wrap;">' +
+    '<span class="rdot" style="background:' + dotColor + '"></span>' +
+    '<span class="time mono">' + timeLabel + '</span>' +
+    '<span class="type">' + (s.setup_type || '').replace(/_/g, ' ') + '</span>' +
+    '<span class="price mono">' + price + '</span>' +
+    '<span class="badge ' + badgeClass + '">' + badgeText + '</span>' +
+    reasonLine +
+    '</div>';
+}
+
+function renderShadowTab() {
+  const rows = getShadowRows();
+  timelineRows = rows;
+  const stats = computeRangeStats(rows, true);
+  $('shadow-title').textContent = 'Shadow (' + rows.length + ')';
+  $('shadow-stats').innerHTML =
+    '<span>N <b class="mono">' + rows.length + '</b></span>' +
+    '<span>Wins <b style="color:var(--green)">' + stats.wins + '</b></span>' +
+    '<span>Losses <b style="color:var(--red)">' + stats.losses + '</b></span>' +
+    '<span>Net (hypothetical) <b style="color:' + (stats.netPnl >= 0 ? 'var(--green)' : 'var(--red)') + '">' + (stats.netPnl >= 0 ? '+' : '') + '$' + stats.netPnl.toFixed(0) + '</b></span>';
+  $('shadow-list').innerHTML = rows.length
+    ? rows.map(s => shadowBlockedRowHtml(s, false)).join('')
+    : '<div class="loading">No shadow-tracked touches yet this session</div>';
+}
+
+function setBlockedViewMode(v) {
+  blockedViewMode = v;
+  renderBlockedTab();
+}
+
+function renderBlockedTab() {
+  const rows = getShadowRows();
+  timelineRows = rows;
+  const stats = computeRangeStats(rows, true);
+  $('blocked-title').textContent = 'Blocked (' + rows.length + ')';
+  renderToggle('blocked-view-toggle', [['list', 'List'], ['reason', 'By Reason']], blockedViewMode, setBlockedViewMode);
+  $('blocked-stats').innerHTML =
+    '<span>N <b class="mono">' + rows.length + '</b></span>' +
+    '<span>Wins <b style="color:var(--green)">' + stats.wins + '</b></span>' +
+    '<span>Losses <b style="color:var(--red)">' + stats.losses + '</b></span>' +
+    '<span>Net (hypothetical) <b style="color:' + (stats.netPnl >= 0 ? 'var(--green)' : 'var(--red)') + '">' + (stats.netPnl >= 0 ? '+' : '') + '$' + stats.netPnl.toFixed(0) + '</b></span>';
+  $('blocked-list').innerHTML = blockedViewMode === 'reason'
+    ? renderBlockedReasonGroups(rows)
+    : (rows.length ? rows.map(s => shadowBlockedRowHtml(s, true)).join('') : '<div class="loading">Nothing blocked yet this session</div>');
+}
+
 // Cluster group popup (2026-09-14) -- tap target for the 🔗 tag above. Lists every real row
 // that shares this cluster_touch_id, each with its own outcome, so a same-instant confluence
 // touch reads as a linked group without any row ever being hidden from the main timeline.
@@ -2324,25 +2536,13 @@ function openStepTrailPopup(id) {
   $('modal-backdrop').classList.add('open');
 }
 
-// ---- Pitch and Catch shadow popup (user idea, 2026-09-04, UNVALIDATED) -- tap target for
-// the PnC row tag above. Same #modal/#modal-backdrop + mRow/mSection convention as the other
-// popups. Explicitly tracked because it's unproven, per the user's own framing ("if it's not
-// good then the N will stay low") -- the popup says so plainly, not just "SHADOW-tracked."
-let pitchCatchShadowSummary = null;
-async function loadPitchCatchShadowSummary() {
-  try {
-    pitchCatchShadowSummary = await fetch('/api/setups/pitch-catch-shadow-summary', { cache: 'no-store' }).then(r => r.json());
-  } catch (e) { /* popup falls back to per-trade-only view below */ }
-}
-
-function pcBucketRow(label, b) {
-  if (!b || b.n === 0) return '<div class="m-row"><span class="m-k" style="color:var(--dim)">' + label + ': no data yet</span></div>';
-  const deltaColor = b.avgDelta >= 0 ? 'var(--green)' : 'var(--red)';
-  return '<div class="m-row"><span class="m-k">' + label + '</span><span class="m-v mono" style="color:' + deltaColor + '">' +
-    'N=' + b.n + ' qualified (' + b.qualifiedRate + '% of confirmed pullbacks)' +
-    (b.n > 0 ? ', avg ' + (b.avgDelta >= 0 ? '+' : '') + '$' + b.avgDelta.toFixed(2) : '') + '</span></div>';
-}
-
+// ---- Pitch and Catch shadow popup (user idea, 2026-09-04) -- tap target for the PnC row tag
+// above. REMOVED 2026-09-29 (DeepSeek design-critique audit: 0/213 real qualifying rate after
+// 3+ weeks live, plus a structurally degenerate calibration loop -- see
+// server/services/resolveSetups.js's pitchCatchCalib comment). This popup only ever fires for
+// HISTORICAL rows that already carry a pitch_catch_shadow payload from before the removal --
+// no new row will ever get one. /api/setups/pitch-catch-shadow-summary was removed the same
+// day, so the "running total" section below no longer fetches anything.
 function openPitchCatchPopup(id) {
   const s = timelineRows.find(r => r.id === id);
   const shadow = s?.pitch_catch_shadow;
@@ -2367,13 +2567,8 @@ function openPitchCatchPopup(id) {
     html += mRow('Re-entry price', shadow.hypothetical_entry_price != null ? Number(shadow.hypothetical_entry_price).toFixed(2) : null);
   }
 
-  html += mSection('Running total across all real + shadow fires');
-  if (pitchCatchShadowSummary) {
-    html += pcBucketRow('Pitch and Catch LONG', pitchCatchShadowSummary.long);
-    html += pcBucketRow('Pitch and Catch SHORT', pitchCatchShadowSummary.short);
-  } else {
-    html += '<div class="m-row"><span class="m-k" style="color:var(--dim)">Still loading / not enough data yet</span></div>';
-  }
+  html += mSection('Status');
+  html += '<div class="m-row"><span class="m-k" style="color:var(--dim)">Mechanism removed 2026-09-29 (0/213 real qualifying rate, degenerate calibration) -- this popup is showing historical data only, nothing new will accumulate.</span></div>';
 
   $('modal').innerHTML = html;
   $('modal-backdrop').classList.add('open');
@@ -3285,10 +3480,19 @@ document.addEventListener('click', (e) => {
 // (like the collapse state it replaces) -- pure navigation state, never hides real data within
 // a view the way performanceFilter/clusterView/liveAllFilter's OWN persistence used to (that's
 // why those are forced-default/not persisted, and this is different).
-let pageTab = localStorage.getItem('pageTab') === 'performance' ? 'performance' : 'timeline';
+let pageTab = ['performance', 'shadow', 'blocked'].includes(localStorage.getItem('pageTab')) ? localStorage.getItem('pageTab') : 'timeline';
 function applyPageTab() {
   $('tab-panel-timeline').style.display = pageTab === 'timeline' ? '' : 'none';
   $('sec-performance').style.display = pageTab === 'performance' ? '' : 'none';
+  $('tab-panel-shadow').style.display = pageTab === 'shadow' ? '' : 'none';
+  $('tab-panel-blocked').style.display = pageTab === 'blocked' ? '' : 'none';
+  // Shared Live/All + Clustered/Declustered toggle only applies to Timeline/Performance --
+  // Shadow/Blocked are ALWAYS the full SHADOW population (every real touch that never became a
+  // live trade, siblings included), unconditionally, since the whole point of these two tabs is
+  // "don't let me miss one" -- a Live/All toggle wouldn't mean anything on a tab that's already
+  // SHADOW-only, and forcing clusterView on top would silently hide the exact sibling rows this
+  // feature exists to surface.
+  $('shared-filter-row').style.display = (pageTab === 'timeline' || pageTab === 'performance') ? '' : 'none';
   document.querySelectorAll('#page-tabs button').forEach(b => b.classList.toggle('active', b.dataset.ptab === pageTab));
 }
 function switchPageTab(tab) {
@@ -3300,9 +3504,13 @@ function switchPageTab(tab) {
   // reports clientWidth 0, so renderEquityCurve() sizes it to a literal 0px-wide chart if the
   // last render happened before this tab was ever switched to. Switching display alone doesn't
   // retrigger a redraw, so the chart stayed broken until some OTHER trigger (a poll, a window
-  // resize) happened to fire afterward. Both renderTimeline()/renderPerformance() are pure
-  // re-renders of already-fetched data -- safe to call here, no extra network request.
-  if (tab === 'timeline') renderTimeline(); else renderPerformance();
+  // resize) happened to fire afterward. renderTimeline()/renderPerformance()/renderShadowTab()/
+  // renderBlockedTab() are all pure re-renders of already-fetched data -- safe to call here, no
+  // extra network request.
+  if (tab === 'timeline') renderTimeline();
+  else if (tab === 'performance') renderPerformance();
+  else if (tab === 'shadow') renderShadowTab();
+  else if (tab === 'blocked') renderBlockedTab();
   $('nav-menu').classList.remove('open');
   // Deliberately no scrollIntoView here (2026-09-28, user report: "it keeps scrolling down" --
   // the tab buttons are already on screen when tapped, so force-scrolling back to them on every
@@ -3348,7 +3556,7 @@ loadTimeline();
 loadRange('today');
 loadFlushExitSignalsSummary(); // slow-changing (weekly cron writes it) -- fetch once, no poll
 loadStepTrailShadowSummary(); // slow-changing (weekly cron writes the frac calib) -- fetch once, no poll
-loadPitchCatchShadowSummary(); // slow-changing (weekly cron writes the filter calib) -- fetch once, no poll
+// loadPitchCatchShadowSummary() removed 2026-09-29 -- its backend endpoint was removed the same day.
 loadT1FloorRunnerSummary(); // slow-changing (live query over real trades, no calib row) -- fetch once, no poll
 loadDirectionGateSummary(); // slow-changing (this is a live query over real trades, not a calib row) -- fetch once, no poll
 loadMomentumFadeShadowSummary(); // slow-changing (live query over real trades) -- fetch once, no poll

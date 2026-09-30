@@ -61,9 +61,16 @@ def main():
     existing = {c: row_dict[c] for c in EXISTING_FEATURE_COLS}
     features = build_feature_dict(row_dict['ml_pd_features'], row_dict['ml_intraday_features'], existing)
 
+    # is_checkpoint DESC, not a bare trained_at DESC -- see
+    # migrate_add_ml_models_checkpoint_20260929.mjs's header. train.py retrains a new
+    # model_version nightly; scoring fire-time trades against whichever is newest made a
+    # trade's own verdict depend on which day it fired (26.2% real flip rate,
+    # RESEARCH_CLAIM ml_verdict_instability_from_daily_retrain_20260929). Falls back to
+    # plain trained_at DESC if no checkpoint is set (defensive only -- the migration
+    # bootstraps one immediately).
     cur.execute("""
         SELECT model_version, model_path, approval_threshold, approval_threshold_rth, approval_threshold_globex
-        FROM ml_models ORDER BY trained_at DESC LIMIT 1
+        FROM ml_models ORDER BY is_checkpoint DESC, trained_at DESC LIMIT 1
     """)
     model_row = cur.fetchone()
     if not model_row:

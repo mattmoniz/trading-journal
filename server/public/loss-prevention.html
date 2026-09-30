@@ -82,7 +82,10 @@
 <script>
 // KEEP IN SYNC with server/routes/setups.js's own LABELS object (loss-prevention-summary
 // endpoint) -- a key present in the API response but missing here renders as `undefined`.
-const LABELS = { dirGate: 'DirGate', momFade: 'MomFade', stepTrail: 'StepTrail', pitchCatch: 'PitchCatch', rangeSlope: 'RangeSlope', volRollover: 'VolRoll', breakevenStop: 'BreakevenStop', entryFlowLong: 'EntryFlow-L', entryFlowShort: 'EntryFlow-S', touchOrderflowPressure: 'OFP' };
+// entryFlowLong and pitchCatch removed 2026-09-29 (see entryOrderFlowShadow.js's header and
+// resolveSetups.js's pitchCatchCalib comment) -- KEEP IN SYNC means keep this list matching the
+// server's LABELS object, not necessarily identical to history.
+const LABELS = { dirGate: 'DirGate', momFade: 'MomFade', stepTrail: 'StepTrail', rangeSlope: 'RangeSlope', volRollover: 'VolRoll', breakevenStop: 'BreakevenStop', entryFlowShort: 'EntryFlow-S', touchOrderflowPressure: 'OFP' };
 // KEEP IN SYNC with server/routes/setups.js's own LABELS const (loss-prevention-summary) -- same
 // duplication-across-a-static-page convention as MarketPulseBar.jsx/quick-check.html's colors.
 
@@ -106,8 +109,13 @@ function renderPeriod(containerId, title, mechs, combined) {
     }
     const prevColor = s.lossPrevented > 0 ? 'var(--green)' : 'var(--dim)';
     const netColor = s.netIfHonored >= 0 ? 'var(--green-soft)' : 'var(--red-soft)';
+    // marginal (added 2026-09-29) only exists on gate-type mechanisms -- see setups.js's
+    // gateStat() header for why netIfHonored alone can't show real signal vs. population
+    // base-rate.
+    const marginalHtml = s.marginal != null
+      ? '<div class="mech-n mono" style="opacity:0.7">marginal ' + fmtMoney(s.marginal) + '</div>' : '';
     html += '<div class="mech-card">' +
-      '<div><div class="mech-name">' + LABELS[key] + '</div><div class="mech-n">N=' + s.n + '</div></div>' +
+      '<div><div class="mech-name">' + LABELS[key] + '</div><div class="mech-n">N=' + s.n + '</div>' + marginalHtml + '</div>' +
       '<div class="mech-nums"><div class="mech-prevented mono" style="color:' + prevColor + '">$' + s.lossPrevented.toFixed(0) + '</div>' +
       '<div class="mech-net mono" style="color:' + netColor + '">net ' + fmtMoney(s.netIfHonored) + '</div></div>' +
       '</div>';

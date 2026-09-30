@@ -32,14 +32,15 @@ import {
   SHADOW_NOISE_SUPPRESSION_MINUTES, recentlyShadowedSameType, getSessionBarsSinceOpen,
   tagMomentumAgainstFadeShadow, checkFadeAgainstBigMoveExit, postWinFamilyOf,
 } from '../services/acdRiskGates.js';
+import { scoreMlVetoGate, persistGateVerdict, isInMlVetoGateWindow } from '../services/mlLiveVetoGate.js';
 export { isCrossDirectionFastFlip, isPostWinOppositeFamilyBlocked, isOppositeDirectionOpen, RTH_SESSION_FIRED_AT_SQL, getSessionBarsSinceOpen, checkFadeAgainstBigMoveExit };
 export { dropToTimeline } from '../services/acdShared.js';
 import { expireStaleSetups, structurallyInvalidateSetups } from '../services/setupExpiry.js';
 export { expireStaleSetups, structurallyInvalidateSetups };
-import { completeStepTrailShadows, completePitchCatchShadows, completeT1FloorRunnerShadows } from '../services/shadowCompletion.js';
+import { completeStepTrailShadows, completeT1FloorRunnerShadows } from '../services/shadowCompletion.js';
 import { completeBreakevenStopShadows } from '../services/breakevenStopShadow.js';
 import { completeBreakevenStopCounterfactuals } from '../services/breakevenStopWalker.js';
-export { completeStepTrailShadows, completePitchCatchShadows, completeT1FloorRunnerShadows, completeBreakevenStopShadows, completeBreakevenStopCounterfactuals };
+export { completeStepTrailShadows, completeT1FloorRunnerShadows, completeBreakevenStopShadows, completeBreakevenStopCounterfactuals };
 import { resolveSetupsByPrice } from '../services/resolveSetups.js';
 export { resolveSetupsByPrice };
 import { getDayTypeAtFire, getVolBucketAtFire, minutesFromSessionOpen, computeFireTags, FIRE_TAG_COLS, fireTagValues } from '../services/fireTags.js';
@@ -89,6 +90,8 @@ import { computeUnifiedPerformanceAudit } from '../services/unifiedSignalTable.j
 // (acd.js file-size reduction, opportunistic pass) -- confirmed genuinely self-contained
 // (only query/getLatestBars/getCached/setCached) before moving.
 import { computeMarketPulse } from '../services/marketPulse.js';
+import { sweepRealOrders } from '../services/sierraChart/orderSweep.js';
+import { getClient as getSierraChartClient } from '../services/sierraChart/connectionManager.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -814,6 +817,34 @@ async function detectGlobexSetup(sessionDate, io) {
       if (live.status !== 'SHADOW' && await isSameSetupRefireBlocked(sessionDate, c.type, 'GLOBEX')) {
         live = { status: 'SHADOW', reason: 'SAME_TYPE_REFIRE' };
       }
+      // ML meta-labeling VETO gate (2026-09-29) -- see mlLiveVetoGate.js's own header for the
+      // full design/evidence. Last gate before the INSERT, on purpose (per DeepSeek's design
+      // critique): scoring is the most expensive of these checks and the most likely to be
+      // moot, so it only runs on a candidate that already survived every cheaper gate above.
+      // Covers 6pm-9:30am here; the 9:30-10am RTH portion of the approved window is a
+      // separate insert path, not yet wired -- see OPEN_DECISION
+      // ml_veto_gate_rth_930_to_10am_not_yet_wired_20260929.
+      let mlGateResult = null;
+      if (live.status !== 'SHADOW') {
+        // FIXED 2026-09-29 (DeepSeek code review, real BLOCKER): minutes_from_open was
+        // hardcoded null inside the gate itself. It is NOT null for a real Globex row --
+        // the INSERT below writes it via FIRE_TAG_COLS/fireTagValues (computeFireTags ->
+        // minutesFromSessionOpen), so the gate must compute the identical value or its
+        // feature vector disagrees with what the retrospective 60s scorer sees for the
+        // same row. Computed with a fresh clock read here (matching computeFireTags()'s
+        // own `etNow.getHours()*60+etNow.getMinutes()` derivation a few lines below,
+        // line ~890) -- no shared `etNow`/`nowMin` variable is in scope at this point in
+        // the function (the file's own `nowMin` at ~line 512 is block-scoped to an
+        // unrelated WEEKLY_OPEN check and goes out of scope well before here).
+        const mlGateNowET = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
+        mlGateResult = await scoreMlVetoGate({
+          entry, tradeDate: sessionDate, confluenceScore: candidates.length, isRth: false,
+          minutesFromOpen: minutesFromSessionOpen(mlGateNowET.getHours() * 60 + mlGateNowET.getMinutes(), 'GLOBEX'),
+        });
+        if (mlGateResult.shadow) {
+          live = { status: 'SHADOW', reason: mlGateResult.reason };
+        }
+      }
       // Globex pause (2026-09-16 through 2026-09-28) -- REMOVED 2026-09-28 per explicit user
       // request, after discovering live it had been silently overriding SUPPRESS_ALL_DISABLED
       // (2026-09-25's "move everything to live" override never actually reached Globex, since
@@ -981,6 +1012,11 @@ async function detectGlobexSetup(sessionDate, io) {
       // observation-only fire-and-forget convention used elsewhere (server/index.js's pollers).
       // Same fix applied at all 6 call sites (grep tagEntryOrderFlowShadow to find the others).
       tagEntryOrderFlowShadow(ins.rows[0].id, { direction: c.dir, setupType: c.type, entryPrice: entry }).catch(() => {});
+      // Persist the ML VETO gate's own verdict (if it ran) rather than let the retrospective
+      // 60s scoreNewFires() pass re-score this row under a possibly-different (rotated)
+      // checkpoint -- see mlLiveVetoGate.js's persistGateVerdict() header. No-ops on the
+      // fail-closed path (no real verdict to persist there).
+      if (mlGateResult) persistGateVerdict(ins.rows[0].id, mlGateResult).catch(() => {});
       // Cluster touch credit tagging (2026-09-07) — post-insert UPDATE, not spliced into the
       // ~37-param INSERT above, mirroring RTH's own winner-tagging (~line 9327) and this
       // codebase's feedback_sql_param_dryrun_verification convention exactly. First
@@ -3064,6 +3100,25 @@ export default function createACDRouter(io) {
                 if (live.status !== 'SHADOW' && (await isOpeningDriveCounterTrade(direction)).blocked) {
                   live = { status: 'SHADOW', reason: OPENING_DRIVE_GATE.REASON };
                 }
+                // ML meta-labeling VETO gate (2026-09-29) -- see mlLiveVetoGate.js's header.
+                // RTH-side wiring (the 9:35-10:00 portion of the approved 6pm-10am window --
+                // 9:30-9:35 is already fully skipped above via inStackVolDeadZone). Only runs
+                // inside the window; a no-op (shadow:false, isInMlVetoGateWindow guards the
+                // call) the rest of the RTH day.
+                let svMlGateResult = null;
+                if (live.status !== 'SHADOW' && isInMlVetoGateWindow(bar.tod)) {
+                  svMlGateResult = await scoreMlVetoGate({
+                    // confluenceScore: levelDensity (the stack-break cluster size), not a
+                    // hardcoded 1 -- FIXED 2026-09-29 (DeepSeek RTH-wiring review): the INSERT
+                    // below stores confluence_score_at_detection=levelDensity (line ~3136), so
+                    // a literal 1 disagreed with the row's own real value.
+                    entry: svEntry, tradeDate: todayET, confluenceScore: levelDensity, isRth: true,
+                    minutesFromOpen: minutesFromSessionOpen(bar.tod, 'RTH'),
+                  });
+                  if (svMlGateResult.shadow) {
+                    live = { status: 'SHADOW', reason: svMlGateResult.reason };
+                  }
+                }
                 const svRegimeStamp = computeRegimeStamp(svEntry, await getValueAreaRegimeMap(todayET).catch(() => ({})));
                 const svFireTags = await computeFireTags(todayET, 'RTH', bar.tod);
                 const svVaOverlapStreak = await getVaOverlapStreak(todayET).catch(() => null);
@@ -3092,6 +3147,7 @@ export default function createACDRouter(io) {
                   await tagMomentumAgainstFadeShadow(ins.rows[0].id, direction);
                   await tagTouchOrderflowPressureShadow(ins.rows[0].id, { direction, firedAt: ins.rows[0].fired_at });
                   tagEntryOrderFlowShadow(ins.rows[0].id, { direction, setupType: svSetupType, entryPrice: svEntry }).catch(() => {}); // fire-and-forget -- see the first call site comment (line 1630) for why
+                  if (svMlGateResult) persistGateVerdict(ins.rows[0].id, svMlGateResult).catch(() => {});
                   if (live.status === 'ACTIVE' && io) {
                     io.emit('setup-fired', { setupId: ins.rows[0].id, setupType: svSetupType, entry: svEntry, stop: svStop, target: svT1, direction });
                   }
@@ -3144,9 +3200,8 @@ export default function createACDRouter(io) {
       // wider-target resolution already happened but whose shadow walk didn't get enough bars
       // to finish in that same poll. Observation-only, never touches a real trade's own fields.
       await completeStepTrailShadows().catch(() => {});
-      // Pitch and Catch shadow follow-up (user idea, 2026-09-04, UNVALIDATED) -- same
-      // observation-only guarantee as the step-trail line just above.
-      await completePitchCatchShadows().catch(() => {});
+      // Pitch and Catch shadow follow-up REMOVED 2026-09-29 -- see shadowCompletion.js's
+      // own comment where completePitchCatchShadows() used to be defined.
       // T1-floor runner shadow follow-up (2026-09-25, PROVISIONAL -- RESEARCH_CLAIM
       // t1floor_runner_positive_slow_population_20260925) -- picks up rows whose real PLAIN
       // (PRICE_CLEAN) resolution already happened but whose floor-runner walk didn't get enough
@@ -3168,6 +3223,16 @@ export default function createACDRouter(io) {
       await completeBreakevenStopCounterfactuals().catch(() => {});
       await expireStaleSetups(io).catch(() => {});
       await structurallyInvalidateSetups(io).catch(() => {});
+      // Real Sierra Chart order placement (2026-09-29) -- the ONE call site wiring this
+      // app's real DTC order-placement side effects to the simulated detection/resolution
+      // logic above. Deliberately last, deliberately a single centralized sweep rather
+      // than a hook at any individual insert/resolution site -- see orderSweep.js's own
+      // header comment for why (a DeepSeek design review's core recommendation). Never
+      // throws on its own (internally try/catches per-row with loud logging), but wrapped
+      // here too as a last-resort backstop matching every other pass in this loop -- a
+      // real-order failure logs loudly (console.error inside the sweep), it is never
+      // silently swallowed the way this bare .catch(() => {}) treats every OTHER pass.
+      await sweepRealOrders(getSierraChartClient()).catch((err) => console.error('[sierraChart] sweepRealOrders threw unexpectedly:', err));
 
       // 5–6 PM ET: hard close / reset gap — expire RTH setups, dark until Globex opens
       if (etMin >= 17 * 60 && etMin < 18 * 60) {
@@ -4499,6 +4564,7 @@ export default function createACDRouter(io) {
                     // isLiveTimeWindowBlocked() (the winner path's 12th guard, previously missing
                     // here too) before a sibling can ever compete for ACTIVE.
                     let sibLive = false;
+                    let sibMlGateResult = null;
                     if (winnerFound && isLevelForcedLive(candType)) {
                       // isLiveTimeWindowBlocked(candType, etMin) here uses the OUTER wall-clock
                       // etMin, not a firedEtMin-style bar-derived value -- confirmed correct, not
@@ -4522,6 +4588,24 @@ export default function createACDRouter(io) {
                           && !(await isInRefireCooldown(todayET, candType))
                           && !(await isSameSetupRefireBlocked(todayET, candType, 'RTH'))
                           && !(await isOpeningDriveCounterTrade(sibDirStr)).blocked;
+                        // ML meta-labeling VETO gate (2026-09-29) -- see mlLiveVetoGate.js's
+                        // header. Last check, same "only run once every other gate already
+                        // passed" convention as every other site. sibLevel is this sibling's
+                        // OWN entry price (not the touch price) -- matches what its INSERT
+                        // below actually uses for entry_zone_low/high. minutesFromOpen left
+                        // as the default null -- FIXED 2026-09-29 (DeepSeek RTH-wiring review):
+                        // this INSERT has no FIRE_TAG_COLS at all (deliberate minimal-column
+                        // insert, see the comment above sibIns), so the row's own
+                        // minutes_from_open is always NULL -- passing a real computed value
+                        // here would have been the exact same gate-vs-row mismatch the Globex
+                        // fix exists to prevent, just in the opposite direction (real value
+                        // fed where the row stores null).
+                        if (sibLive && isInMlVetoGateWindow(etMin)) {
+                          sibMlGateResult = await scoreMlVetoGate({
+                            entry: sibLevel, tradeDate: todayET, confluenceScore: nearLevels.length, isRth: true,
+                          });
+                          if (sibMlGateResult.shadow) sibLive = false;
+                        }
                       }
                     }
                     const sibOrigin = sibLive ? 'ACTIVE' : 'SHADOW';
@@ -4553,6 +4637,7 @@ export default function createACDRouter(io) {
                       await tagMomentumAgainstFadeShadow(sibIns.rows[0].id, sibDir);
                       await tagTouchOrderflowPressureShadow(sibIns.rows[0].id, { direction: sibDir, firedAt: sibIns.rows[0].fired_at });
                       tagEntryOrderFlowShadow(sibIns.rows[0].id, { direction: sibDir, setupType: candType, entryPrice: sibLevel }).catch(() => {}); // fire-and-forget -- see the first call site comment (line 1630) for why
+                      if (sibMlGateResult) persistGateVerdict(sibIns.rows[0].id, sibMlGateResult).catch(() => {});
                     }
                   } catch (e) {
                     // Non-critical, observation-only (gives a level real N credit, never trades
@@ -6407,6 +6492,31 @@ export default function createACDRouter(io) {
         // backfill loop's own bt.etMin comment already documents for exactly this reason.
         const mainInNewEntryDeadZone = isInNewEntryDeadZone(firedEtMin);
         const mainInRthOpenDeadZone = isInRthOpenDeadZone(firedEtMin);
+        // ML meta-labeling VETO gate (2026-09-29) -- see mlLiveVetoGate.js's header. RTH-side
+        // wiring, the highest-volume of the 4 real RTH insert sites. Short-circuited on every
+        // other gate already being clear, same "last gate" convention as oppositeDirectionOpen/
+        // sameTypeRefireBlocked/openingDriveCounter above -- and additionally on the 9:30-10am
+        // window itself (isInMlVetoGateWindow), so this never even queries the scoring service
+        // outside the approved window. nl30AtDetection passed explicitly (real value here,
+        // unlike every other insert site where it's genuinely null) -- this is the same
+        // "hardcoded null was wrong for a real value" bug class DeepSeek's review caught for
+        // minutes_from_open at the Globex site, checked and fixed here before it could recur.
+        // minutesFromOpen uses etMin (wall clock), NOT firedEtMin -- FIXED 2026-09-29 (DeepSeek
+        // RTH-wiring review): this INSERT's own fireTags call a few lines below uses etMin, not
+        // firedEtMin, for minutes_from_open -- a pre-existing inconsistency in this site (fired_at
+        // itself IS bar-derived) that's out of scope to fix here, but the gate must match
+        // whatever the row will actually store, per the exact contract the Globex fix
+        // established, not introduce a second disagreement on top of the first.
+        let mainMlGateResult = null;
+        const mlVetoGateBlocked = !isTrailMechanism && !baseIneligible && !mainInNewEntryDeadZone
+          && !inRefireCooldown && !exposureOverride && !crossDirectionCooldownMin && !postWinOppBlocked
+          && !oppositeDirectionOpen && !sameTypeRefireBlocked && !openingDriveCounter
+          && !liveTimeWindowBlocked && !mainInRthOpenDeadZone && isInMlVetoGateWindow(firedEtMin)
+          ? (mainMlGateResult = await scoreMlVetoGate({
+              entry: active.entry, tradeDate: todayET, confluenceScore: active.confluenceCount ?? null, isRth: true,
+              minutesFromOpen: minutesFromSessionOpen(etMin, 'RTH'), nl30AtDetection: nl30,
+            })).shadow
+          : false;
         const forceShadow = isTrailMechanism
           || baseIneligible
           || mainInNewEntryDeadZone
@@ -6418,7 +6528,8 @@ export default function createACDRouter(io) {
           || sameTypeRefireBlocked
           || openingDriveCounter
           || liveTimeWindowBlocked
-          || mainInRthOpenDeadZone;
+          || mainInRthOpenDeadZone
+          || mlVetoGateBlocked;
         const forceShadowReason = isTrailMechanism ? 'UNCALIBRATED_TRAIL_VARIANT'
           : mainInNewEntryDeadZone ? 'POST_RTH_DEAD_ZONE'
           : inRefireCooldown ? 'REFIRE_COOLDOWN'
@@ -6430,6 +6541,7 @@ export default function createACDRouter(io) {
           : openingDriveCounter ? OPENING_DRIVE_GATE.REASON
           : liveTimeWindowBlocked ? 'LIVE_TIME_WINDOW'
           : mainInRthOpenDeadZone ? 'RTH_OPEN_DEAD_ZONE'
+          : mlVetoGateBlocked ? mainMlGateResult.reason
           : forceShadow ? 'PERFORMANCE_BELOW_THRESHOLD' : null;
         // 4-6PM no-new-entries dead zone (2026-09-16, user request: "stop firing trades during
         // the deadzone") -- was force-SHADOW only (still wrote a real row, suppression_reason=
@@ -6557,6 +6669,7 @@ export default function createACDRouter(io) {
           await tagMomentumAgainstFadeShadow(ins.rows[0].id, rthDir);
           await tagTouchOrderflowPressureShadow(ins.rows[0].id, { direction: rthDir, firedAt: ins.rows[0].fired_at });
           tagEntryOrderFlowShadow(ins.rows[0].id, { direction: rthDir, setupType: active.type, entryPrice: active.entry }).catch(() => {}); // fire-and-forget -- see the first call site comment (line 1630) for why
+          if (mainMlGateResult) persistGateVerdict(ins.rows[0].id, mainMlGateResult).catch(() => {});
         }
         // Cluster touch credit Phase 1 fix #3 (docs/CLUSTER_TOUCH_CREDIT_SPEC.md): tag this
         // winner's own row with the same-cluster candidates the sortedCandidates loop skipped
@@ -6776,7 +6889,26 @@ export default function createACDRouter(io) {
             // same firedEtMin fix as the main active-slot site above; this loop's INSERT also
             // stamps fired_at from firedAtTs (the triggering bar's time), not NOW().
             const shadowLiveTimeWindowBlocked = isLiveTimeWindowBlocked(shadow.type, firedEtMin);
-            const st = (shadowIsLive && !shadowCrossDirectionCooldownMin && !shadowPostWinBlocked && !shadowOppositeDirectionOpen && !shadowSameTypeRefireBlocked && !shadowOpeningDriveCounter && !shadowLiveTimeWindowBlocked) ? 'ACTIVE' : 'SHADOW';
+            // ML meta-labeling VETO gate (2026-09-29) -- see mlLiveVetoGate.js's header.
+            // Fourth and last RTH insert site wired (Globex, STACK_VOL_BREAK_LIVE, RTH main
+            // are the other 3). Same "only run if this would otherwise go ACTIVE, and only
+            // inside the approved window" short-circuit as every other site. confluenceScore
+            // is null here -- this loop has no equivalent of the main path's confluenceCount
+            // (it processes one shadow candidate at a time, not a same-instant touch cluster).
+            // minutesFromOpen uses etMin, not firedEtMin -- FIXED 2026-09-29 (DeepSeek RTH-wiring
+            // review), same reasoning as the main active-slot site above: this loop's own
+            // fireTags call a few lines below uses wall-clock etMin, so the gate must match that,
+            // not the (also real, but different) bar-derived firedEtMin.
+            let shadowMlGateResult = null;
+            const shadowMlVetoBlocked = shadowIsLive && !shadowCrossDirectionCooldownMin && !shadowPostWinBlocked
+              && !shadowOppositeDirectionOpen && !shadowSameTypeRefireBlocked && !shadowOpeningDriveCounter
+              && !shadowLiveTimeWindowBlocked && isInMlVetoGateWindow(firedEtMin)
+              ? (shadowMlGateResult = await scoreMlVetoGate({
+                  entry: shadow.entry, tradeDate: todayET, confluenceScore: null, isRth: true,
+                  minutesFromOpen: minutesFromSessionOpen(etMin, 'RTH'),
+                })).shadow
+              : false;
+            const st = (shadowIsLive && !shadowCrossDirectionCooldownMin && !shadowPostWinBlocked && !shadowOppositeDirectionOpen && !shadowSameTypeRefireBlocked && !shadowOpeningDriveCounter && !shadowLiveTimeWindowBlocked && !shadowMlVetoBlocked) ? 'ACTIVE' : 'SHADOW';
             const regimeStamp = computeRegimeStamp(shadow.entry, vaMap);
             const shadowVaOverlapStreak = await getVaOverlapStreak(todayET).catch(() => null);
             // Volume-building signal (2026-08-29, informational only -- see touchQuality.js's
@@ -6827,6 +6959,7 @@ export default function createACDRouter(io) {
               await tagMomentumAgainstFadeShadow(shadowIns.rows[0].id, shadow.direction);
               await tagTouchOrderflowPressureShadow(shadowIns.rows[0].id, { direction: shadow.direction, firedAt: firedAtTs });
               tagEntryOrderFlowShadow(shadowIns.rows[0].id, { direction: shadow.direction, setupType: shadow.type, entryPrice: shadow.entry }).catch(() => {}); // fire-and-forget -- see the first call site comment (line 1630) for why
+              if (shadowMlGateResult) persistGateVerdict(shadowIns.rows[0].id, shadowMlGateResult).catch(() => {});
               // Cluster role claimed HERE, after the insert actually succeeded -- not before
               // gating -- so a candidate that got risk-checked/cooldown/eligibility-gated out
               // can never consume the primary slot for a group it was never actually written

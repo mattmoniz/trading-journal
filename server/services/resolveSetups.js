@@ -7,8 +7,9 @@
 // own dedicated extraction pass, not bundled with the other candidates -- this is the single
 // biggest function in the file (1003 lines), the real write path (resolution/pnl/
 // price_at_resolution), and was the epicenter of the getCached() null-vs-undefined bug fixed
-// earlier the same day. Called from acd.js's own poll loop, first among the 3 lifecycle
-// passes (resolveSetupsByPrice -> completeStepTrailShadows -> completePitchCatchShadows).
+// earlier the same day. Called from acd.js's own poll loop, first among the lifecycle passes
+// (resolveSetupsByPrice -> completeStepTrailShadows -> completeT1FloorRunnerShadows --
+// completePitchCatchShadows was removed 2026-09-29 along with the whole mechanism).
 
 import { query } from '../db.js';
 import { LIVE_INSTRUMENT } from '../config/instruments.js';
@@ -22,9 +23,7 @@ import { stepWiderTarget, MAX_BARS_TO_T1_FOR_WIDER, WIDER_TARGET_MULT } from './
 import { stepStepTrail } from './stepTrailWalker.js';
 import { stepT1FloorRunner, t1FloorPnlFromResolution } from './t1FloorRunnerWalker.js';
 import { getCurrentPrice } from './priceRetrieval.js';
-import { stepPitchCatch } from './pitchCatchWalker.js';
 import { stepBreakevenStop } from './breakevenStopWalker.js';
-import { computeADXSeries } from './adxService.js';
 import { detectPostEntryExitSignals } from '../../scripts/pilot_exits_extended.mjs';
 import { getCached, setCached, getGlobalCalib, DAY_CACHE_TTL, getTouchQualityCalib, getTouchQualityBaseline, dropToTimeline } from './acdShared.js';
 
@@ -191,56 +190,17 @@ export async function resolveSetupsByPrice(io) {
     return val;
   });
 
-  // Pitch and Catch shadow calibration (user idea, 2026-09-04, UNVALIDATED -- see
-  // server/services/pitchCatchWalker.js's header for the full negative evidence trail;
-  // tracked at the user's explicit request, observation-only, never gates/sizes a real
-  // trade). Same read-once-per-poll-then-cache convention as stepTrailCalib just above.
-  const pitchCatchCalib = await getGlobalCalib('pitchCatchCalib', async () => {
-    const r = await query(`
-      SELECT notes FROM performance_audit
-      WHERE signal_type='PITCH_CATCH_FILTER' AND signal_name='FILTER'
-      ORDER BY run_date DESC LIMIT 1
-    `);
-    let val = null;
-    try {
-      if (r.rows[0]) {
-        const n = JSON.parse(r.rows[0].notes);
-        if (n.rvolLo != null && n.rvolHi != null && n.minBarsToConfirm != null && n.adxThreshold != null) {
-          val = { rvolLo: n.rvolLo, rvolHi: n.rvolHi, minBarsToConfirm: n.minBarsToConfirm, adxThreshold: n.adxThreshold };
-        }
-      }
-    } catch (_) {}
-    return val;
-  });
-
-  // Daily ADX-by-date map (Sierra-Chart-verified formula, server/services/adxService.js) --
-  // computed once and cached with a day-long TTL, not recomputed per-row/per-poll (a fresh
-  // 14+14-bar daily-ADX series needs a real historical daily-bars query, too expensive to
-  // repeat every 15s). Indexed by trade_date -> PRIOR day's close-of-day ADX (the [i-1] shift
-  // below), matching every other daily-ADX use in this codebase's no-lookahead convention.
-  const dailyAdxByDate = await getGlobalCalib('dailyAdxByDate', async () => {
-    const map = {};
-    if (pitchCatchCalib != null) {
-      try {
-        const r = await query(`
-          SELECT ts::date::text as d, high::float as high, low::float as low, close::float as close
-          FROM price_bars_primary WHERE symbol='NQ'
-            AND (EXTRACT(hour FROM ts)*60 + EXTRACT(minute FROM ts))::int BETWEEN 570 AND 959
-          ORDER BY ts ASC
-        `);
-        const byDate = new Map();
-        for (const b of r.rows) {
-          if (!byDate.has(b.d)) byDate.set(b.d, { high: b.high, low: b.low, close: b.close });
-          else { const c = byDate.get(b.d); c.high = Math.max(c.high, b.high); c.low = Math.min(c.low, b.low); c.close = b.close; }
-        }
-        const dates = [...byDate.keys()].sort();
-        const dBars = dates.map(d => ({ d, ...byDate.get(d) }));
-        const series = computeADXSeries(dBars, 14, 14);
-        for (let i = 1; i < dBars.length; i++) map[dBars[i].d] = series[i - 1];
-      } catch (e) { console.error('dailyAdxByDate computation error (non-critical):', e.message); }
-    }
-    return map;
-  });
+  // Pitch and Catch -- REMOVED 2026-09-29 (DeepSeek design-critique audit of the whole
+  // shadow-tag family): after 3+ weeks live, this had a 0/213 real qualifying rate, and its
+  // own weekly recalibration was structurally degenerate -- it only ever saw the rows that
+  // already FAILED its filter (100% of its training population), so it was a moving exclusion
+  // boundary incapable of ever finding a real positive zone, on top of already having failed
+  // 6/6 independent backtests. The calibration script was unscheduled from
+  // run_weekly_backtests.sh the same day; the dead downstream chain this had left in place
+  // (a permanently-null filterCalib gating an unreachable stepPitchCatch() call, plus the
+  // dailyAdxByDate map that existed only to feed it) was removed for good the same session,
+  // per the user's explicit "remove any dead code" request. See RESEARCH_CLAIM
+  // pitchcatch_degenerate_calibration_removed_20260929 for the full account.
 
   let count = 0;
   for (const row of active.rows) {
@@ -590,16 +550,6 @@ export async function resolveSetupsByPrice(io) {
     let stepTrailShadowResolution = null;
     let stepTrailShadowArmedAt = null;
     let stepTrailShadowDisabled = false;
-    // Pitch and Catch shadow state — same independence/observational guarantees as
-    // stepTrailShadowState above (server/services/pitchCatchWalker.js). UNVALIDATED
-    // mechanism, tracked at the user's explicit request specifically because it's
-    // unproven — never gates/sizes a real trade.
-    let pitchCatchShadowState = {
-      inner: { widening: false }, phase: 'ARMING', firstLegVolSum: 0, firstLegVolCount: 0,
-      runningPeak: null, belowCount: 0, pullbackExtreme: null, settleBarVols: [], firstLegAvgVol: null, reentry: null,
-    };
-    let pitchCatchShadowResolution = null;
-    let pitchCatchShadowDisabled = false;
     // T1-floor runner shadow state (2026-09-25, PROVISIONAL -- RESEARCH_CLAIM
     // t1floor_runner_positive_slow_population_20260925). No arming phase (unlike step-trail/
     // pitch-catch, which wait for the EXISTING wider-target mechanism to arm first) -- this
@@ -824,29 +774,6 @@ export async function resolveSetupsByPrice(io) {
             // giving up here rather than risking a state-corrupted retry on the next bar.
             console.error('step-trail shadow computation error (non-critical, skipping shadow for this row):', e.message);
             stepTrailShadowDisabled = true;
-          }
-        }
-
-        // Pitch and Catch shadow (user idea, 2026-09-04, UNVALIDATED -- see
-        // server/services/pitchCatchWalker.js's header). Same non-critical, try/catch-
-        // isolated, observation-only convention as the step-trail shadow block just above --
-        // must never be able to block the REAL resolution logic below.
-        if (pitchCatchCalib != null && !pitchCatchShadowResolution && !pitchCatchShadowDisabled) {
-          try {
-            const pcStep = stepPitchCatch(
-              pitchCatchShadowState,
-              bar,
-              {
-                entry, stop, t1, widerTarget, long, barCount, maxBarsToT1: MAX_BARS_TO_T1_FOR_WIDER, firedMod,
-                pressureReading, pressureThreshold: widerTargetPressureThreshold,
-                filterCalib: pitchCatchCalib, dailyAdx: dailyAdxByDate[row.trade_date] ?? null, origStop: stop,
-              }
-            );
-            pitchCatchShadowState = pcStep.state;
-            if (pcStep.resolution) pitchCatchShadowResolution = { ...pcStep.resolution, resolvedAt: bar.ts };
-          } catch (e) {
-            console.error('pitch-catch shadow computation error (non-critical, skipping shadow for this row):', e.message);
-            pitchCatchShadowDisabled = true;
           }
         }
 
@@ -1203,34 +1130,6 @@ export async function resolveSetupsByPrice(io) {
       breakevenStopLivePayload = null;
     }
 
-    // Pitch and Catch shadow payload -- same widening-armed gate as step-trail (never write
-    // for a trade that never even reached the wider target). Written for BOTH a real
-    // re-entry (qualified=true, real hypothetical_pnl) and a confirmed-but-filtered-out
-    // pullback (qualified=false, hypothetical_pnl null) -- the unqualified case is still
-    // useful monitoring signal (how often does a confirmed pullback pass the filter at all).
-    let pitchCatchShadowPayload = null;
-    try {
-      if (widerTargetState.widening === true && pitchCatchShadowResolution) {
-        let hypotheticalPnl = null;
-        if (pitchCatchShadowResolution.qualified) {
-          const pcPts = long ? pitchCatchShadowResolution.priceAtRes - pitchCatchShadowResolution.entryPrice
-            : pitchCatchShadowResolution.entryPrice - pitchCatchShadowResolution.priceAtRes;
-          hypotheticalPnl = Math.round((pcPts * PNL_PER_POINT - COMMISSION) * 100) / 100;
-        }
-        pitchCatchShadowPayload = JSON.stringify({
-          qualified: pitchCatchShadowResolution.qualified,
-          hypothetical_resolution: pitchCatchShadowResolution.resolution, hypothetical_method: pitchCatchShadowResolution.method,
-          hypothetical_exit_price: pitchCatchShadowResolution.priceAtRes, hypothetical_entry_price: pitchCatchShadowResolution.entryPrice ?? null,
-          hypothetical_pnl: hypotheticalPnl, real_pnl: Math.round(pnl * 100) / 100,
-          delta: hypotheticalPnl != null ? Math.round((hypotheticalPnl - pnl) * 100) / 100 : null,
-          resolved_at: pitchCatchShadowResolution.resolvedAt, direction: long ? 'LONG' : 'SHORT', completed_inline: true,
-        });
-      }
-    } catch (e) {
-      console.error('pitch-catch shadow payload error (non-critical, writing without it):', e.message);
-      pitchCatchShadowPayload = null;
-    }
-
     // T1-floor runner shadow payload (2026-09-25, PROVISIONAL) -- unlike step-trail/pitch-catch,
     // NOT gated on widerTargetState.widening (this mechanism applies to the PLAIN PRICE_CLEAN
     // path those two never see -- see t1FloorRunnerWalker.js's header). Only set when the
@@ -1264,16 +1163,15 @@ export async function resolveSetupsByPrice(io) {
           runner_peak_price=COALESCE($12, runner_peak_price),
           runner_trail_price=COALESCE($13, runner_trail_price),
           step_trail_shadow=COALESCE($14::jsonb, step_trail_shadow),
-          pitch_catch_shadow=COALESCE($15::jsonb, pitch_catch_shadow),
-          breakeven_stop_live=COALESCE($16::jsonb, breakeven_stop_live),
-          t1_floor_runner_shadow=COALESCE($17::jsonb, t1_floor_runner_shadow)
+          breakeven_stop_live=COALESCE($15::jsonb, breakeven_stop_live),
+          t1_floor_runner_shadow=COALESCE($16::jsonb, t1_floor_runner_shadow)
       WHERE id=$1 AND status=$7
       RETURNING *
     `, [row.id, resolution, method, Math.round(pnl * 100) / 100, priceAtRes, resolvedAt, statusMatch,
         Math.round(runMae * 100) / 100, Math.round(runMfe * 100) / 100, barCount,
         armedAt, peakPrice != null ? Math.round(peakPrice * 100) / 100 : null,
         trailStopPrice != null ? Math.round(trailStopPrice * 100) / 100 : null,
-        stepTrailShadowPayload, pitchCatchShadowPayload, breakevenStopLivePayload, t1FloorShadowPayload]);
+        stepTrailShadowPayload, breakevenStopLivePayload, t1FloorShadowPayload]);
 
     if (updated.rows.length) {
       try { await dropToTimeline(updated.rows[0]); } catch (_) {}

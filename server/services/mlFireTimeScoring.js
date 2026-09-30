@@ -110,7 +110,13 @@ async function computeMissingFeatures(recentMinutes) {
 }
 
 async function scoreUnscoredRecent(recentMinutes) {
-  const model = await query(`SELECT model_version FROM ml_models ORDER BY trained_at DESC LIMIT 1`);
+  // is_checkpoint DESC, not a bare trained_at DESC -- see migrate_add_ml_models_checkpoint_20260929.mjs's
+  // header for why: train.py retrains a new model_version every night, and scoring against
+  // whichever one happens to be newest made 26.2% of real trades flip TAKE/VETO purely on
+  // which day they were scored (RESEARCH_CLAIM ml_verdict_instability_from_daily_retrain_20260929).
+  // Falls back to plain trained_at DESC if no checkpoint is set yet (shouldn't happen post-migration,
+  // but never silently score zero trades over a missing flag).
+  const model = await query(`SELECT model_version FROM ml_models ORDER BY is_checkpoint DESC, trained_at DESC LIMIT 1`);
   if (!model.rows.length) return { scored: 0, skipped: 0, reason: 'no trained model yet' };
   const modelVersion = model.rows[0].model_version;
 

@@ -60,10 +60,19 @@ async function run() {
 
   const trainSorted = [...trainEvents].sort((a, b) => a.netAdverseDelta - b.netAdverseDelta);
   const trainThird = Math.floor(trainSorted.length / 3);
+  // softCutoffCandidate added 2026-09-29 (DeepSeek design-critique audit): the live tagger's
+  // wouldHalfSize used to just copy wouldSkip (no independent soft tier at all -- see
+  // touchOrderflowPressureShadow.js's own header for the incident). This derives a genuine
+  // 3-tier structure (bottom third = favorable, middle third = soft/half-size, top third =
+  // hard/skip) from the SAME already-derived tercile boundaries, rather than picking an
+  // arbitrary percentile -- soft = the 1/3 boundary, hard = the existing 2/3 boundary.
+  const softCutoffCandidate = trainSorted[trainThird]?.netAdverseDelta;
   const cutoffCandidate = trainSorted[2 * trainThird]?.netAdverseDelta;
 
   let recommendation = 'NO_GATE';
   let testFlaggedN = 0, testFlaggedEv = null, testUnflaggedEv = null, testDistinctDates = 0, rigor = null;
+  let softRecommendation = 'NO_SOFT_GATE';
+  let testMidN = 0, testMidEv = null, testLowEv = null;
   if (cutoffCandidate != null) {
     const testFlagged = testEvents.filter(e => e.netAdverseDelta >= cutoffCandidate);
     const testUnflagged = testEvents.filter(e => e.netAdverseDelta < cutoffCandidate);
@@ -77,15 +86,32 @@ async function run() {
       if (holds) recommendation = 'GATE';
     }
   }
-  console.log(`\nTRAIN N=${trainEvents.length} (${trainDates.size} dates) -> candidate cutoff=${cutoffCandidate?.toFixed(1)}`);
+  // Soft-tier walk-forward check: the middle tercile only earns a half-size penalty (rather
+  // than being folded into "favorable") if its held-out test EV genuinely sits BETWEEN the low
+  // tercile's and the hard-flagged tercile's -- i.e. real, monotonic degradation across all
+  // three tiers, not noise. testMidN/testMidEv reused as the soft tier's own stored numbers.
+  if (softCutoffCandidate != null && cutoffCandidate != null && softCutoffCandidate < cutoffCandidate) {
+    const testLow = testEvents.filter(e => e.netAdverseDelta < softCutoffCandidate);
+    const testMid = testEvents.filter(e => e.netAdverseDelta >= softCutoffCandidate && e.netAdverseDelta < cutoffCandidate);
+    testMidN = testMid.length;
+    if (testLow.length > 0 && testMid.length > 0 && testFlaggedEv != null) {
+      testLowEv = mean(testLow.map(e => e.pnl));
+      testMidEv = mean(testMid.map(e => e.pnl));
+      const monotonic = testLowEv > testMidEv && testMidEv > testFlaggedEv;
+      if (monotonic && testMidN >= MIN_N) softRecommendation = 'SOFT_GATE';
+    }
+  }
+  console.log(`\nTRAIN N=${trainEvents.length} (${trainDates.size} dates) -> hard cutoff=${cutoffCandidate?.toFixed(1)}, soft cutoff=${softCutoffCandidate?.toFixed(1)}`);
   console.log(`TEST (held out): flagged N=${testFlaggedN}/${testDistinctDates} dates, EV=$${testFlaggedEv?.toFixed(2)} vs unflagged EV=$${testUnflaggedEv?.toFixed(2)}`);
-  console.log(`Recommendation: ${recommendation}`);
+  console.log(`TEST soft tier: mid N=${testMidN}, EV low=$${testLowEv?.toFixed(2)} / mid=$${testMidEv?.toFixed(2)} / high(hard)=$${testFlaggedEv?.toFixed(2)}`);
+  console.log(`Recommendation: ${recommendation} (soft: ${softRecommendation})`);
 
-  // Final cutoff for the LIVE tagger: recompute on the FULL population (train+test) now
-  // that walk-forward validation has passed -- more data, same top-tercile method.
+  // Final cutoffs for the LIVE tagger: recompute on the FULL population (train+test) now
+  // that walk-forward validation has passed -- more data, same tercile method.
   const fullSorted = [...events].sort((a, b) => a.netAdverseDelta - b.netAdverseDelta);
   const fullThird = Math.floor(fullSorted.length / 3);
   const finalCutoff = fullSorted[2 * fullThird]?.netAdverseDelta ?? null;
+  const finalSoftCutoff = fullSorted[fullThird]?.netAdverseDelta ?? null;
 
   const runDate = (await query(`SELECT CURRENT_DATE::text as today`)).rows[0].today;
   await query(`
@@ -99,9 +125,11 @@ async function run() {
       cutoff: finalCutoff, trainCutoff: cutoffCandidate, distinctDates: dates.length,
       testFlaggedN, testDistinctDates, testFlaggedEv, testUnflaggedEv,
       rigor: rigor ? { distinctDates: rigor.distinctDates, top5DayPct: rigor.top5DayPct, clustered: rigor.clustered, stable: rigor.stable } : null,
+      softCutoff: finalSoftCutoff, softTrainCutoff: softCutoffCandidate, softRecommendation,
+      testMidN, testLowEv, testMidEv,
     }),
   ]);
-  console.log(`\nWrote TOUCH_ORDERFLOW_PRESSURE_CALIB/_GLOBAL: recommendation=${recommendation}, live cutoff=${finalCutoff?.toFixed(1)}`);
+  console.log(`\nWrote TOUCH_ORDERFLOW_PRESSURE_CALIB/_GLOBAL: recommendation=${recommendation}, live cutoff=${finalCutoff?.toFixed(1)}, soft=${softRecommendation}/${finalSoftCutoff?.toFixed(1)}`);
 }
 
 run().then(() => { console.log('\nDone.'); process.exit(0); })

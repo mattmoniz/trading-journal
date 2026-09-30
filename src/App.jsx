@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback, lazy, Suspense } from 'react';
 const TearsheetView = lazy(() => import('./views/TearsheetView.jsx'));
 const SetupHistoryView = lazy(() => import('./views/SetupHistoryView.jsx'));
+const SierraChartView = lazy(() => import('./views/SierraChartView.jsx'));
 const SettingsView = lazy(() => import('./views/SettingsView.jsx'));
 const ScenarioTesterView = lazy(() => import('./views/ScenarioTesterView.jsx'));
 const AllTradesView = lazy(() => import('./views/AllTradesView.jsx'));
@@ -639,6 +640,15 @@ function App() {
             <ErrorBoundary name="Setup Log">
               <Suspense fallback={<div style={{ padding: 40, color: 'var(--text-muted)' }}>Loading…</div>}>
                 <SetupHistoryView />
+              </Suspense>
+            </ErrorBoundary>
+          </div>
+        )}
+        {visitedViews.has('sierra-chart') && (
+          <div style={{ display: currentView === 'sierra-chart' ? 'contents' : 'none' }}>
+            <ErrorBoundary name="Sierra Chart">
+              <Suspense fallback={<div style={{ padding: 40, color: 'var(--text-muted)' }}>Loading…</div>}>
+                <SierraChartView />
               </Suspense>
             </ErrorBoundary>
           </div>
@@ -2031,6 +2041,14 @@ function Sidebar({ currentView, setCurrentView, processAlertCount = 0, onOpenQui
         >
           <span className="nav-icon">🧪</span>
           <span>ML Silo</span>
+        </button>
+
+        <button
+          className={`nav-item ${currentView === 'sierra-chart' ? 'active' : ''}`}
+          onClick={() => setCurrentView('sierra-chart')}
+        >
+          <span className="nav-icon">🔌</span>
+          <span>Sierra Chart</span>
         </button>
 
         <button

@@ -11,7 +11,6 @@ import { resolveDirection } from '../config/setupTypes.js';
 import { firedAtToMod } from './sessionBoundary.js';
 import { stepWiderTarget, MAX_BARS_TO_T1_FOR_WIDER, WIDER_TARGET_MULT } from './widerTargetWalker.js';
 import { stepStepTrail } from './stepTrailWalker.js';
-import { stepPitchCatch } from './pitchCatchWalker.js';
 import { stepT1FloorRunner, t1FloorPnlFromResolution } from './t1FloorRunnerWalker.js';
 import { getGlobalCalib, getCached, DAY_CACHE_TTL } from './acdShared.js';
 
@@ -128,135 +127,10 @@ export async function completeStepTrailShadows() {
   return completed;
 }
 
-// Pitch and Catch shadow follow-up pass -- exact same structural need and design as
-// completeStepTrailShadows() just above (see its own header for the full explanation of why
-// this second half is necessary given resolveSetupsByPrice()'s stateless-every-poll,
-// drops-out-of-the-query-on-resolve architecture). UNVALIDATED mechanism (server/services/
-// pitchCatchWalker.js), tracked at the user's explicit request, observation-only.
-export async function completePitchCatchShadows() {
-  const pending = await query(`
-    SELECT id, setup_type, trade_date::text as trade_date, fired_at::text as fired_at,
-           entry_zone_low::float as entry_zone_low, entry_zone_high::float as entry_zone_high,
-           stop_level::float as stop_level, t1_level::float as t1_level,
-           wider_target_mult::float as wider_target_mult, actual_pnl::float as actual_pnl
-    FROM active_setups
-    WHERE status='RESOLVED' AND wider_target_mult IS NOT NULL
-      AND resolution_method IN ('WIDER_TARGET_HIT', 'WIDER_STOP_HIT', 'WIDER_TIME_EXPIRED')
-      AND pitch_catch_shadow IS NULL
-  `);
-  if (!pending.rows.length) return 0;
-
-  const pitchCatchCalib = await getGlobalCalib('pitchCatchCalib', async () => {
-    const r = await query(`SELECT notes FROM performance_audit WHERE signal_type='PITCH_CATCH_FILTER' AND signal_name='FILTER' ORDER BY run_date DESC LIMIT 1`);
-    let val = null;
-    try {
-      if (r.rows[0]) {
-        const n = JSON.parse(r.rows[0].notes);
-        if (n.rvolLo != null && n.rvolHi != null && n.minBarsToConfirm != null && n.adxThreshold != null) {
-          val = { rvolLo: n.rvolLo, rvolHi: n.rvolHi, minBarsToConfirm: n.minBarsToConfirm, adxThreshold: n.adxThreshold };
-        }
-      }
-    } catch (_) {}
-    return val;
-  });
-  if (pitchCatchCalib == null) return 0; // no calibration -- nothing to complete, fail closed
-
-  // Deliberately just a cache PEEK, not getGlobalCalib -- dailyAdxByDate is an expensive
-  // full-history daily-bars query, already computed by resolveSetupsByPrice() earlier in
-  // the SAME poll (server/index.js's poll ordering: resolveSetupsByPrice ->
-  // completeStepTrailShadows -> completePitchCatchShadows), so re-fetching here would
-  // duplicate that work every poll. `?? {}` is the correct null-check fix (was `!==
-  // undefined ? cached : {}`, the same finding #0 bug -- but since `!== undefined` was
-  // always true, it actually returned `null` on every miss, NEVER the `{}` fallback;
-  // caught and corrected by an independent DeepSeek review pass 2026-09-05 after this
-  // comment first shipped with the wrong claim). It was harmless anyway, but for a
-  // DIFFERENT reason than "fell back to {} either way": `pitchCatchCalib == null) return
-  // 0;` just above always fired too (same bug, its own reader), so the
-  // `dailyAdxByDate[row.trade_date]` deref below -- which WOULD throw on a null
-  // `dailyAdxByDate` -- was never reached. Two independent instances of the same bug
-  // happened to cancel out; `?? {}` here removes the reliance on that coincidence going
-  // forward.
-  const dailyAdxByDate = getCached('_global', 'dailyAdxByDate', DAY_CACHE_TTL) ?? {};
-
-  const widerTargetPressureThreshold = await getGlobalCalib('widerTargetPressureThreshold', async () => {
-    const r = await query(`SELECT notes FROM performance_audit WHERE signal_type='WIDER_TARGET_PRESSURE_GATE' AND signal_name='THRESHOLD' ORDER BY run_date DESC LIMIT 1`);
-    let val = null;
-    try { val = r.rows[0] ? JSON.parse(r.rows[0].notes).threshold : null; } catch (_) {}
-    return val;
-  });
-
-  let completed = 0;
-  for (const row of pending.rows) {
-   try {
-    const dir = resolveDirection(row);
-    if (dir === null) continue;
-    const long = dir === 'LONG';
-    const entry = row.entry_zone_high ?? row.entry_zone_low;
-    const stop = row.stop_level, t1 = row.t1_level;
-    if (entry == null || stop == null || t1 == null) continue;
-    const firedMod = firedAtToMod(row.fired_at);
-    const dailyAdx = dailyAdxByDate[row.trade_date] ?? null;
-
-    const barsRes = await query(`
-      SELECT ts::text as ts, high::float, low::float, close::float, bid_volume, ask_volume,
-        (EXTRACT(hour FROM ts)*60 + EXTRACT(minute FROM ts))::int as mod
-      FROM price_bars_primary WHERE symbol='NQ' AND ts > $1 ORDER BY ts ASC
-    `, [row.fired_at]);
-    if (!barsRes.rows.length) continue;
-
-    const widerTarget = long ? entry + Math.abs(t1 - entry) * row.wider_target_mult : entry - Math.abs(t1 - entry) * row.wider_target_mult;
-
-    let widerTargetState = { widening: false };
-    let shadowState = {
-      inner: { widening: false }, phase: 'ARMING', firstLegVolSum: 0, firstLegVolCount: 0,
-      runningPeak: null, belowCount: 0, pullbackExtreme: null, settleBarVols: [], firstLegAvgVol: null, reentry: null,
-    };
-    let shadowResolution = null;
-    let barCount = 0;
-    for (const bar of barsRes.rows) {
-      barCount++;
-      const barTotalVol = (bar.bid_volume || 0) + (bar.ask_volume || 0);
-      const pressureReading = barTotalVol > 0
-        ? ((long ? bar.ask_volume : bar.bid_volume) - (long ? bar.bid_volume : bar.ask_volume)) / barTotalVol
-        : null;
-      const step = stepWiderTarget(widerTargetState, bar, {
-        entry, stop, t1, widerTarget, long, barCount, maxBarsToT1: MAX_BARS_TO_T1_FOR_WIDER, firedMod,
-        pressureReading, pressureThreshold: widerTargetPressureThreshold,
-      });
-      widerTargetState = step.state;
-
-      const pcStep = stepPitchCatch(shadowState, bar, {
-        entry, stop, t1, widerTarget, long, barCount, maxBarsToT1: MAX_BARS_TO_T1_FOR_WIDER, firedMod,
-        pressureReading, pressureThreshold: widerTargetPressureThreshold, filterCalib: pitchCatchCalib, dailyAdx, origStop: stop,
-      });
-      shadowState = pcStep.state;
-      if (pcStep.resolution) { shadowResolution = { ...pcStep.resolution, resolvedAt: bar.ts }; break; }
-    }
-    if (!shadowResolution) continue; // still not resolved -- retry again next poll
-
-    const PNL_PER_POINT = LIVE_INSTRUMENT.dollarsPerPoint;
-    const COMMISSION = LIVE_INSTRUMENT.commissionPerRoundTrip;
-    let hypotheticalPnl = null;
-    if (shadowResolution.qualified) {
-      const pcPts = long ? shadowResolution.priceAtRes - shadowResolution.entryPrice : shadowResolution.entryPrice - shadowResolution.priceAtRes;
-      hypotheticalPnl = Math.round((pcPts * PNL_PER_POINT - COMMISSION) * 100) / 100;
-    }
-    const payload = JSON.stringify({
-      qualified: shadowResolution.qualified,
-      hypothetical_resolution: shadowResolution.resolution, hypothetical_method: shadowResolution.method,
-      hypothetical_exit_price: shadowResolution.priceAtRes, hypothetical_entry_price: shadowResolution.entryPrice ?? null,
-      hypothetical_pnl: hypotheticalPnl, real_pnl: row.actual_pnl,
-      delta: hypotheticalPnl != null ? Math.round((hypotheticalPnl - row.actual_pnl) * 100) / 100 : null,
-      resolved_at: shadowResolution.resolvedAt, direction: long ? 'LONG' : 'SHORT', completed_inline: false,
-    });
-    await query(`UPDATE active_setups SET pitch_catch_shadow=$2::jsonb, updated_at=NOW() WHERE id=$1 AND pitch_catch_shadow IS NULL`, [row.id, payload]);
-    completed++;
-   } catch (e) {
-     console.error(`completePitchCatchShadows row id=${row.id} error (non-critical, retrying next poll):`, e.message);
-   }
-  }
-  return completed;
-}
+// completePitchCatchShadows() REMOVED 2026-09-29 (DeepSeek design-critique audit: 0/213 real
+// qualifying rate after 3+ weeks live, plus a structurally degenerate calibration loop -- see
+// server/services/resolveSetups.js's pitchCatchCalib comment for the full account). Historical
+// pitch_catch_shadow rows are left alone; nothing writes to that column anymore.
 
 // T1-floor runner shadow follow-up pass (2026-09-25, PROVISIONAL -- RESEARCH_CLAIM
 // t1floor_runner_positive_slow_population_20260925). Same structural need as the two passes

@@ -77,10 +77,12 @@ export async function computeApproachOrderflow({ direction, beforeTs }) {
   return { maxZ, netAdverseDelta: adverseVol - favorableVol };
 }
 
-// Cached (per-day) read of the calibrated netAdverseDelta cutoff. Self-recalibrates via
+// Cached (per-day) read of the calibrated netAdverseDelta cutoff(s). Self-recalibrates via
 // scripts/calibrate_touch_orderflow_pressure.mjs (weekly). null (tagging disabled, fail-
 // closed) if no GATE-worthy calibration row exists yet -- per this codebase's no-static-
-// thresholds rule, never a hardcoded point value.
+// thresholds rule, never a hardcoded point value. `softCutoff`/`softGateActive` added
+// 2026-09-29 (DeepSeek design-critique audit) -- see tagTouchOrderflowPressureShadow()'s own
+// header for why `wouldHalfSize` used to just duplicate `wouldSkip` and what replaced it.
 export async function getTouchOrderflowPressureCalib() {
   return getGlobalCalib('touchOrderflowPressureCalib', async () => {
     const r = await query(`
@@ -92,7 +94,13 @@ export async function getTouchOrderflowPressureCalib() {
     if (!row || row.recommendation !== 'GATE') return null;
     try {
       const notes = JSON.parse(row.notes);
-      if (notes.cutoff != null) return { cutoff: notes.cutoff };
+      if (notes.cutoff != null) {
+        return {
+          cutoff: notes.cutoff,
+          softCutoff: notes.softCutoff ?? null,
+          softGateActive: notes.softRecommendation === 'SOFT_GATE',
+        };
+      }
     } catch (_) {}
     return null;
   });
@@ -102,6 +110,20 @@ export async function getTouchOrderflowPressureCalib() {
 // window order-flow reading -- SHADOW-ONLY / OBSERVATION-ONLY, exact same posture as
 // tagMomentumAgainstFadeShadow()/tagEntryOrderFlowShadow(). Keyed by the row's own `id`
 // via a follow-up UPDATE, not threaded through the INSERT's own positional params.
+//
+// wouldHalfSize FIXED 2026-09-29 (DeepSeek design-critique audit): used to just copy
+// wouldSkip, which meant the $5,127-vs-$10,254 hard-vs-soft shape mentioned in this file's own
+// header could never actually be checked forward. Since "half size" is a PRE-ENTRY sizing
+// penalty (enter at half contract size), not an exit-style hypothesis, its counterfactual is
+// trivially 0.5x the real trade's own actual_pnl -- no separate re-entry simulation needed,
+// unlike StepTrail/PitchCatch's mid-trade exit-choice shape. wouldHalfSize is now its OWN
+// independent condition (netAdverseDelta in the calibrated soft band, below the hard skip
+// cutoff), gated on softGateActive so it can never fire "true" while the calibration script's
+// own walk-forward check hasn't found real support for a soft tier -- the 2026-09-29 run found
+// NO monotonic degradation across a naive tercile split (mid tercile EV was actually BETTER
+// than the low tercile's, not between low and high), so softGateActive is currently false and
+// wouldHalfSize will correctly never be true until a future recalibration finds real evidence
+// for it.
 export async function tagTouchOrderflowPressureShadow(insertedId, { direction, firedAt }) {
   if (!insertedId || !direction || !firedAt) return;
   try {
@@ -110,11 +132,14 @@ export async function tagTouchOrderflowPressureShadow(insertedId, { direction, f
     const measure = await computeApproachOrderflow({ direction, beforeTs: firedAt });
     if (!measure) return; // insufficient bar history -- don't guess
     const wouldSkip = measure.netAdverseDelta >= calib.cutoff;
+    const wouldHalfSize = !wouldSkip && calib.softGateActive && calib.softCutoff != null
+      && measure.netAdverseDelta >= calib.softCutoff;
     await query(
       `UPDATE active_setups SET touch_orderflow_pressure_shadow = $1 WHERE id = $2`,
       [JSON.stringify({
         maxZ: +measure.maxZ.toFixed(2), netAdverseDelta: +measure.netAdverseDelta.toFixed(1),
-        cutoff: calib.cutoff, wouldSkip, wouldHalfSize: wouldSkip, checkedAt: new Date().toISOString(),
+        cutoff: calib.cutoff, softCutoff: calib.softCutoff, wouldSkip, wouldHalfSize,
+        checkedAt: new Date().toISOString(),
       }), insertedId]
     );
   } catch (_) { /* observation-only -- never let a tagging failure surface anywhere */ }

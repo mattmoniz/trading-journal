@@ -79,6 +79,9 @@ import antigravityEdgesRouter from './routes/antigravityEdges.js';
 import playbookRouter from './routes/playbook.js';
 import performanceAuditRouter from './routes/performanceAudit.js';
 import researchRouter from './routes/research.js';
+import sierraChartRouter from './routes/sierraChart.js';
+import { startConnectionManager } from './services/sierraChart/connectionManager.js';
+import { startMlScoringService } from './services/mlScoringServiceManager.js';
 import volatilityRegimeRouter from './routes/volatilityRegime.js';
 import pulseReadingRouter from './routes/pulseReading.js';
 import globexRotationBadgeRouter from './routes/globexRotationBadge.js';
@@ -405,6 +408,7 @@ app.use('/api', antigravityEdgesRouter);
 app.use('/api/playbook', playbookRouter);
 app.use('/api', performanceAuditRouter);
 app.use('/api', researchRouter);
+app.use('/api', sierraChartRouter);
 
 // Client-side error reporting — catches React render crashes via ErrorBoundary
 
@@ -710,6 +714,18 @@ httpServer.on('error', (err) => {
 httpServer.listen(PORT, () => {
   serverListening = true;
   console.log(`Server running on port ${PORT}`);
+
+  // Sierra Chart DTC connection -- fire-and-forget, never blocks server startup. Forces
+  // the kill switch to HALTED first (fail-closed-on-restart), then attempts to connect
+  // only if DTC_HOST/DTC_PORT are set; a no-op otherwise. See
+  // server/services/sierraChart/connectionManager.js.
+  startConnectionManager().catch((err) => console.error('[sierraChart] startConnectionManager failed:', err));
+
+  // Persistent ML scoring service (2026-09-29) -- backs the live pre-10am ML VETO gate
+  // (server/services/mlLiveVetoGate.js). Fire-and-forget, never blocks server startup; if
+  // it fails to start, the gate fails closed (force-SHADOW) on every candidate rather than
+  // silently firing everything live unscored. See mlScoringServiceManager.js.
+  try { startMlScoringService(); } catch (err) { console.error('[mlScoringServiceManager] startMlScoringService failed:', err); }
 
   // ── Scheduled jobs (node-cron v3, fires within the matching minute) ──────────
 

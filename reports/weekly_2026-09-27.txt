@@ -1,0 +1,263 @@
+TRADING JOURNAL — WEEKLY REPORT
+Week ending : 2026-09-27  (2026-09-21 – 2026-09-27)
+Generated   : 2026-09-27T22:00:01.198Z
+============================================================
+
+PERFORMANCE SUMMARY
+----------------------------------------
+Trading days  : 0
+Total P&L     : +$0.00
+Daily avg     : N/A
+Win days      : 0 / 0 (N/A)
+
+
+SETUP STATISTICS
+----------------------------------------
+2D_POC_FADE_LONG               fired: 5 | wins: 4 | losses: 1 | expired: 0 | wr: 80% | avg +$26.00
+2D_POC_FADE_SHORT              fired: 4 | wins: 2 | losses: 1 | expired: 1 | wr: 67% | avg -$17.25
+A_UP_STRONG                    fired: 6 | wins: 4 | losses: 0 | expired: 2 | wr: 100% | avg +$120.00
+BRACKET_BREAKOUT_LONG          fired: 1 | wins: 1 | losses: 0 | expired: 0 | wr: 100% | avg +$72.00
+CAM_R1_FADE_LONG               fired: 1 | wins: 0 | losses: 1 | expired: 0 | wr: 0% | avg -$64.00
+CAM_R1_FADE_SHORT              fired: 2 | wins: 1 | losses: 1 | expired: 0 | wr: 50% | avg +$17.00
+CAM_R2_FADE_LONG               fired: 4 | wins: 4 | losses: 0 | expired: 0 | wr: 100% | avg +$88.00
+CAM_R2_FADE_SHORT              fired: 4 | wins: 2 | losses: 2 | expired: 0 | wr: 50% | avg +$24.00
+CAM_R3_FADE_LONG               fired: 7 | wins: 3 | losses: 4 | expired: 0 | wr: 43% | avg -$11.71
+CAM_R3_FADE_SHORT              fired: 8 | wins: 3 | losses: 5 | expired: 0 | wr: 38% | avg -$19.75
+CAM_R4_FADE_SHORT              fired: 2 | wins: 2 | losses: 0 | expired: 0 | wr: 100% | avg +$74.00
+CAM_S1_FADE_LONG               fired: 11 | wins: 7 | losses: 4 | expired: 0 | wr: 64% | avg +$27.09
+CAM_S1_FADE_SHORT              fired: 6 | wins: 1 | losses: 5 | expired: 0 | wr: 17% | avg -$51.00
+CAM_S2_FADE_LONG_TRAIL         fired: 8 | wins: 4 | losses: 4 | expired: 0 | wr: 50% | avg +$3.00
+CAM_S2_FADE_SHORT              fired: 6 | wins: 3 | losses: 3 | expired: 0 | wr: 50% | avg +$18.00
+CAM_S3_FADE_LONG               fired: 4 | wins: 1 | losses: 3 | expired: 0 | wr: 25% | avg -$18.00
+CAM_S3_FADE_SHORT              fired: 4 | wins: 0 | losses: 4 | expired: 0 | wr: 0% | avg -$46.00
+CAM_S4_FADE_LONG               fired: 1 | wins: 1 | losses: 0 | expired: 0 | wr: 100% | avg +$112.00
+CAM_S4_FADE_SHORT              fired: 5 | wins: 0 | losses: 5 | expired: 0 | wr: 0% | avg -$76.00
+C_PAIRED_LONG                  fired: 5 | wins: 4 | losses: 0 | expired: 1 | wr: 100% | avg +$158.20
+FAILED_SWEEP_REVERSAL_LONG     fired: 2 | wins: 1 | losses: 0 | expired: 1 | wr: 100% | avg +$345.75
+FAILED_SWEEP_REVERSAL_SHORT    fired: 1 | wins: 0 | losses: 1 | expired: 0 | wr: 0% | avg -$137.50
+FLOOR_PIVOT_FADE_LONG          fired: 2 | wins: 0 | losses: 2 | expired: 0 | wr: 0% | avg -$50.00
+FLOOR_PIVOT_FADE_SHORT         fired: 1 | wins: 0 | losses: 1 | expired: 0 | wr: 0% | avg -$36.00
+FLOOR_R1_FADE_LONG             fired: 7 | wins: 2 | losses: 3 | expired: 1 | wr: 40% | avg -$19.58
+FLOOR_R1_FADE_SHORT_TRAIL      fired: 8 | wins: 3 | losses: 4 | expired: 1 | wr: 43% | avg -$0.88
+FLOOR_S1_FADE_LONG_TRAIL       fired: 3 | wins: 0 | losses: 3 | expired: 0 | wr: 0% | avg -$66.00
+FLOOR_S1_FADE_SHORT            fired: 3 | wins: 2 | losses: 1 | expired: 0 | wr: 67% | avg +$24.00
+FLOOR_S2_FADE_LONG             fired: 1 | wins: 0 | losses: 1 | expired: 0 | wr: 0% | avg -$76.00
+GLOBEX_FLUSH_LONG              fired: 3 | wins: 1 | losses: 2 | expired: 0 | wr: 33% | avg -$53.20
+GLOBEX_FLUSH_SHORT             fired: 1 | wins: 1 | losses: 0 | expired: 0 | wr: 100% | avg +$375.80
+GLOBEX_VWAP_FADE_LONG          fired: 15 | wins: 6 | losses: 9 | expired: 0 | wr: 40% | avg -$36.13
+GLOBEX_VWAP_FADE_SHORT         fired: 12 | wins: 8 | losses: 3 | expired: 0 | wr: 73% | avg +$39.63
+GLOBEX_VWAP_MAGNET_LONG        fired: 9 | wins: 5 | losses: 4 | expired: 0 | wr: 56% | avg +$4.56
+GLOBEX_VWAP_MAGNET_SHORT       fired: 9 | wins: 4 | losses: 5 | expired: 0 | wr: 44% | avg -$8.22
+IB_BULLISH                     fired: 1 | wins: 1 | losses: 0 | expired: 0 | wr: 100% | avg +$68.00
+IB_HIGH_FADE_LONG              fired: 8 | wins: 4 | losses: 4 | expired: 0 | wr: 50% | avg +$14.63
+IB_HIGH_FADE_SHORT             fired: 19 | wins: 5 | losses: 7 | expired: 4 | wr: 42% | avg +$2.21
+IB_LOW_FADE_LONG               fired: 2 | wins: 2 | losses: 0 | expired: 0 | wr: 100% | avg +$98.00
+IB_MID_SCALP_FADE_LONG         fired: 5 | wins: 1 | losses: 4 | expired: 0 | wr: 20% | avg -$18.00
+IB_MID_SCALP_FADE_SHORT        fired: 6 | wins: 3 | losses: 2 | expired: 0 | wr: 60% | avg +$27.58
+MAJOR_PIVOT_DEFENDED_BREAK_LONG fired: 1 | wins: 0 | losses: 0 | expired: 1 | wr: unresolved | avg +$171.00
+MINOR_DEFENDED_LEVEL_SHORT     fired: 2 | wins: 0 | losses: 0 | expired: 2 | wr: unresolved | avg +$8.75
+MOMENTUM_CHASE_MEDIUM_LONG     fired: 3 | wins: 2 | losses: 1 | expired: 0 | wr: 67% | avg +$32.67
+MOMENTUM_CHASE_MEDIUM_SHORT    fired: 2 | wins: 1 | losses: 1 | expired: 0 | wr: 50% | avg -$1.00
+MR1_FADE_SHORT_OVERNIGHT       fired: 2 | wins: 0 | losses: 2 | expired: 0 | wr: 0% | avg -$92.00
+ONH_FADE_LONG                  fired: 6 | wins: 4 | losses: 2 | expired: 0 | wr: 67% | avg +$23.00
+ONH_FADE_SHORT                 fired: 7 | wins: 3 | losses: 4 | expired: 0 | wr: 43% | avg -$10.57
+ONL_FADE_LONG                  fired: 3 | wins: 0 | losses: 3 | expired: 0 | wr: 0% | avg -$30.00
+OPENING_DRIVE_15MIN_LONG       fired: 1 | wins: 1 | losses: 0 | expired: 0 | wr: 100% | avg +$158.50
+OPEN_DRIVE_LONG                fired: 1 | wins: 1 | losses: 0 | expired: 0 | wr: 100% | avg +$72.00
+OR10_HIGH_FADE_LONG            fired: 8 | wins: 6 | losses: 2 | expired: 0 | wr: 75% | avg +$36.50
+OR10_HIGH_FADE_SHORT           fired: 7 | wins: 3 | losses: 4 | expired: 0 | wr: 43% | avg -$11.71
+OR10_LOW_FADE_LONG             fired: 4 | wins: 2 | losses: 2 | expired: 0 | wr: 50% | avg -$1.00
+OR10_LOW_FADE_SHORT            fired: 2 | wins: 1 | losses: 1 | expired: 0 | wr: 50% | avg -$1.00
+OR10_MID_FADE_LONG             fired: 4 | wins: 1 | losses: 3 | expired: 0 | wr: 25% | avg -$38.50
+OR10_MID_FADE_SHORT            fired: 1 | wins: 0 | losses: 1 | expired: 0 | wr: 0% | avg -$76.00
+OR15_HIGH_FADE_LONG            fired: 9 | wins: 3 | losses: 5 | expired: 0 | wr: 38% | avg -$19.75
+OR15_HIGH_FADE_SHORT           fired: 11 | wins: 6 | losses: 5 | expired: 0 | wr: 55% | avg +$5.82
+OR15_LOW_FADE_LONG             fired: 4 | wins: 2 | losses: 2 | expired: 0 | wr: 50% | avg -$1.00
+OR15_LOW_FADE_SHORT            fired: 2 | wins: 1 | losses: 1 | expired: 0 | wr: 50% | avg -$1.00
+OR15_MID_FADE_LONG             fired: 4 | wins: 1 | losses: 3 | expired: 0 | wr: 25% | avg -$38.50
+OR15_MID_FADE_SHORT            fired: 1 | wins: 1 | losses: 0 | expired: 0 | wr: 100% | avg +$74.00
+OR30_HIGH_FADE_LONG            fired: 5 | wins: 3 | losses: 2 | expired: 0 | wr: 60% | avg +$14.00
+OR30_HIGH_FADE_SHORT           fired: 11 | wins: 7 | losses: 3 | expired: 1 | wr: 70% | avg +$31.09
+OR30_LOW_FADE_LONG             fired: 4 | wins: 2 | losses: 2 | expired: 0 | wr: 50% | avg -$1.00
+OR30_LOW_FADE_SHORT            fired: 2 | wins: 1 | losses: 1 | expired: 0 | wr: 50% | avg -$1.00
+OR30_MID_FADE_LONG             fired: 3 | wins: 2 | losses: 1 | expired: 0 | wr: 67% | avg +$24.00
+OR30_MID_FADE_SHORT            fired: 2 | wins: 1 | losses: 1 | expired: 0 | wr: 50% | avg -$1.00
+OR5_HIGH_FADE_LONG             fired: 8 | wins: 4 | losses: 4 | expired: 0 | wr: 50% | avg +$12.00
+OR5_HIGH_FADE_SHORT            fired: 9 | wins: 1 | losses: 4 | expired: 1 | wr: 20% | avg -$12.39
+OR5_LOW_FADE_LONG              fired: 3 | wins: 2 | losses: 1 | expired: 0 | wr: 67% | avg +$24.00
+OR5_LOW_FADE_LONG_GAP_DOWN     fired: 2 | wins: 1 | losses: 1 | expired: 0 | wr: 50% | avg -$1.00
+OR5_LOW_FADE_SHORT             fired: 3 | wins: 1 | losses: 2 | expired: 0 | wr: 33% | avg -$7.33
+OR5_MID_FADE_LONG              fired: 2 | wins: 2 | losses: 0 | expired: 0 | wr: 100% | avg +$98.00
+OR5_MID_FADE_SHORT             fired: 3 | wins: 1 | losses: 2 | expired: 0 | wr: 33% | avg +$10.00
+PD2_VAH_FADE_LONG              fired: 4 | wins: 3 | losses: 1 | expired: 0 | wr: 75% | avg +$14.00
+PD2_VAH_FADE_SHORT             fired: 3 | wins: 1 | losses: 2 | expired: 0 | wr: 33% | avg -$82.33
+PD_CLOSE_FADE_LONG             fired: 5 | wins: 3 | losses: 1 | expired: 1 | wr: 75% | avg +$39.00
+PD_CLOSE_FADE_SHORT            fired: 3 | wins: 0 | losses: 2 | expired: 1 | wr: 0% | avg -$34.17
+PD_HIGH_FADE_SHORT             fired: 3 | wins: 0 | losses: 3 | expired: 0 | wr: 0% | avg -$40.00
+PD_IB_LOW_FADE_LONG            fired: 3 | wins: 0 | losses: 2 | expired: 0 | wr: 0% | avg -$62.00
+PD_IB_LOW_FADE_SHORT           fired: 3 | wins: 2 | losses: 1 | expired: 0 | wr: 67% | avg +$24.00
+PD_IB_MID_FADE_LONG            fired: 1 | wins: 0 | losses: 1 | expired: 0 | wr: 0% | avg -$76.00
+PD_IB_MID_FADE_SHORT           fired: 2 | wins: 1 | losses: 1 | expired: 0 | wr: 50% | avg +$18.00
+PD_LOW_FADE_LONG               fired: 5 | wins: 1 | losses: 3 | expired: 0 | wr: 25% | avg -$9.50
+PD_LOW_FADE_SHORT              fired: 5 | wins: 2 | losses: 2 | expired: 1 | wr: 50% | avg -$4.90
+PD_OR_MID_FADE_LONG            fired: 1 | wins: 0 | losses: 1 | expired: 0 | wr: 0% | avg -$76.00
+PD_POC_FADE_LONG               fired: 9 | wins: 4 | losses: 5 | expired: 0 | wr: 44% | avg +$12.22
+PD_POC_FADE_LONG_TRAIL         fired: 5 | wins: 1 | losses: 3 | expired: 1 | wr: 25% | avg -$11.60
+PD_POC_FADE_SHORT              fired: 5 | wins: 0 | losses: 3 | expired: 0 | wr: 0% | avg +$6.68
+PD_POC_FADE_SHORT_TRAIL        fired: 5 | wins: 0 | losses: 0 | expired: 1 | wr: unresolved | avg +$14.68
+PD_SESSION_MID_FADE_LONG       fired: 1 | wins: 0 | losses: 1 | expired: 0 | wr: 0% | avg -$74.00
+PD_VAH_FADE_LONG               fired: 7 | wins: 1 | losses: 5 | expired: 1 | wr: 17% | avg -$22.64
+PD_VAH_FADE_SHORT              fired: 22 | wins: 12 | losses: 9 | expired: 1 | wr: 57% | avg +$22.80
+PD_VAL_FADE_LONG               fired: 4 | wins: 1 | losses: 3 | expired: 0 | wr: 25% | avg -$23.00
+PD_VAL_FADE_SHORT              fired: 1 | wins: 0 | losses: 1 | expired: 0 | wr: 0% | avg -$32.00
+PM_HIGH_FADE_LONG_OVERNIGHT    fired: 1 | wins: 0 | losses: 1 | expired: 0 | wr: 0% | avg -$92.00
+POC_ROTATION_JOIN_LONG         fired: 9 | wins: 0 | losses: 6 | expired: 3 | wr: 0% | avg +$21.17
+POC_ROTATION_JOIN_SHORT        fired: 9 | wins: 0 | losses: 4 | expired: 5 | wr: 0% | avg +$8.50
+RTH_FLUSH_LONG                 fired: 2 | wins: 1 | losses: 0 | expired: 1 | wr: 100% | avg +$71.25
+RTH_FLUSH_SHORT                fired: 1 | wins: 0 | losses: 0 | expired: 1 | wr: unresolved | avg -$78.00
+RTH_VWAP_FADE_LONG             fired: 9 | wins: 3 | losses: 4 | expired: 0 | wr: 43% | avg +$3.14
+RTH_VWAP_FADE_SHORT            fired: 6 | wins: 2 | losses: 4 | expired: 0 | wr: 33% | avg -$19.33
+STACK_VOL_BREAK_LIVE_LONG      fired: 5 | wins: 3 | losses: 1 | expired: 1 | wr: 75% | avg +$96.58
+STACK_VOL_BREAK_LIVE_SHORT     fired: 6 | wins: 1 | losses: 3 | expired: 2 | wr: 25% | avg -$36.95
+STOP_SWEEP_LONG                fired: 1 | wins: 1 | losses: 0 | expired: 0 | wr: 100% | avg +$57.50
+VALUE_AREA_RESPONSIVE_SHORT    fired: 1 | wins: 0 | losses: 1 | expired: 0 | wr: 0% | avg -$76.00
+VWAP_MAGNET_SHORT              fired: 1 | wins: 0 | losses: 1 | expired: 0 | wr: 0% | avg -$62.00
+WEEKLY_VWAP_FADE_LONG          fired: 6 | wins: 1 | losses: 4 | expired: 1 | wr: 20% | avg -$35.91
+WEEKLY_VWAP_FADE_SHORT         fired: 4 | wins: 2 | losses: 0 | expired: 2 | wr: 100% | avg +$40.83
+WEEKLY_VWAP_FADE_SHORT_OVERNIGHT fired: 3 | wins: 1 | losses: 2 | expired: 0 | wr: 33% | avg -$2.00
+WR1_FADE_LONG                  fired: 1 | wins: 1 | losses: 0 | expired: 0 | wr: 100% | avg +$74.00
+WR1_FADE_SHORT_OVERNIGHT       fired: 2 | wins: 0 | losses: 1 | expired: 1 | wr: 0% | avg -$26.00
+WR2_FADE_LONG                  fired: 4 | wins: 4 | losses: 0 | expired: 0 | wr: 100% | avg +$72.00
+WR2_FADE_SHORT                 fired: 1 | wins: 0 | losses: 1 | expired: 0 | wr: 0% | avg -$66.00
+WR2_FADE_SHORT_OVERNIGHT       fired: 2 | wins: 0 | losses: 2 | expired: 0 | wr: 0% | avg -$92.00
+
+DYNAMIC MINED EDGES (Statistical shifts)
+----------------------------------------
+  🚀 Active Boosters (Size Up / Confirm):
+    · IB_LOW_FADE_LONG             | Midday (11:30-13:30)   | WR: 62.5% vs Base: 41.0% (+21.5%) (p=0.0109)
+    · IB_LOW_FADE_LONG             | Midday (11:30-13:30)   | WR: 62.5% vs Base: 41.0% (+21.5%) (p=0.0109)
+    · IB_LOW_FADE_LONG             | Midday (11:30-13:30)   | WR: 62.5% vs Base: 41.0% (+21.5%) (p=0.0109)
+    · IB_LOW_FADE_LONG             | Midday (11:30-13:30)   | WR: 62.5% vs Base: 41.0% (+21.5%) (p=0.0109)
+    · IB_LOW_FADE_LONG             | Midday (11:30-13:30)   | WR: 62.5% vs Base: 41.0% (+21.5%) (p=0.0109)
+    · IB_LOW_FADE_LONG             | Midday (11:30-13:30)   | WR: 62.5% vs Base: 41.0% (+21.5%) (p=0.0109)
+    · IB_LOW_FADE_LONG             | Midday (11:30-13:30)   | WR: 62.5% vs Base: 41.0% (+21.5%) (p=0.0109)
+    · IB_LOW_FADE_LONG             | Midday (11:30-13:30)   | WR: 62.5% vs Base: 41.0% (+21.5%) (p=0.0109)
+    · IB_LOW_FADE_LONG             | Midday (11:30-13:30)   | WR: 62.5% vs Base: 41.0% (+21.5%) (p=0.0109)
+    · IB_LOW_FADE_LONG             | Midday (11:30-13:30)   | WR: 62.5% vs Base: 41.0% (+21.5%) (p=0.0109)
+    · IB_LOW_FADE_LONG             | Midday (11:30-13:30)   | WR: 62.5% vs Base: 41.0% (+21.5%) (p=0.0109)
+    · IB_LOW_FADE_LONG             | Midday (11:30-13:30)   | WR: 62.5% vs Base: 41.0% (+21.5%) (p=0.0109)
+    · IB_BEARISH                   | Friday                 | WR: 69.6% vs Base: 48.6% (+20.9%) (p=0.0286)
+    · IB_BEARISH                   | Friday                 | WR: 69.6% vs Base: 48.6% (+20.9%) (p=0.0286)
+    · IB_BEARISH                   | Friday                 | WR: 69.6% vs Base: 48.6% (+20.9%) (p=0.0286)
+    · IB_BEARISH                   | Friday                 | WR: 69.6% vs Base: 48.6% (+20.9%) (p=0.0286)
+    · IB_BEARISH                   | Friday                 | WR: 69.6% vs Base: 48.6% (+20.9%) (p=0.0286)
+    · IB_BEARISH                   | Friday                 | WR: 69.6% vs Base: 48.6% (+20.9%) (p=0.0286)
+    · IB_BEARISH                   | Friday                 | WR: 69.6% vs Base: 48.6% (+20.9%) (p=0.0286)
+    · IB_BEARISH                   | Friday                 | WR: 69.6% vs Base: 48.6% (+20.9%) (p=0.0286)
+    · IB_BEARISH                   | Friday                 | WR: 69.6% vs Base: 48.6% (+20.9%) (p=0.0286)
+    · IB_BEARISH                   | Friday                 | WR: 69.6% vs Base: 48.6% (+20.9%) (p=0.0286)
+    · IB_BEARISH                   | Friday                 | WR: 69.6% vs Base: 48.6% (+20.9%) (p=0.0286)
+    · IB_BEARISH                   | Friday                 | WR: 69.6% vs Base: 48.6% (+20.9%) (p=0.0286)
+    · IB_BEARISH                   | Friday                 | WR: 69.6% vs Base: 48.6% (+20.9%) (p=0.0286)
+    · WEEKLY_VWAP_FADE_SHORT       | Normal OR              | WR: 68.2% vs Base: 52.2% (+16.0%) (p=0.0374)
+    · WEEKLY_VWAP_FADE_SHORT       | Normal OR              | WR: 68.2% vs Base: 52.2% (+16.0%) (p=0.0374)
+    · WEEKLY_VWAP_FADE_SHORT       | Normal OR              | WR: 68.2% vs Base: 52.2% (+16.0%) (p=0.0374)
+    · WEEKLY_VWAP_FADE_SHORT       | Normal OR              | WR: 68.2% vs Base: 52.2% (+16.0%) (p=0.0374)
+    · WEEKLY_VWAP_FADE_SHORT       | Normal OR              | WR: 68.2% vs Base: 52.2% (+16.0%) (p=0.0374)
+    · WEEKLY_VWAP_FADE_SHORT       | Normal OR              | WR: 68.2% vs Base: 52.2% (+16.0%) (p=0.0374)
+    · WEEKLY_VWAP_FADE_SHORT       | Normal OR              | WR: 68.2% vs Base: 52.2% (+16.0%) (p=0.0374)
+    · WEEKLY_VWAP_FADE_SHORT       | Normal OR              | WR: 68.2% vs Base: 52.2% (+16.0%) (p=0.0374)
+    · WEEKLY_VWAP_FADE_SHORT       | Normal OR              | WR: 68.2% vs Base: 52.2% (+16.0%) (p=0.0374)
+    · WEEKLY_VWAP_FADE_SHORT       | Normal OR              | WR: 68.2% vs Base: 52.2% (+16.0%) (p=0.0374)
+    · WEEKLY_VWAP_FADE_SHORT       | Normal OR              | WR: 68.2% vs Base: 52.2% (+16.0%) (p=0.0374)
+    · WEEKLY_VWAP_FADE_SHORT       | Normal OR              | WR: 68.2% vs Base: 52.2% (+16.0%) (p=0.0374)
+    · C_STANDALONE_UP              | Wednesday              | WR: 52.8% vs Base: 37.1% (+15.7%) (p=0.0311)
+    · C_STANDALONE_UP              | Wednesday              | WR: 52.8% vs Base: 37.1% (+15.7%) (p=0.0311)
+    · C_STANDALONE_UP              | Wednesday              | WR: 52.8% vs Base: 37.1% (+15.7%) (p=0.0311)
+    · C_STANDALONE_UP              | Wednesday              | WR: 52.8% vs Base: 37.1% (+15.7%) (p=0.0311)
+    · C_STANDALONE_UP              | Wednesday              | WR: 52.8% vs Base: 37.1% (+15.7%) (p=0.0311)
+    · C_STANDALONE_UP              | Wednesday              | WR: 52.8% vs Base: 37.1% (+15.7%) (p=0.0311)
+    · C_STANDALONE_UP              | Wednesday              | WR: 52.8% vs Base: 37.1% (+15.7%) (p=0.0311)
+    · C_STANDALONE_UP              | Wednesday              | WR: 52.8% vs Base: 37.1% (+15.7%) (p=0.0311)
+    · C_STANDALONE_UP              | Wednesday              | WR: 52.8% vs Base: 37.1% (+15.7%) (p=0.0311)
+    · C_STANDALONE_UP              | Wednesday              | WR: 52.8% vs Base: 37.1% (+15.7%) (p=0.0311)
+    · C_STANDALONE_UP              | Wednesday              | WR: 52.8% vs Base: 37.1% (+15.7%) (p=0.0311)
+    · C_STANDALONE_UP              | Wednesday              | WR: 52.8% vs Base: 37.1% (+15.7%) (p=0.0311)
+    · C_STANDALONE_UP              | Wednesday              | WR: 52.8% vs Base: 37.1% (+15.7%) (p=0.0311)
+    · IB_HIGH_FADE_SHORT           | Normal OR              | WR: 83.3% vs Base: 70.5% (+12.9%) (p=0.0114)
+    · IB_HIGH_FADE_SHORT           | Normal OR              | WR: 83.3% vs Base: 70.5% (+12.9%) (p=0.0114)
+    · IB_HIGH_FADE_SHORT           | Normal OR              | WR: 83.3% vs Base: 70.5% (+12.9%) (p=0.0114)
+    · IB_HIGH_FADE_SHORT           | Normal OR              | WR: 83.3% vs Base: 70.5% (+12.9%) (p=0.0114)
+    · IB_HIGH_FADE_SHORT           | Normal OR              | WR: 83.3% vs Base: 70.5% (+12.9%) (p=0.0114)
+    · IB_HIGH_FADE_SHORT           | Normal OR              | WR: 83.3% vs Base: 70.5% (+12.9%) (p=0.0114)
+    · IB_HIGH_FADE_SHORT           | Normal OR              | WR: 83.3% vs Base: 70.5% (+12.9%) (p=0.0114)
+    · IB_HIGH_FADE_SHORT           | Normal OR              | WR: 83.3% vs Base: 70.5% (+12.9%) (p=0.0114)
+    · IB_HIGH_FADE_SHORT           | Normal OR              | WR: 83.3% vs Base: 70.5% (+12.9%) (p=0.0114)
+    · IB_HIGH_FADE_SHORT           | Normal OR              | WR: 83.3% vs Base: 70.5% (+12.9%) (p=0.0114)
+    · IB_HIGH_FADE_SHORT           | Normal OR              | WR: 83.3% vs Base: 70.5% (+12.9%) (p=0.0114)
+    · IB_HIGH_FADE_SHORT           | Normal OR              | WR: 83.3% vs Base: 70.5% (+12.9%) (p=0.0114)
+
+  🛑 Active Drags (Size Down / Filter):
+    · IB_HIGH_FADE_SHORT           | Tight OR               | WR: 50.0% vs Base: 70.5% (-20.5%) (p=0.0025)
+    · IB_HIGH_FADE_SHORT           | Tight OR               | WR: 50.0% vs Base: 70.5% (-20.5%) (p=0.0025)
+    · IB_HIGH_FADE_SHORT           | Tight OR               | WR: 50.0% vs Base: 70.5% (-20.5%) (p=0.0025)
+    · IB_HIGH_FADE_SHORT           | Tight OR               | WR: 50.0% vs Base: 70.5% (-20.5%) (p=0.0025)
+    · IB_HIGH_FADE_SHORT           | Tight OR               | WR: 50.0% vs Base: 70.5% (-20.5%) (p=0.0025)
+    · IB_HIGH_FADE_SHORT           | Tight OR               | WR: 50.0% vs Base: 70.5% (-20.5%) (p=0.0025)
+    · IB_HIGH_FADE_SHORT           | Tight OR               | WR: 50.0% vs Base: 70.5% (-20.5%) (p=0.0025)
+    · IB_HIGH_FADE_SHORT           | Tight OR               | WR: 50.0% vs Base: 70.5% (-20.5%) (p=0.0025)
+    · IB_HIGH_FADE_SHORT           | Tight OR               | WR: 50.0% vs Base: 70.5% (-20.5%) (p=0.0025)
+    · IB_HIGH_FADE_SHORT           | Tight OR               | WR: 50.0% vs Base: 70.5% (-20.5%) (p=0.0025)
+    · IB_HIGH_FADE_SHORT           | Tight OR               | WR: 50.0% vs Base: 70.5% (-20.5%) (p=0.0025)
+    · IB_HIGH_FADE_SHORT           | Tight OR               | WR: 50.0% vs Base: 70.5% (-20.5%) (p=0.0025)
+    · C_STANDALONE_UP              | Wide OR                | WR: 23.8% vs Base: 37.1% (-13.3%) (p=0.0078)
+    · BRACKET_BREAKOUT_LONG        | Normal OR              | WR: 8.6% vs Base: 17.2% (-8.6%) (p=0.0447)
+    · C_STANDALONE_UP              | Wide OR                | WR: 28.6% vs Base: 37.1% (-8.5%) (p=0.0314)
+    · C_STANDALONE_UP              | Wide OR                | WR: 28.6% vs Base: 37.1% (-8.5%) (p=0.0314)
+    · C_STANDALONE_UP              | Wide OR                | WR: 28.6% vs Base: 37.1% (-8.5%) (p=0.0314)
+    · C_STANDALONE_UP              | Wide OR                | WR: 28.6% vs Base: 37.1% (-8.5%) (p=0.0314)
+    · C_STANDALONE_UP              | Wide OR                | WR: 28.6% vs Base: 37.1% (-8.5%) (p=0.0314)
+    · C_STANDALONE_UP              | Wide OR                | WR: 28.6% vs Base: 37.1% (-8.5%) (p=0.0314)
+    · C_STANDALONE_UP              | Wide OR                | WR: 28.6% vs Base: 37.1% (-8.5%) (p=0.0314)
+    · C_STANDALONE_UP              | Wide OR                | WR: 28.6% vs Base: 37.1% (-8.5%) (p=0.0314)
+    · C_STANDALONE_UP              | Wide OR                | WR: 28.6% vs Base: 37.1% (-8.5%) (p=0.0314)
+    · C_STANDALONE_UP              | Wide OR                | WR: 28.6% vs Base: 37.1% (-8.5%) (p=0.0314)
+    · C_STANDALONE_UP              | Wide OR                | WR: 28.6% vs Base: 37.1% (-8.5%) (p=0.0314)
+    · C_STANDALONE_UP              | Wide OR                | WR: 28.6% vs Base: 37.1% (-8.5%) (p=0.0314)
+
+ACD SIGNAL ACCURACY
+----------------------------------------
+A Up fired    : 4 day(s) | C confirm: 4 (100%)
+A Down fired  : 1 day(s) | C confirm: 1 (100%)
+Net score Δ   : +12
+Day types     : TREND: 2, TURBULENT: 1, BALANCE: 2
+
+  2026-09-21  score: +4  A↑ C↑  [TREND]
+  2026-09-22  score: +4  A↑ C↑  [TREND]
+  2026-09-23  score: -4  A↓ C↓  [TURBULENT]
+  2026-09-24  score: +4  A↑ C↑  [BALANCE]
+  2026-09-25  score: +4  A↑ C↑  [BALANCE]
+
+TRADE QUALITY
+----------------------------------------
+No trade data this week.
+
+GIVE-BACK / PEAK VS CLOSE
+----------------------------------------
+No coaching data this week.
+
+FLAGS (auto-detected)
+----------------------------------------
+No notable flags this week.
+
+INTERPRETATION (AI)
+----------------------------------------
+(Anthropic API error: 400 {"type":"error","error":{"type":"invalid_request_error","message":"Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits."},"request_id":"req_011CfUhJmQpMy7PAT3PK6BJP"})
+
+WEEKLY ASSESSMENT
+----------------------------------------
+Process Grade : N/A
+
+(Anthropic API error: 400 {"type":"error","error":{"type":"invalid_request_error","message":"Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits."},"request_id":"req_011CfUhJmTYpYK2tDMPsbvLQ"})
+
+============================================================

@@ -23,12 +23,19 @@ import { resolveRangeDates } from './acdShared.js';
 export const ML_CLAIM_DISTINCT_DATES_FLOOR = 8;
 
 async function getLatestModel() {
+  // is_checkpoint DESC, not a bare trained_at DESC -- see
+  // migrate_add_ml_models_checkpoint_20260929.mjs's header. train.py retrains a new
+  // model_version every night; every function in this file reads `modelVersion` from this
+  // one call, so a dashboard verdict silently changing underneath already-scored trades
+  // every night was one bug, in one place, hit by everything downstream (26.2% real flip
+  // rate, RESEARCH_CLAIM ml_verdict_instability_from_daily_retrain_20260929). Falls back
+  // to plain trained_at DESC if no checkpoint is set (defensive only).
   const r = await query(`
     SELECT model_version, trained_at::text, train_n, test_n,
       train_positive_rate::float, test_positive_rate::float, test_auc::float,
       approval_threshold::float, train_end_at::text, test_start_at::text,
       feature_list, test_metrics, notes
-    FROM ml_models ORDER BY trained_at DESC LIMIT 1
+    FROM ml_models ORDER BY is_checkpoint DESC, trained_at DESC LIMIT 1
   `);
   return r.rows[0] || null;
 }

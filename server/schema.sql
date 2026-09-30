@@ -5218,7 +5218,8 @@ CREATE TABLE public.ml_models (
     train_end_at timestamp without time zone,
     test_start_at timestamp without time zone,
     approval_threshold_rth numeric(6,5),
-    approval_threshold_globex numeric(6,5)
+    approval_threshold_globex numeric(6,5),
+    is_checkpoint boolean DEFAULT false NOT NULL
 );
 
 
@@ -5531,6 +5532,124 @@ CREATE TABLE public.optimal_stop_rebaseline_backup_20260809 (
     notes text,
     created_at timestamp without time zone
 );
+
+
+--
+-- Name: order_placements; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.order_placements (
+    id integer NOT NULL,
+    setup_id integer,
+    purpose character varying(10) NOT NULL,
+    client_order_id character varying(40) NOT NULL,
+    symbol character varying(20) NOT NULL,
+    exchange character varying(20) NOT NULL,
+    side character varying(4) NOT NULL,
+    order_type character varying(10) NOT NULL,
+    quantity integer NOT NULL,
+    price1 numeric,
+    price2 numeric,
+    trade_account character varying(60),
+    environment_service character varying(60),
+    status character varying(32) DEFAULT 'SUBMITTED'::character varying NOT NULL,
+    filled_quantity integer DEFAULT 0 NOT NULL,
+    avg_fill_price numeric,
+    reject_reason text,
+    submitted_at timestamp without time zone DEFAULT now() NOT NULL,
+    last_update_at timestamp without time zone,
+    raw_last_order_update jsonb,
+    created_at timestamp without time zone DEFAULT now(),
+    server_order_id character varying(64),
+    position_open boolean DEFAULT false NOT NULL,
+    latest_transaction_time double precision,
+    CONSTRAINT order_placements_purpose_check CHECK (((purpose)::text = ANY ((ARRAY['ENTRY'::character varying, 'EXIT'::character varying, 'STOP'::character varying])::text[]))),
+    CONSTRAINT order_placements_side_check CHECK (((side)::text = ANY ((ARRAY['BUY'::character varying, 'SELL'::character varying])::text[])))
+);
+
+
+--
+-- Name: order_placements_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.order_placements_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: order_placements_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.order_placements_id_seq OWNED BY public.order_placements.id;
+
+
+--
+-- Name: order_placements_invariant_baseline; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.order_placements_invariant_baseline (
+    id integer NOT NULL,
+    baseline_order_id integer NOT NULL,
+    set_at timestamp without time zone DEFAULT now() NOT NULL,
+    reason text NOT NULL
+);
+
+
+--
+-- Name: order_placements_invariant_baseline_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.order_placements_invariant_baseline_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: order_placements_invariant_baseline_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.order_placements_invariant_baseline_id_seq OWNED BY public.order_placements_invariant_baseline.id;
+
+
+--
+-- Name: order_placements_updates; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.order_placements_updates (
+    id integer NOT NULL,
+    client_order_id character varying(40) NOT NULL,
+    raw_message jsonb NOT NULL,
+    received_at timestamp without time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: order_placements_updates_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.order_placements_updates_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: order_placements_updates_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.order_placements_updates_id_seq OWNED BY public.order_placements_updates.id;
 
 
 --
@@ -8075,6 +8194,46 @@ ALTER SEQUENCE public.setup_types_id_seq OWNED BY public.setup_types.id;
 
 
 --
+-- Name: sierra_chart_reconciliation_log; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.sierra_chart_reconciliation_log (
+    id integer NOT NULL,
+    checked_at timestamp without time zone DEFAULT now() NOT NULL,
+    trigger character varying(20) NOT NULL,
+    reconciliation_clean boolean,
+    unknown_to_app_count integer,
+    stale_in_app_count integer,
+    invariant_checked boolean,
+    invariant_match boolean,
+    broker_net numeric,
+    expected_net numeric,
+    report jsonb NOT NULL,
+    CONSTRAINT sierra_chart_reconciliation_log_trigger_check CHECK (((trigger)::text = ANY ((ARRAY['LOGON'::character varying, 'TERMINAL_TRANSITION'::character varying, 'PERIODIC'::character varying, 'MANUAL'::character varying])::text[])))
+);
+
+
+--
+-- Name: sierra_chart_reconciliation_log_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.sierra_chart_reconciliation_log_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: sierra_chart_reconciliation_log_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.sierra_chart_reconciliation_log_id_seq OWNED BY public.sierra_chart_reconciliation_log.id;
+
+
+--
 -- Name: trade_annotations; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -9333,6 +9492,27 @@ ALTER TABLE ONLY public.morning_briefs ALTER COLUMN id SET DEFAULT nextval('publ
 
 
 --
+-- Name: order_placements id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.order_placements ALTER COLUMN id SET DEFAULT nextval('public.order_placements_id_seq'::regclass);
+
+
+--
+-- Name: order_placements_invariant_baseline id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.order_placements_invariant_baseline ALTER COLUMN id SET DEFAULT nextval('public.order_placements_invariant_baseline_id_seq'::regclass);
+
+
+--
+-- Name: order_placements_updates id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.order_placements_updates ALTER COLUMN id SET DEFAULT nextval('public.order_placements_updates_id_seq'::regclass);
+
+
+--
 -- Name: pattern_discoveries id; Type: DEFAULT; Schema: public; Owner: -
 --
 
@@ -9470,6 +9650,13 @@ ALTER TABLE ONLY public.setup_outcome_backtest ALTER COLUMN id SET DEFAULT nextv
 --
 
 ALTER TABLE ONLY public.setup_types ALTER COLUMN id SET DEFAULT nextval('public.setup_types_id_seq'::regclass);
+
+
+--
+-- Name: sierra_chart_reconciliation_log id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.sierra_chart_reconciliation_log ALTER COLUMN id SET DEFAULT nextval('public.sierra_chart_reconciliation_log_id_seq'::regclass);
 
 
 --
@@ -9997,6 +10184,30 @@ ALTER TABLE ONLY public.morning_briefs
 
 ALTER TABLE ONLY public.morning_briefs
     ADD CONSTRAINT morning_briefs_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: order_placements_invariant_baseline order_placements_invariant_baseline_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.order_placements_invariant_baseline
+    ADD CONSTRAINT order_placements_invariant_baseline_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: order_placements order_placements_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.order_placements
+    ADD CONSTRAINT order_placements_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: order_placements_updates order_placements_updates_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.order_placements_updates
+    ADD CONSTRAINT order_placements_updates_pkey PRIMARY KEY (id);
 
 
 --
@@ -10752,6 +10963,14 @@ ALTER TABLE ONLY public.setup_types
 
 
 --
+-- Name: sierra_chart_reconciliation_log sierra_chart_reconciliation_log_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.sierra_chart_reconciliation_log
+    ADD CONSTRAINT sierra_chart_reconciliation_log_pkey PRIMARY KEY (id);
+
+
+--
 -- Name: trade_annotations trade_annotations_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -11124,6 +11343,13 @@ CREATE INDEX idx_live_reads_date ON public.live_reads USING btree (trade_date);
 
 
 --
+-- Name: idx_ml_models_one_checkpoint; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX idx_ml_models_one_checkpoint ON public.ml_models USING btree (is_checkpoint) WHERE (is_checkpoint = true);
+
+
+--
 -- Name: idx_ml_verdicts_model; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -11135,6 +11361,62 @@ CREATE INDEX idx_ml_verdicts_model ON public.ml_verdicts USING btree (model_vers
 --
 
 CREATE INDEX idx_ml_verdicts_setup ON public.ml_verdicts USING btree (active_setup_id);
+
+
+--
+-- Name: idx_order_placements_client_order_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX idx_order_placements_client_order_id ON public.order_placements USING btree (client_order_id);
+
+
+--
+-- Name: idx_order_placements_one_entry_per_setup; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX idx_order_placements_one_entry_per_setup ON public.order_placements USING btree (setup_id) WHERE ((purpose)::text = 'ENTRY'::text);
+
+
+--
+-- Name: idx_order_placements_one_live_exit_per_setup; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX idx_order_placements_one_live_exit_per_setup ON public.order_placements USING btree (setup_id) WHERE (((purpose)::text = 'EXIT'::text) AND ((status)::text = ANY ((ARRAY['PENDING_SUBMIT'::character varying, 'SUBMITTED'::character varying, 'ORDER_SENT'::character varying, 'PENDING_OPEN'::character varying, 'OPEN'::character varying, 'PARTIALLY_FILLED'::character varying, 'PENDING_CANCEL'::character varying, 'PENDING_CANCEL_REPLACE'::character varying, 'FILLED'::character varying])::text[])));
+
+
+--
+-- Name: idx_order_placements_one_open_position; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX idx_order_placements_one_open_position ON public.order_placements USING btree ((1)) WHERE (((purpose)::text = 'ENTRY'::text) AND (position_open = true));
+
+
+--
+-- Name: idx_order_placements_one_stop_per_setup; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX idx_order_placements_one_stop_per_setup ON public.order_placements USING btree (setup_id) WHERE ((purpose)::text = 'STOP'::text);
+
+
+--
+-- Name: idx_order_placements_server_order_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_order_placements_server_order_id ON public.order_placements USING btree (server_order_id);
+
+
+--
+-- Name: idx_order_placements_setup_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_order_placements_setup_id ON public.order_placements USING btree (setup_id);
+
+
+--
+-- Name: idx_order_placements_updates_client_order_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_order_placements_updates_client_order_id ON public.order_placements_updates USING btree (client_order_id);
 
 
 --
@@ -11275,6 +11557,13 @@ CREATE INDEX idx_session_patterns_date ON public.session_patterns USING btree (t
 --
 
 CREATE INDEX idx_session_patterns_type ON public.session_patterns USING btree (pattern_type);
+
+
+--
+-- Name: idx_sierra_chart_reconciliation_log_checked_at; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_sierra_chart_reconciliation_log_checked_at ON public.sierra_chart_reconciliation_log USING btree (checked_at);
 
 
 --
@@ -15294,6 +15583,14 @@ CREATE TRIGGER update_trades_updated_at BEFORE UPDATE ON public.trades FOR EACH 
 
 ALTER TABLE ONLY public.ml_verdicts
     ADD CONSTRAINT ml_verdicts_model_version_fkey FOREIGN KEY (model_version) REFERENCES public.ml_models(model_version);
+
+
+--
+-- Name: order_placements order_placements_setup_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.order_placements
+    ADD CONSTRAINT order_placements_setup_id_fkey FOREIGN KEY (setup_id) REFERENCES public.active_setups(id);
 
 
 --

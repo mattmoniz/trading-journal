@@ -309,6 +309,42 @@ export function dayBlockedBootstrapDeltaCI(events, seedKey, {
   };
 }
 
+// Rigor-checked marginal-EV confirmation for a binary flag/gate-type shadow mechanism (added
+// 2026-09-29, DeepSeek design-critique audit of the loss-prevention shadow-tag family) --
+// wraps dayBlockedBootstrapDeltaCI just above with the specific "is a flagged-vs-unflagged
+// split real" question this codebase's `loss-prevention-summary` endpoint needs. A POINT-
+// ESTIMATE marginal (evFlagged - evUnflagged) is still just a number that could be noise on a
+// given slice -- this is the same "computeRigor's tercile check can mislead on thin data, prefer
+// dayBlockedBootstrapCI" lesson CLAUDE.md already documents, applied to a two-group split
+// instead of a one-group trend.
+//
+// rows: array of {trade_date, actual_pnl} (or any object exposing a date field and a numeric
+// pnl field via dateField/pnlField). flagCheck: (row) => boolean. Returns 'too_thin' below
+// MIN_GROUP_N per side; otherwise 'confirmed' (flagged robustly worse -- the hypothesis every
+// current mechanism in this family is built on), 'reversed' (flagged robustly BETTER -- a real,
+// actionable finding, the EntryFlow-L shape, reported distinctly from plain noise), or
+// 'unconfirmed' (CI straddles zero, can't yet distinguish from noise).
+const MIN_GROUP_N_FOR_CONFIRMATION = 20;
+export function gateSignalConfirmation(rows, flagCheck, seedKey, { dateField = 'trade_date', pnlField = 'actual_pnl' } = {}) {
+  const flagged = rows.filter(flagCheck);
+  const unflagged = rows.filter(r => !flagCheck(r));
+  const distinctDates = new Set(rows.map(r => r[dateField])).size;
+  if (flagged.length < MIN_GROUP_N_FOR_CONFIRMATION || unflagged.length < MIN_GROUP_N_FOR_CONFIRMATION) {
+    return { status: 'too_thin', marginalCiLo: null, marginalCiHi: null, distinctDates };
+  }
+  const events = [
+    ...flagged.map(r => ({ date: r[dateField], group: 'flagged', pnl: r[pnlField] })),
+    ...unflagged.map(r => ({ date: r[dateField], group: 'unflagged', pnl: r[pnlField] })),
+  ];
+  const ci = dayBlockedBootstrapDeltaCI(events, seedKey, { dateField: 'date', groupField: 'group', groupA: 'unflagged', groupB: 'flagged', iters: 2000 });
+  if (ci.lo == null) return { status: 'too_thin', marginalCiLo: null, marginalCiHi: null, distinctDates };
+  let status;
+  if (ci.hi < 0) status = 'confirmed';
+  else if (ci.lo > 0) status = 'reversed';
+  else status = 'unconfirmed';
+  return { status, marginalCiLo: +ci.lo.toFixed(2), marginalCiHi: +ci.hi.toFixed(2), distinctDates };
+}
+
 export function computeReplication(units, { idFn, metricFn, selectedIds }) {
   const selectedSet = new Set(selectedIds);
   const scored = units.map(u => ({ id: idFn(u), metric: metricFn(u) })).filter(x => x.metric && Number.isFinite(x.metric.value) && x.metric.n > 0);

@@ -250,13 +250,22 @@ export async function isPostWinOppositeFamilyBlocked(tradeDate, family, dir) {
 // (RESEARCH_CLAIM directional_conflict_gate_account_impact_20260903, PROVISIONAL, N=20 real
 // conflicts historically, -$41 total) -- this is risk-discipline, not a return-improving change.
 //
-// WIRED TO ALL 4 REAL (ACTIVE-capable) INSERT SITES as of 2026-09-03 (Globex, STACK_VOL_BREAK_LIVE,
+// WIRED TO 4 REAL INSERT SITES as of 2026-09-03 (Globex, STACK_VOL_BREAK_LIVE,
 // the RTH main active-slot path, and the shadowCandidates loop) -- added one site at a time per
 // explicit user request to test on a single firing mechanism before extending further, starting
-// with the RTH main path (this codebase's highest-volume live insert site). The other 3 raw
-// `INSERT INTO active_setups` sites in this file (cascade-breaker audit, suppressed-audit, early-
-// touch backfill) are hardcoded always-SHADOW/EXPIRED and structurally can never produce a real
-// ACTIVE row, so they correctly don't need this gate. See
+// with the RTH main path (this codebase's highest-volume live insert site).
+// CORRECTED 2026-09-29 (DeepSeek code review, wiring the ML VETO gate): this comment previously
+// claimed the other 2 raw `INSERT INTO active_setups` sites (suppressed-near-level-audit,
+// early-touch-backfill) are "hardcoded always-SHADOW/EXPIRED and structurally can never produce
+// a real ACTIVE row" -- that was true when written but went stale on 2026-09-28, one day before
+// this correction: both sites gained a real ACTIVE-promotion path under SUPPRESS_ALL_DISABLED
+// (`auditCanPromote`/`btCanPromote`, gated on `suppressAllDisabledOverrides()` in
+// setupEligibility.js). SUPPRESS_ALL_DISABLED is currently `enabled: false` (disabled
+// 2026-09-28), so today these 2 sites are STILL SHADOW-only in practice -- but the "structurally
+// can never" wording is no longer accurate, and neither this gate nor isSameSetupRefireBlocked
+// nor the ML VETO gate (mlLiveVetoGate.js) are wired to either site. See OPEN_DECISION
+// audit_sites_gain_active_path_gate_coverage_gap_20260929 for the real, currently-dormant
+// coverage gap this creates if SUPPRESS_ALL_DISABLED is ever re-enabled. See
 // docs/SINGLE_FIRING_DIRECTIONAL_CONFLICT_SPEC.md and OPEN_DECISION
 // single_firing_directional_conflict_gate_not_built (now just tracking the design/code-review pass
 // the full rollout should still get, already reviewed once by DeepSeek 2026-09-03).
@@ -545,18 +554,28 @@ export async function getSessionBarsSinceOpen(boundaryMod) {
   return res.rows.map(b => ({ mod: b.mod, volume: Number(b.volume) }));
 }
 
-// Momentum-against-fade factor (2026-09-05, user-requested, tested against real fade history
-// both RTH and Globex before wiring): computes the signed price move over the last `lookbackBars`
-// 1-min bars, oriented relative to a fade's OWN direction -- positive means recent price action
-// has been moving AGAINST the fade (e.g. price rising sharply right before a SHORT fade), negative
-// means it's been moving WITH it. Bounded query (last 2 hours only), no lookahead (ts < NOW() at
-// call time, which is always "now" relative to the candidate being evaluated -- never a stored
-// historical timestamp). Real-data finding (RESEARCH_CLAIM momentum_against_fade_filter_20260905,
-// N~4150 real ACTIVE+SHADOW fades, already-suppressed types excluded): top-quartile "against"
-// trades ran ~$7-12/trade worse than bottom-quartile across three independent lookback windows
-// (5/15/30 bars), held up (same sign, not reversed) across a chronological half-split. Shared by
-// both the RTH sizeMultiplier IIFE and detectGlobexSetup() -- computed once here, not
-// reimplemented per session, per this codebase's "export the real function" convention.
+// Momentum-against-fade factor (2026-09-05, user-requested). CORRECTED 2026-09-29 (DeepSeek
+// design-critique audit of the whole shadow-tag family): this comment used to claim "tested
+// against real fade history both RTH and Globex before wiring" -- that claim is FALSE and was
+// never itself verified before being written (see CLAUDE.md's "a verified code comment is not
+// itself verification" hard rule, 2nd confirmed instance). A real re-derivation
+// (docs/CONVENTIONS_DETAIL.md) found RTH held (EV -$7.38 vs -$1.94, rigor-clean) but GLOBEX
+// REVERSED (EV +$1.59 vs -$5.77) and wasn't even tercile-stable -- consistent with this
+// codebase's own standing rule that a directional-pressure signal validated in RTH should be
+// assumed to reverse, not just weaken, in Globex. Computes the signed price move over the last
+// `lookbackBars` 1-min bars, oriented relative to a fade's OWN direction -- positive means
+// recent price action has been moving AGAINST the fade (e.g. price rising sharply right before
+// a SHORT fade), negative means it's been moving WITH it. Bounded query (last 2 hours only), no
+// lookahead (ts < NOW() at call time, which is always "now" relative to the candidate being
+// evaluated -- never a stored historical timestamp). Real-data finding (RESEARCH_CLAIM
+// momentum_against_fade_filter_20260905, N~4150 real ACTIVE+SHADOW fades, already-suppressed
+// types excluded, RTH-scoped): top-quartile "against" trades ran ~$7-12/trade worse than
+// bottom-quartile across three independent lookback windows (5/15/30 bars), held up (same sign,
+// not reversed) across a chronological half-split. Shared by both the RTH sizeMultiplier IIFE
+// and detectGlobexSetup() -- computed once here, not reimplemented per session, per this
+// codebase's "export the real function" convention -- but the underlying signal is only
+// validated for RTH; any future promotion decision (OPEN_DECISION
+// momentum_against_fade_sizemultiplier_wiring_pending) must scope to RTH only.
 async function getMomentumAgainstFade(dir, lookbackBars = 15) {
   if (dir !== 'LONG' && dir !== 'SHORT') return null;
   const res = await query(`
@@ -588,7 +607,11 @@ async function getMomentumAgainstFadeCalib() {
     try {
       if (r.rows[0]) {
         const notes = JSON.parse(r.rows[0].notes);
-        if (notes.p75 != null && notes.lookbackBars != null) val = { p75: notes.p75, lookbackBars: notes.lookbackBars };
+        // p25 added 2026-09-29 (was already stored in every calibration row's notes, just
+        // never read here) -- needed for the continuous penaltyScore in
+        // tagMomentumAgainstFadeShadow() below; p25 == null falls back to p75-only behavior
+        // (penaltyScore skipped) rather than failing the whole calibration read.
+        if (notes.p75 != null && notes.lookbackBars != null) val = { p75: notes.p75, p25: notes.p25 ?? null, lookbackBars: notes.lookbackBars };
       }
     } catch (_) {}
     return val;
@@ -617,11 +640,23 @@ export async function tagMomentumAgainstFadeShadow(insertedId, direction) {
     const value = await getMomentumAgainstFade(direction, calib.lookbackBars);
     if (value == null) return; // too little session history yet -- don't guess
     const against = value > calib.p75;
+    // penaltyScore (added 2026-09-29, DeepSeek design-critique audit): a continuous 0-1+
+    // reading of how far into the "against" zone this candidate sits, derived from the SAME
+    // p25/p75/value already stored below -- 0 at or below p25 (fully favorable momentum), 1 at
+    // or above p75 (the existing binary flag's own cutoff), interpolated linearly between.
+    // Not clamped above 1 -- a reading well past p75 legitimately scores >1, which is real
+    // information a binary flag throws away. Stored purely as an additional observational
+    // field; does not replace `against` (kept for backward-compat with any existing consumer)
+    // and does NOT itself feed any live sizeMultiplier -- that promotion decision is still
+    // separate and still pending (OPEN_DECISION momentum_against_fade_sizemultiplier_wiring_
+    // pending), and per the corrected header comment above, RTH-only if it ever happens.
+    const penaltyRange = calib.p25 != null ? calib.p75 - calib.p25 : null;
+    const penaltyScore = penaltyRange != null && penaltyRange > 0 ? +((value - calib.p25) / penaltyRange).toFixed(3) : null;
     await query(
       `UPDATE active_setups SET momentum_against_fade_shadow = $1 WHERE id = $2`,
       [JSON.stringify({
-        value: +value.toFixed(2), p75Cutoff: calib.p75, lookbackBars: calib.lookbackBars,
-        against, direction, checkedAt: new Date().toISOString(),
+        value: +value.toFixed(2), p25Cutoff: calib.p25, p75Cutoff: calib.p75, lookbackBars: calib.lookbackBars,
+        against, penaltyScore, direction, checkedAt: new Date().toISOString(),
       }), insertedId]
     );
   } catch (_) { /* observation-only -- never let a tagging failure surface anywhere */ }

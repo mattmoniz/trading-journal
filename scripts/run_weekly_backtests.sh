@@ -171,11 +171,10 @@ echo "=== Weekly backtest run: $(date) ==="
 # risk this codebase has already been burned by with other calibrated gates.
 /usr/bin/node scripts/calibrate_step_trail_fraction.mjs
 
-# Pitch and Catch filter calibration (user idea, 2026-09-04, UNVALIDATED -- see
-# server/services/pitchCatchWalker.js's header). Must stay scheduled so the shadow logger's
-# qualification filter (RVol band, settle-bars, ADX threshold) tracks the current real
-# population rather than freezing at whatever it was on 2026-09-04.
-/usr/bin/node scripts/calibrate_pitch_catch_filter.mjs
+# Pitch and Catch filter calibration -- REMOVED 2026-09-29 (0/213 real qualifying rate after
+# 3+ weeks live, plus a structurally degenerate calibration loop -- see
+# server/services/resolveSetups.js's pitchCatchCalib comment for the full account). No longer
+# scheduled; scripts/calibrate_pitch_catch_filter.mjs was deleted the same day.
 
 # Momentum-against-fade filter calibration (user idea, 2026-09-05, RESEARCH_CLAIM
 # momentum_against_fade_filter_20260905) -- derives the top-quartile "against momentum"
@@ -448,5 +447,17 @@ echo "=== Weekly backtest run: $(date) ==="
 # entry PD_VAL_FADE_LONG after 13:00 ET, 2026-09-25). Re-derives each override's value on realized
 # actual_pnl and runs its pre-registered prospective look -- remove the entry if it fails.
 /usr/bin/node scripts/recheck_live_time_window_overrides.mjs
+
+# ML meta-labeling silo: weekly checkpoint promotion (2026-09-29, fixes
+# RESEARCH_CLAIM ml_verdict_instability_from_daily_retrain_20260929 -- daily retraining,
+# scripts/run_daily_calibration.sh, was making 26.2% of real trades' TAKE/VETO verdict
+# flip purely on which day they were scored). train.py keeps retraining nightly (that
+# history is the drift-tracking signal); this is the ONLY thing that ever moves
+# ml_models.is_checkpoint, which every live/display consumer now reads instead of
+# trained_at DESC. Prints + persists (performance_audit, ML_CHECKPOINT_PROMOTION) a real
+# before/after EV comparison on real trades resolved since the last promotion -- read this
+# weekly, per the user's own request, before assuming a retrain "helped." See
+# promote_weekly_checkpoint.py's own header for the full design.
+./venv/bin/python3 scripts/ml_meta_labeling/promote_weekly_checkpoint.py
 
 echo "=== Weekly backtest run complete: $(date) ==="

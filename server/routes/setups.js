@@ -10,6 +10,7 @@ import { getDeltaConfirmationCategory } from '../services/deltaConfirmation.js';
 import { REAL_TRADE_FILTER } from '../../scripts/backtest_setup_status.mjs';
 import { MECHANISMS, MIN_REAL_N, evalBucket, modeOf } from '../../scripts/backtest_flush_post_entry_exit_signals_promotion.mjs';
 import { SUPPRESS_ALL_DISABLED, ALL_LEVELS_LIVE } from '../services/setupEligibility.js';
+import { gateSignalConfirmation } from '../services/rigorDiagnostics.js';
 
 const router = express.Router();
 
@@ -1227,38 +1228,11 @@ router.get('/setups/step-trail-shadow-summary', async (req, res) => {
   }
 });
 
-// GET /api/setups/pitch-catch-shadow-summary — monitoring surface for the Pitch and Catch
-// forward-tracking (user idea, 2026-09-04, UNVALIDATED -- see server/services/
-// pitchCatchWalker.js's header for the full negative evidence trail). Tracked at the user's
-// explicit request specifically because it's unproven: "if it's not good then the N will
-// stay low." Same live, read-only aggregate-over-the-field pattern as step-trail's summary,
-// split LONG/SHORT since the two directions are being evaluated separately (Pitch and Catch
-// Long vs. Pitch and Catch Short).
-router.get('/setups/pitch-catch-shadow-summary', async (req, res) => {
-  try {
-    const rowsQ = await query(`
-      SELECT actual_pnl::float as actual_pnl, pitch_catch_shadow
-      FROM active_setups
-      WHERE pitch_catch_shadow IS NOT NULL AND origin_status IN ('ACTIVE','SHADOW')
-    `);
-    function summarize(rows) {
-      const confirmedN = rows.length;
-      const qualifiedRows = rows.filter(r => r.pitch_catch_shadow.qualified === true);
-      const n = qualifiedRows.length;
-      const qualifiedRate = confirmedN > 0 ? +(100 * n / confirmedN).toFixed(1) : 0;
-      if (!n) return { n: 0, confirmedN, qualifiedRate, avgDelta: null, thin: true };
-      const deltas = qualifiedRows.map(r => Number(r.pitch_catch_shadow.delta)).filter(d => !Number.isNaN(d));
-      const avgDelta = deltas.length ? deltas.reduce((s, d) => s + d, 0) / deltas.length : null;
-      return { n, confirmedN, qualifiedRate, avgDelta: avgDelta != null ? +avgDelta.toFixed(2) : null, thin: n < 20 };
-    }
-    const long = rowsQ.rows.filter(r => r.pitch_catch_shadow.direction === 'LONG');
-    const short = rowsQ.rows.filter(r => r.pitch_catch_shadow.direction === 'SHORT');
-    res.json({ long: summarize(long), short: summarize(short), combined: summarize(rowsQ.rows) });
-  } catch (err) {
-    console.error('[setups/pitch-catch-shadow-summary]', err.message);
-    res.status(500).json({ error: err.message });
-  }
-});
+// GET /api/setups/pitch-catch-shadow-summary -- REMOVED 2026-09-29 (DeepSeek design-critique
+// audit: 0/213 real qualifying rate after 3+ weeks live, degenerate calibration loop -- see
+// server/services/resolveSetups.js's pitchCatchCalib comment for the full account). Historical
+// pitch_catch_shadow rows still exist in active_setups and are left alone; nothing new writes
+// to that column going forward.
 
 // GET /api/setups/t1-floor-runner-shadow-summary — monitoring surface for the T1-floor runner
 // forward-tracking (2026-09-25, PROVISIONAL -- RESEARCH_CLAIM
@@ -1327,13 +1301,12 @@ router.get('/setups/direction-gate-shadow-summary', async (req, res) => {
   }
 });
 
-// GET /api/setups/entry-orderflow-shadow-summary — monitoring surface for entryOrderFlowShadow.js
-// (2026-09-16, two rules: LONG_REPEAT_ADVERSE_FLOW / SHORT_MORNING_ADVERSE_FLOW). Same
-// observation-only posture and reporting shape as direction-gate-shadow-summary above --
-// wouldBeFlagged trades still fired for real. Split by rule since the two don't behave the same
-// (see entryOrderFlowShadow.js's own header for the honest caveats, especially LONG's overlap
-// with the already-live isSameSetupRefireBlocked gate). OPEN_DECISION
-// entry_orderflow_shadow_6week_revisit_20260916 is what this summary feeds into.
+// GET /api/setups/entry-orderflow-shadow-summary — monitoring surface for entryOrderFlowShadow.js.
+// LONG_REPEAT_ADVERSE_FLOW was removed 2026-09-29 (see that file's own header) -- this endpoint
+// still loops over both rule names for backward-compat display of historical LONG rows, but no
+// new LONG-tagged row will ever appear. SHORT_MORNING_ADVERSE_FLOW is the only rule still being
+// actively tagged. OPEN_DECISION entry_orderflow_shadow_short_revisit_20260929 is what this
+// summary now feeds into.
 router.get('/setups/entry-orderflow-shadow-summary', async (req, res) => {
   try {
     const rowsQ = await query(`
@@ -1359,7 +1332,7 @@ router.get('/setups/entry-orderflow-shadow-summary', async (req, res) => {
     }
     res.json({
       ...byRule,
-      note: 'Observation-only -- these numbers reflect what actually happened, not a real gate. wouldBeFlagged trades still fired for real. Scheduled revisit 2026-10-28 (6 weeks).',
+      note: 'Observation-only -- these numbers reflect what actually happened, not a real gate. wouldBeFlagged trades still fired for real. LONG_REPEAT_ADVERSE_FLOW removed 2026-09-29 (historical data only); SHORT_MORNING_ADVERSE_FLOW revisit tracked as OPEN_DECISION entry_orderflow_shadow_short_revisit_20260929.',
     });
   } catch (err) {
     console.error('[setups/entry-orderflow-shadow-summary]', err.message);
@@ -1528,7 +1501,12 @@ router.get('/setups/loss-prevention-summary', async (req, res) => {
     // false keeps exactly one row per real touch instant, matching how quick-check.html's
     // Session Timeline itself would only ever have shown ONE live alert at that moment.
     const CLUSTER_PRIMARY_FILTER = `AND (is_cluster_primary IS NULL OR is_cluster_primary = true)`;
-    const [dirGateQ, momFadeQ, stepTrailQ, pitchCatchQ, postEntryQ, breakevenStopQ, entryFlowQ, ofpQ] = await Promise.all([
+    // pitchCatchQ removed 2026-09-29 along with the PitchCatch mechanism itself -- see
+    // resolveSetups.js's pitchCatchCalib comment. Positional destructuring below was updated
+    // in the SAME edit as removing this array entry (antigravityEdges.js's own Promise.all
+    // ordering-footgun rule applies here too -- a positional array/destructure pair must never
+    // be edited independently).
+    const [dirGateQ, momFadeQ, stepTrailQ, postEntryQ, breakevenStopQ, entryFlowQ, ofpQ] = await Promise.all([
       query(`SELECT id, trade_date::text as trade_date, actual_pnl::float as actual_pnl, direction_gate_shadow
              FROM active_setups WHERE direction_gate_shadow IS NOT NULL AND origin_status IN ('ACTIVE','SHADOW')
                AND resolution IS NOT NULL AND actual_pnl IS NOT NULL AND trade_date >= $1 ${CLUSTER_PRIMARY_FILTER}`, [yearStartET]),
@@ -1537,9 +1515,6 @@ router.get('/setups/loss-prevention-summary', async (req, res) => {
                AND resolution IS NOT NULL AND actual_pnl IS NOT NULL AND trade_date >= $1 ${CLUSTER_PRIMARY_FILTER}`, [yearStartET]),
       query(`SELECT id, trade_date::text as trade_date, actual_pnl::float as actual_pnl, step_trail_shadow
              FROM active_setups WHERE step_trail_shadow IS NOT NULL AND origin_status IN ('ACTIVE','SHADOW')
-               AND resolution IS NOT NULL AND actual_pnl IS NOT NULL AND trade_date >= $1 ${CLUSTER_PRIMARY_FILTER}`, [yearStartET]),
-      query(`SELECT id, trade_date::text as trade_date, actual_pnl::float as actual_pnl, pitch_catch_shadow
-             FROM active_setups WHERE pitch_catch_shadow IS NOT NULL AND origin_status IN ('ACTIVE','SHADOW')
                AND resolution IS NOT NULL AND actual_pnl IS NOT NULL AND trade_date >= $1 ${CLUSTER_PRIMARY_FILTER}`, [yearStartET]),
       query(`SELECT id, trade_date::text as trade_date, actual_pnl::float as actual_pnl, post_entry_exit_signals
              FROM active_setups WHERE post_entry_exit_signals IS NOT NULL AND origin_status IN ('ACTIVE','SHADOW')
@@ -1558,16 +1533,20 @@ router.get('/setups/loss-prevention-summary', async (req, res) => {
                AND breakeven_stop_live->>'counterfactual_pnl' IS NOT NULL
                AND origin_status IN ('ACTIVE','SHADOW')
                AND resolution IS NOT NULL AND actual_pnl IS NOT NULL AND trade_date >= $1 ${CLUSTER_PRIMARY_FILTER}`, [yearStartET]),
+      // entryFlowLong (LONG_REPEAT_ADVERSE_FLOW) removed 2026-09-29 -- see entryOrderFlowShadow.js's
+      // header. This query now only ever matches SHORT_MORNING_ADVERSE_FLOW-tagged rows going
+      // forward (historical LONG rows still exist in the table but the classifier never produces
+      // new ones), and only entryFlowShort reads from it below.
       query(`SELECT id, trade_date::text as trade_date, actual_pnl::float as actual_pnl, entry_orderflow_shadow
              FROM active_setups WHERE entry_orderflow_shadow IS NOT NULL AND origin_status IN ('ACTIVE','SHADOW')
                AND resolution IS NOT NULL AND actual_pnl IS NOT NULL AND trade_date >= $1 ${CLUSTER_PRIMARY_FILTER}`, [yearStartET]),
       // touchOrderflowPressure (2026-09-27, touchOrderflowPressureShadow.js) -- WIRED IN
       // 2026-09-28, found missing from this rollup the night after it shipped (had its own
       // standalone /touch-orderflow-pressure-shadow-summary endpoint, was never added here).
-      // Gate-type, same shape as dirGate/momFade/entryFlowLong/entryFlowShort (hypothetical if
-      // honored is "no trade taken") -- it's an ENTRY-time filter (order-flow pressure in the
-      // bars approaching the touch, before entry), never an exit-management tool, so gateStat()
-      // is the correct shape, not altExitStat().
+      // Gate-type, same shape as dirGate/momFade/entryFlowShort (hypothetical if honored is "no
+      // trade taken") -- it's an ENTRY-time filter (order-flow pressure in the bars approaching
+      // the touch, before entry), never an exit-management tool, so gateStat() is the correct
+      // shape, not altExitStat().
       query(`SELECT id, trade_date::text as trade_date, actual_pnl::float as actual_pnl, touch_orderflow_pressure_shadow
              FROM active_setups WHERE touch_orderflow_pressure_shadow IS NOT NULL AND origin_status IN ('ACTIVE','SHADOW')
                AND resolution IS NOT NULL AND actual_pnl IS NOT NULL AND trade_date >= $1 ${CLUSTER_PRIMARY_FILTER}`, [yearStartET]),
@@ -1578,14 +1557,35 @@ router.get('/setups/loss-prevention-summary', async (req, res) => {
       if (period === 'week') return r.trade_date >= weekStartET;
       return true; // 'ytd' -- already bounded by the query itself
     }
+    // FIXED 2026-09-29 (DeepSeek design-critique audit, reframing point #1): netIfHonored alone
+    // can't show MARGINAL edge for a gate-type mechanism -- it's SUM(-actual_pnl) over flagged
+    // rows only, with no unflagged baseline, so a positive number conflates "this signal adds
+    // information" with "the flagged population happens to sit inside a net-negative period"
+    // (PROMOTE_ALL_MODE, 2026-09-28, made this concrete -- it made the unconditional population
+    // net-negative, which alone can inflate every gate's netIfHonored regardless of whether the
+    // gate itself does anything). evFlagged/evUnflagged/marginal (evFlagged-evUnflagged) are the
+    // real test: a gate is only doing real work if its flagged population is worse than its own
+    // unflagged population, not merely worse than zero. Both figures are kept -- netIfHonored/
+    // lossPrevented are still the real "what would honoring this have done to your account"
+    // answer (the more useful bottom line to actually act on) while marginal is the real
+    // "is this signal information or just population base-rate" answer (the more useful
+    // diagnostic for deciding whether to trust/promote it).
     function gateStat(rows, flagCheck, period) {
-      const scoped = rows
-        .filter(r => periodFilter(r, period))
-        .filter(flagCheck);
-      const n = scoped.length;
-      const netIfHonored = scoped.reduce((s, r) => s - r.actual_pnl, 0); // hypothetical=0 -> delta = -actual
-      const lossPrevented = scoped.reduce((s, r) => s + Math.max(0, -r.actual_pnl), 0);
-      return { n, lossPrevented: +lossPrevented.toFixed(2), netIfHonored: +netIfHonored.toFixed(2) };
+      const periodRows = rows.filter(r => periodFilter(r, period));
+      const flagged = periodRows.filter(flagCheck);
+      const unflagged = periodRows.filter(r => !flagCheck(r));
+      const n = flagged.length;
+      const netIfHonored = flagged.reduce((s, r) => s - r.actual_pnl, 0); // hypothetical=0 -> delta = -actual
+      const lossPrevented = flagged.reduce((s, r) => s + Math.max(0, -r.actual_pnl), 0);
+      const evFlagged = flagged.length ? flagged.reduce((s, r) => s + r.actual_pnl, 0) / flagged.length : null;
+      const evUnflagged = unflagged.length ? unflagged.reduce((s, r) => s + r.actual_pnl, 0) / unflagged.length : null;
+      const marginal = (evFlagged != null && evUnflagged != null) ? +(evFlagged - evUnflagged).toFixed(2) : null;
+      return {
+        n, lossPrevented: +lossPrevented.toFixed(2), netIfHonored: +netIfHonored.toFixed(2),
+        evFlagged: evFlagged != null ? +evFlagged.toFixed(2) : null,
+        evUnflagged: evUnflagged != null ? +evUnflagged.toFixed(2) : null,
+        marginal,
+      };
     }
     function altExitStat(rows, hypGetter, period, extraFilter) {
       let scoped = rows.filter(r => periodFilter(r, period));
@@ -1597,12 +1597,27 @@ router.get('/setups/loss-prevention-summary', async (req, res) => {
       return { n, lossPrevented: +lossPrevented.toFixed(2), netIfHonored: +netIfHonored.toFixed(2) };
     }
 
+    // Rigor-checked signal confirmation (added 2026-09-29, following directly from the marginal-
+    // EV fix above): a POINT-ESTIMATE marginal (evFlagged - evUnflagged) is still just a number
+    // that could be noise on a given day/week -- "is this mechanism real" needs the same day-
+    // blocked-bootstrap treatment this codebase already applies everywhere else a real/noise
+    // question matters. gateSignalConfirmation() (server/services/rigorDiagnostics.js) does the
+    // actual work; runs ONCE per gate-type mechanism over the FULL (YTD-bounded) population, not
+    // per-period -- "is this real" is a property of the mechanism's whole history, not of today
+    // specifically, so today/week/ytd all show the SAME confirmation verdict, only the $ amounts
+    // differ by period.
+    const signalConfirmation = {
+      dirGate: gateSignalConfirmation(dirGateQ.rows, r => r.direction_gate_shadow?.wouldBeBlocked === true, 'dirgate_confirm_20260929'),
+      momFade: gateSignalConfirmation(momFadeQ.rows, r => r.momentum_against_fade_shadow?.against === true, 'momfade_confirm_20260929'),
+      entryFlowShort: gateSignalConfirmation(entryFlowQ.rows, r => r.entry_orderflow_shadow?.rule === 'SHORT_MORNING_ADVERSE_FLOW' && r.entry_orderflow_shadow?.wouldBeFlagged === true, 'entryflows_confirm_20260929'),
+      touchOrderflowPressure: gateSignalConfirmation(ofpQ.rows, r => r.touch_orderflow_pressure_shadow?.wouldSkip === true, 'ofp_confirm_20260929'),
+    };
+
     const rangeSlopeHyp = r => r.post_entry_exit_signals?.range_slope?.hypothetical_pnl != null
       ? Number(r.post_entry_exit_signals.range_slope.hypothetical_pnl) : null;
     const volRolloverHyp = r => r.post_entry_exit_signals?.vol_rollover?.hypothetical_pnl != null
       ? Number(r.post_entry_exit_signals.vol_rollover.hypothetical_pnl) : null;
     const stepTrailHyp = r => r.step_trail_shadow?.hypothetical_pnl != null ? Number(r.step_trail_shadow.hypothetical_pnl) : null;
-    const pitchCatchHyp = r => r.pitch_catch_shadow?.hypothetical_pnl != null ? Number(r.pitch_catch_shadow.hypothetical_pnl) : null;
     // FIXED 2026-09-29, same incident as the query above -- breakeven_stop_live's payload has
     // INVERTED semantics from the old shadow shape: it has no hypothetical_pnl field at all,
     // because BE is no longer a hypothetical suggestion, it's the real, already-executed
@@ -1623,24 +1638,21 @@ router.get('/setups/loss-prevention-summary', async (req, res) => {
     const mechanisms = {};
     for (const period of ['today', 'week', 'ytd']) {
       mechanisms[period] = {
-        dirGate: gateStat(dirGateQ.rows, r => r.direction_gate_shadow?.wouldBeBlocked === true, period),
-        momFade: gateStat(momFadeQ.rows, r => r.momentum_against_fade_shadow?.against === true, period),
+        dirGate: { ...gateStat(dirGateQ.rows, r => r.direction_gate_shadow?.wouldBeBlocked === true, period), ...signalConfirmation.dirGate },
+        momFade: { ...gateStat(momFadeQ.rows, r => r.momentum_against_fade_shadow?.against === true, period), ...signalConfirmation.momFade },
         stepTrail: altExitStat(stepTrailQ.rows, stepTrailHyp, period),
-        pitchCatch: altExitStat(pitchCatchQ.rows, pitchCatchHyp, period, r => r.pitch_catch_shadow?.qualified === true),
+        // pitchCatch removed 2026-09-29 -- see resolveSetups.js's pitchCatchCalib comment.
         rangeSlope: altExitStat(postEntryQ.rows, rangeSlopeHyp, period),
         volRollover: altExitStat(postEntryQ.rows, volRolloverHyp, period),
-        // No extraFilter needed (unlike pitchCatch/the old shadow shape) -- the query above
-        // already scopes to counterfactual_pnl IS NOT NULL, which only genuine BE_STOP_HIT
+        // No extraFilter needed (unlike the old pitchCatch/step-trail shadow shape) -- the query
+        // above already scopes to counterfactual_pnl IS NOT NULL, which only genuine BE_STOP_HIT
         // rows ever carry, so hypGetter's own != null check is sufficient.
         breakevenStop: altExitStat(breakevenStopQ.rows, breakevenStopHyp, period),
-        // entryFlowLong/Short (2026-09-16, entryOrderFlowShadow.js) -- gate-type, same shape as
-        // dirGate/momFade (hypothetical if honored is "no trade taken"). Two separate rows, not
-        // one, since the LONG and SHORT rules are genuinely different conditions (see that
-        // file's own header) -- pooling them would hide which direction is actually driving any
-        // number shown here.
-        entryFlowLong: gateStat(entryFlowQ.rows, r => r.entry_orderflow_shadow?.rule === 'LONG_REPEAT_ADVERSE_FLOW' && r.entry_orderflow_shadow?.wouldBeFlagged === true, period),
-        entryFlowShort: gateStat(entryFlowQ.rows, r => r.entry_orderflow_shadow?.rule === 'SHORT_MORNING_ADVERSE_FLOW' && r.entry_orderflow_shadow?.wouldBeFlagged === true, period),
-        touchOrderflowPressure: gateStat(ofpQ.rows, r => r.touch_orderflow_pressure_shadow?.wouldSkip === true, period),
+        // entryFlowLong (LONG_REPEAT_ADVERSE_FLOW) removed 2026-09-29 -- see
+        // entryOrderFlowShadow.js's header for why (its live sign reversed the backtest's, and
+        // the effect was likely always isSameSetupRefireBlocked()'s own leftover complement).
+        entryFlowShort: { ...gateStat(entryFlowQ.rows, r => r.entry_orderflow_shadow?.rule === 'SHORT_MORNING_ADVERSE_FLOW' && r.entry_orderflow_shadow?.wouldBeFlagged === true, period), ...signalConfirmation.entryFlowShort },
+        touchOrderflowPressure: { ...gateStat(ofpQ.rows, r => r.touch_orderflow_pressure_shadow?.wouldSkip === true, period), ...signalConfirmation.touchOrderflowPressure },
       };
     }
 
@@ -1667,7 +1679,7 @@ router.get('/setups/loss-prevention-summary', async (req, res) => {
       ...deltaRows(dirGateQ.rows, r => r.direction_gate_shadow?.wouldBeBlocked === true ? -r.actual_pnl : null),
       ...deltaRows(momFadeQ.rows, r => r.momentum_against_fade_shadow?.against === true ? -r.actual_pnl : null),
       ...deltaRows(stepTrailQ.rows, r => stepTrailHyp(r) != null ? stepTrailHyp(r) - r.actual_pnl : null),
-      ...deltaRows(pitchCatchQ.rows, r => (r.pitch_catch_shadow?.qualified === true && pitchCatchHyp(r) != null) ? pitchCatchHyp(r) - r.actual_pnl : null),
+      // pitchCatch removed 2026-09-29 -- see resolveSetups.js's pitchCatchCalib comment.
       ...deltaRows(postEntryQ.rows, r => rangeSlopeHyp(r) != null ? rangeSlopeHyp(r) - r.actual_pnl : null),
       ...deltaRows(postEntryQ.rows, r => volRolloverHyp(r) != null ? volRolloverHyp(r) - r.actual_pnl : null),
       ...deltaRows(breakevenStopQ.rows, r => breakevenStopHyp(r) != null ? breakevenStopHyp(r) - r.actual_pnl : null),
@@ -1688,12 +1700,21 @@ router.get('/setups/loss-prevention-summary', async (req, res) => {
     }
     const combined = { today: combinedStat('today'), week: combinedStat('week'), ytd: combinedStat('ytd') };
 
-    const LABELS = { dirGate: 'DirGate', momFade: 'MomFade', stepTrail: 'StepTrail', pitchCatch: 'PitchCatch', rangeSlope: 'RangeSlope', volRollover: 'VolRoll', breakevenStop: 'BreakevenStop', entryFlowLong: 'EntryFlow-L', entryFlowShort: 'EntryFlow-S', touchOrderflowPressure: 'OFP' };
+    const LABELS = { dirGate: 'DirGate', momFade: 'MomFade', stepTrail: 'StepTrail', rangeSlope: 'RangeSlope', volRollover: 'VolRoll', breakevenStop: 'BreakevenStop', entryFlowShort: 'EntryFlow-S', touchOrderflowPressure: 'OFP' };
     function fmtBlock(period, title) {
       const lines = [title];
       for (const [key, s] of Object.entries(mechanisms[period])) {
         if (s.n === 0) { lines.push(`  ${LABELS[key]}: no data`); continue; }
-        lines.push(`  ${LABELS[key]}: $${s.lossPrevented.toFixed(0)} prevented (net ${s.netIfHonored >= 0 ? '+' : '-'}$${Math.abs(s.netIfHonored).toFixed(0)}, N=${s.n})`);
+        // marginal is only present on gate-type mechanisms (see gateStat()'s own header) --
+        // append it so a reader can distinguish "real signal" from "flagged population happens
+        // to sit in a net-negative period" without opening the JSON response.
+        const marginalPart = s.marginal != null ? `, marginal ${s.marginal >= 0 ? '+' : '-'}$${Math.abs(s.marginal).toFixed(0)}` : '';
+        // status (added 2026-09-29) is only present on gate-type mechanisms too -- the rigor-
+        // checked "is the marginal real" verdict, not just its point estimate. 'too_thin' is
+        // the common/expected case for anything without real N>=20 per side yet -- shown
+        // plainly rather than omitted, so a reader never mistakes silence for confirmation.
+        const statusPart = s.status ? ` [${s.status}]` : '';
+        lines.push(`  ${LABELS[key]}: $${s.lossPrevented.toFixed(0)} prevented (net ${s.netIfHonored >= 0 ? '+' : '-'}$${Math.abs(s.netIfHonored).toFixed(0)}, N=${s.n}${marginalPart})${statusPart}`);
       }
       const c = combined[period];
       lines.push(`  All combined (deduplicated): $${c.lossPrevented.toFixed(0)} prevented (net ${c.netIfHonored >= 0 ? '+' : '-'}$${Math.abs(c.netIfHonored).toFixed(0)}, N=${c.n})`);

@@ -43,9 +43,20 @@ echo "=== Daily calibration: $(date) ==="
 # waiting up to 6 days for a weekly recheck wastes real newly-resolved-trade data that the
 # 3 daily backfills right above THIS ALREADY produce every night). train.py retrains fresh
 # on all real touches through today (a genuinely NEW model_version daily, not a static
-# one-shot -- this is the actual "learning mechanism" the user asked for); run_silo_scoring.py
-# scores the whole roster against the newly-trained latest model, feeding
-# MLSiloView.jsx/quick-check.html's ML Silo card. recalibrate_ml_walkforward.mjs then re-runs
+# one-shot) -- this stays true, but as of 2026-09-29 a daily model_version no longer means
+# a daily-changing LIVE VERDICT: run_silo_scoring.py, score_one.py, and the dashboard
+# (mlSiloService.js) all now read ml_models.is_checkpoint, not trained_at DESC, because
+# scoring against whichever model happened to be newest was making 26.2% of real trades'
+# TAKE/VETO flip purely on which day they fired (RESEARCH_CLAIM
+# ml_verdict_instability_from_daily_retrain_20260929) -- the flip carried no real signal
+# (mean PnL of the flipping population was WORSE than either stable group). The daily
+# retrain's own trained_at/test_auc history is now the drift-tracking signal;
+# scripts/ml_meta_labeling/promote_weekly_checkpoint.py (run_weekly_backtests.sh, Sunday)
+# is the only thing that ever moves which model_version is the checkpoint, and it reports
+# a real before/after EV comparison each time it does. run_silo_scoring.py below now
+# rescores the whole roster against the CHECKPOINT, not the newly-trained model, so its
+# own real "learning mechanism" is that it re-runs (and produces new-but-stable verdicts)
+# once a week, not once a night. recalibrate_ml_walkforward.mjs then re-runs
 # the expanding-window walk-forward and updates the RESEARCH_CLAIM's day-blocked bootstrap CI
 # with that day's real fold count -- status flips PROVISIONAL->CONFIRMED automatically once
 # the CI excludes zero. See RESEARCH_CLAIM

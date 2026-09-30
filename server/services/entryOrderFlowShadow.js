@@ -5,43 +5,48 @@
 // so a failure here can never affect the real row it's tagging).
 //
 // Backing research: scripts/backtest_price_drift_gate_phase0.mjs + backtest_price_drift_gate_
-// orderflow_phase0b.mjs (2026-09-16 session). Two DIFFERENT rules, one per direction -- they do
-// not behave the same, so this is deliberately not one symmetric "trend gate":
+// orderflow_phase0b.mjs (2026-09-16 session).
 //
-// LONG_REPEAT_ADVERSE_FLOW: fires when a same-setup_type LONG repeat comes in at a WORSE price
-// (lower) than the last real same-setup_type LONG fire within the current session, AND the
-// single 1-min bar that closed immediately before now shows net SELLING. The backtest's own
-// "within 60 minutes" cutoff was flagged (by the user and independently by DeepSeek) as picked
-// from a handful of ad hoc buckets (<10min/<60min looked bad, beyond ~4hr reversed), not a real
-// calibrated boundary -- so it is NOT part of wouldBeFlagged below; only price direction + flow
-// direction gate it, and the real elapsed minutes since the reference fire (`minutesSinceRef`)
-// is stored on every row so a future recheck can derive the real cutoff from accumulated data
-// instead of a guess. Tested: N=115 (RTH), EV=-$15.94/trade vs +$4.14 (worse-price alone, no flow
-// condition) / +$25.72 (best cell, same-or-better price + favorable flow). NOT yet cleared for
-// live gating -- DeepSeek's 2026-09-16
-// design-critique review found this backtest population substantially OVERLAPS the already-live
-// isSameSetupRefireBlocked() gate (shipped 2026-09-13/14): a same-setup repeat within a short
-// window where no OTHER setup fired in between is already force-SHADOW'd by that gate, so this
-// rule's measured -$15.94 is not necessarily its own marginal/incremental edge. Also missing: a
-// LONG-only chronological-stability check (only the pooled LONG+SHORT population was checked).
-// See OPEN_DECISION entry_orderflow_shadow_6week_revisit_20260916.
+// REMOVED 2026-09-29 (DeepSeek design-critique audit of the whole shadow-tag family):
+// LONG_REPEAT_ADVERSE_FLOW used to fire when a same-setup_type LONG repeat came in at a WORSE
+// price than the last real same-setup_type LONG fire, AND the prior 1-min bar showed net
+// selling -- backtest EV=-$15.94/trade vs +$4.14. Never cleared for live gating: DeepSeek's
+// 2026-09-16 review already found this backtest population substantially OVERLAPS the already-
+// live isSameSetupRefireBlocked() gate (same-setup repeats within a short window are already
+// force-SHADOW'd there), so the measured -$15.94 was never provably this rule's own marginal
+// edge. The real live data confirmed the concern: N=30 real flagged trades (2026-09-16 to
+// 2026-09-28) came in net PROFITABLE (netIfHonored=-$1,118, i.e. honoring the gate would have
+// COST money) -- the opposite sign from the backtest. Since the only structural difference
+// between this rule and the surviving SHORT_MORNING_ADVERSE_FLOW rule (whose sign held live) is
+// conditioning on "same-setup repeat," the conclusion is that this rule was measuring the
+// refire-cooldown gate's own leftover complement, not a real independent signal -- more N
+// couldn't have fixed a selection confound, so it's removed rather than left to accumulate more
+// of the same measurement. `getLastSameSetupFire()` (the reference-fire lookup this rule
+// depended on) was removed with it -- nothing else used it. See RESEARCH_CLAIM
+// entryflow_long_repeat_removed_confounded_20260929 for the full account, and
+// CLAUDE.md's "Conventions" entry on any same-setup lookup needing an explicit excludeId (the
+// bug this rule already needed one fix for, 2026-09-22) for the earlier history.
 //
-// SHORT_MORNING_ADVERSE_FLOW: fires for ANY SHORT candidate (first touch or repeat -- price-
-// drift was tested and does NOT hold for shorts, so it's not part of this rule) fired in RTH
-// when the single 1-min bar that closed immediately before now shows net BUYING. Tested: N=366,
-// EV=-$15.75/trade vs +$4.58 -- the most rigorously checked finding of the session (48 distinct
-// dates, top5DayPct=20.8%, stable across all 3 chronological thirds, strengthens to -$19.62 in
-// the most recent 45 days). Does NOT transfer to Globex (tested directly: ~flat, -$4.98 vs
-// -$3.64) and gets thin/noisy in the afternoon -- the backtest's own 9:30-noon window was flagged
-// (by the user and independently by DeepSeek) as an arbitrary boundary picked from a few ad hoc
-// buckets, not a real calibrated cutoff, so it is NOT baked into wouldBeFlagged below -- every
-// RTH SHORT with adverse flow gets flagged, and the real ET-minute-of-day is stored on every row
-// (`etMin`) so the 6-week revisit can derive whatever time-of-day boundary the accumulated data
-// actually supports, rather than shipping a guessed one now.
+// SHORT_MORNING_ADVERSE_FLOW (the sole surviving rule): fires for ANY SHORT candidate (first
+// touch or repeat -- price-drift was tested and does NOT hold for shorts, so it's not part of
+// this rule) fired in RTH when the single 1-min bar that closed immediately before now shows net
+// BUYING. Tested: N=366, EV=-$15.75/trade vs +$4.58 -- the most rigorously checked finding of
+// the session (48 distinct dates, top5DayPct=20.8%, stable across all 3 chronological thirds,
+// strengthens to -$19.62 in the most recent 45 days). Live real data confirms the sign held:
+// N=118 (2026-09-16 to 2026-09-28), netIfHonored=+$1,645. Does NOT transfer to Globex (tested
+// directly: ~flat, -$4.98 vs -$3.64) and gets thin/noisy in the afternoon -- the backtest's own
+// 9:30-noon window was flagged (by the user and independently by DeepSeek) as an arbitrary
+// boundary picked from a few ad hoc buckets, not a real calibrated cutoff, so it is NOT baked
+// into wouldBeFlagged below -- every RTH SHORT with adverse flow gets flagged, and the real
+// ET-minute-of-day is stored on every row (`etMin`) so a future revisit can derive whatever
+// time-of-day boundary the accumulated data actually supports, rather than shipping a guessed
+// one now. Per DeepSeek's 2026-09-29 critique, this rule is conceptually the 1-bar version of
+// touchOrderflowPressureShadow.js's 8-bar OFP signal (both "adverse directional pressure right
+// before entry") -- HOLD, not independently promoted or removed, pending a head-to-head once
+// both have more real forward data.
 //
-// Both rules: RTH only, at launch -- LONG because Globex has too little real data to say
-// anything yet (N=11/4), SHORT because Globex was tested and came back flat. Re-check both once
-// more Globex history accumulates.
+// RTH only, at launch -- Globex was tested and came back flat for this rule. Re-check once more
+// Globex history accumulates.
 //
 // SHIPPED AS OBSERVATION-ONLY (user's explicit call 2026-09-16, after an initial "wire it to
 // actually prevent live/shadow trades" request was walked back once DeepSeek's design-critique
@@ -49,7 +54,6 @@
 // wouldBeFlagged never changes a real candidate's ACTIVE/SHADOW eligibility.
 
 import { query } from '../db.js';
-import { RTH_SESSION_FIRED_AT_SQL } from '../routes/acd.js';
 
 // FIXED 2026-09-17 (user-caught live: circled a real STOP_HIT PW_HIGH_FADE_SHORT that showed
 // as un-flagged, priorBarDelta=-135 -- traced to the 09:50 bar, not the 09:51 bar that had
@@ -90,91 +94,34 @@ async function getPriorClosedBarDelta() {
 }
 
 // Last REAL fire (any origin ACTIVE/SHADOW) of the exact same setup_type, within the current
-// session. FIXED 2026-09-16 (DeepSeek code review, found real): RTH_SESSION_FIRED_AT_SQL is a
-// pure TIME-OF-DAY predicate (hour*60+minute in [570,1080)), not a date bound -- the original
-// version returned "the most recent same-setup fire at an RTH time-of-day, across ALL history,"
-// so a today's-first-fire could get compared against a stale reference from yesterday or last
-// week. The backtest this file is built from (backtest_price_drift_gate_phase0.mjs's
-// simulate()) explicitly `state.clear()`s on every RTH<->Globex transition, scoping the
-// reference to "since THIS session opened" -- this function now matches that by also bounding
-// to today's own trade_date (only ever called with nowIsRTH=true in practice, per the one live
-// call site in classifyEntryOrderFlowShadow(), so "today" unambiguously means the current RTH
-// session). `todayET` derived from the same already-ET-converted Date object the caller
-// computed `nowIsRTH` from, not a fresh `new Date().toISOString()` (that would be the naive-
-// timestamp/ambient-timezone bug this codebase's own hard rule warns about).
-async function getLastSameSetupFire(setupType, nowIsRTH, todayET, excludeId) {
-  const sessionFilter = nowIsRTH ? RTH_SESSION_FIRED_AT_SQL : `NOT (${RTH_SESSION_FIRED_AT_SQL})`;
-  // FIXED 2026-09-22 (user-caught live: "I never see EFL working" -- confirmed real, not rare-
-  // by-design): this query had no exclusion for the row CURRENTLY being tagged. On any day a
-  // setup_type fires exactly once (the common case), that row's own INSERT is already visible
-  // and satisfies `fired_at < NOW()` by the time this SELECT runs (called right after insert,
-  // per tagEntryOrderFlowShadow's own header), so it silently matched ITSELF as its own "last
-  // fire" -- making refEntryPrice always equal entryPrice, which makes priceDriftGated
-  // (entryPrice < refEntryPrice) structurally always false, guaranteeing wouldBeFlagged could
-  // never be true for LONG_REPEAT_ADVERSE_FLOW. Confirmed via direct query: 123 of 150 real
-  // evaluations had a "reference" price, 0 had priceDriftGated=true -- and one spot-checked row
-  // (id 124633, CAM_R2_FADE_LONG, 2026-09-22) had NO other same-setup_type fire that day at all,
-  // yet its own refEntryPrice exactly matched its own entry price -- direct proof of self-match.
-  const r = await query(`
-    SELECT entry_zone_low::float AS entry_zone_low, entry_zone_high::float AS entry_zone_high, fired_at
-    FROM active_setups
-    WHERE setup_type=$1 AND origin_status IN ('ACTIVE','SHADOW') AND fired_at < NOW() AND ${sessionFilter}
-      AND trade_date = $2::date AND id IS DISTINCT FROM $3
-    ORDER BY fired_at DESC LIMIT 1
-  `, [setupType, todayET, excludeId ?? null]).catch(() => ({ rows: [] }));
-  const row = r.rows[0];
-  if (!row) return null;
-  return { entryPrice: row.entry_zone_high ?? row.entry_zone_low, firedAt: row.fired_at };
-}
+// session. getLastSameSetupFire() (the LONG_REPEAT_ADVERSE_FLOW reference-fire lookup) was
+// removed 2026-09-29 along with that rule -- nothing else in this codebase used it.
 
 // Pure-ish classification (does real reads, no writes) -- exported separately from the tagger
 // so a future recheck/backtest-alignment script can call the exact same logic without
-// re-deriving it, per this codebase's "export the real function" convention. excludeId (2026-
-// 09-22, see getLastSameSetupFire's own header for why): the row being classified must never
-// match itself as its own reference -- pass the real row's own id when classifying an
-// already-inserted candidate; a retrospective recheck of a hypothetical/not-yet-inserted
-// candidate can omit it (no self-match risk, since there is no self to match).
-export async function classifyEntryOrderFlowShadow({ direction, setupType, entryPrice, excludeId = null }) {
+// re-deriving it, per this codebase's "export the real function" convention. `excludeId` is
+// kept in the signature for call-site compatibility (tagEntryOrderFlowShadow still passes it)
+// even though the sole surviving rule doesn't need a self-match guard -- SHORT_MORNING_
+// ADVERSE_FLOW has no same-setup reference lookup by construction.
+export async function classifyEntryOrderFlowShadow({ direction, setupType, entryPrice, excludeId: _excludeId = null }) {
   if (!direction || !setupType || entryPrice == null) return null;
+  if (direction !== 'SHORT') return null; // LONG_REPEAT_ADVERSE_FLOW removed 2026-09-29 -- see file header
   const nowET = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
   const nowEtMin = nowET.getHours() * 60 + nowET.getMinutes();
   const nowIsRTH = nowEtMin >= 570 && nowEtMin < 1080; // matches RTH_SESSION_FIRED_AT_SQL's own bounds
 
   const { delta: priorBarDelta, barStale } = await getPriorClosedBarDelta();
-  const adverseFlow = priorBarDelta == null ? null : (direction === 'SHORT' ? priorBarDelta > 0 : priorBarDelta < 0);
+  const adverseFlow = priorBarDelta == null ? null : priorBarDelta > 0;
   const checkedAt = new Date().toISOString();
 
-  if (direction === 'SHORT') {
-    // No hardcoded time-of-day cutoff in the flag itself (user + DeepSeek both flagged 9:30-
-    // noon as an arbitrary boundary picked from a few backtest buckets, not a real calibrated
-    // number -- this codebase's own "no static thresholds" rule). wouldBeFlagged is just the
-    // real signal (adverse flow); etMin is stored raw so the 6-week revisit can derive whatever
-    // real time-of-day boundary the accumulated data actually supports, instead of guessing one
-    // now and baking it into which rows even get flagged.
-    const wouldBeFlagged = nowIsRTH && adverseFlow === true;
-    return { direction, setupType, rule: 'SHORT_MORNING_ADVERSE_FLOW', priorBarDelta, barStale, adverseFlow, etMin: nowEtMin, wouldBeFlagged, checkedAt };
-  }
-
-  // LONG_REPEAT_ADVERSE_FLOW -- RTH only (see file header); Globex has too little real data to
-  // calibrate, not tested as "no effect," so it's simply not evaluated outside RTH here.
-  if (!nowIsRTH) {
-    return { direction, setupType, rule: 'LONG_REPEAT_ADVERSE_FLOW', priorBarDelta, barStale, adverseFlow, wouldBeFlagged: false, notApplicable: 'GLOBEX_NOT_YET_CALIBRATED', checkedAt };
-  }
-  const todayET = nowET.toLocaleDateString('en-CA'); // matches acd.js's own todayET convention
-  const lastFire = await getLastSameSetupFire(setupType, nowIsRTH, todayET, excludeId);
-  const refEntryPrice = lastFire?.entryPrice ?? null;
-  const minutesSinceRef = lastFire ? +((Date.now() - new Date(lastFire.firedAt).getTime()) / 60000).toFixed(1) : null;
-  // priceDriftGated is pure direction (worse price than the last same-setup fire) -- NO time
-  // cutoff baked in here either, same reasoning as the SHORT rule above. minutesSinceRef is
-  // still recorded on every row so the revisit can bucket by real elapsed time (the backtest
-  // saw the effect concentrated under ~60min and reversing past ~4hr, but that was a handful of
-  // ad hoc buckets, not a derived boundary) rather than a threshold decided in advance.
-  const priceDriftGated = refEntryPrice != null && entryPrice < refEntryPrice;
-  const wouldBeFlagged = priceDriftGated && adverseFlow === true;
-  return {
-    direction, setupType, rule: 'LONG_REPEAT_ADVERSE_FLOW',
-    priorBarDelta, barStale, adverseFlow, refEntryPrice, minutesSinceRef, priceDriftGated, wouldBeFlagged, checkedAt,
-  };
+  // No hardcoded time-of-day cutoff in the flag itself (user + DeepSeek both flagged 9:30-
+  // noon as an arbitrary boundary picked from a few backtest buckets, not a real calibrated
+  // number -- this codebase's own "no static thresholds" rule). wouldBeFlagged is just the
+  // real signal (adverse flow); etMin is stored raw so a future revisit can derive whatever
+  // real time-of-day boundary the accumulated data actually supports, instead of guessing one
+  // now and baking it into which rows even get flagged.
+  const wouldBeFlagged = nowIsRTH && adverseFlow === true;
+  return { direction, setupType, rule: 'SHORT_MORNING_ADVERSE_FLOW', priorBarDelta, barStale, adverseFlow, etMin: nowEtMin, wouldBeFlagged, checkedAt };
 }
 
 // Tags a real (ACTIVE/SHADOW) row, right after insert, with this candidate's own entry-order-
