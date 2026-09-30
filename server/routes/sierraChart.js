@@ -6,7 +6,7 @@ import express from 'express';
 import { query } from '../db.js';
 import { getClient, getStatus } from '../services/sierraChart/connectionManager.js';
 import { killSwitch, KILL_SWITCH_STATE_PATH } from '../services/sierraChart/orderEligibility.js';
-import { panicStopAppOrders, runReconciliation } from '../services/sierraChart/reconciliation.js';
+import { panicStopAppOrders, runReconciliation, cancelUnknownOrders } from '../services/sierraChart/reconciliation.js';
 import { resolveMnqFrontMonthSymbol } from '../services/sierraChart/contractSymbol.js';
 
 const router = express.Router();
@@ -75,6 +75,20 @@ router.get('/sierra-chart/reconcile', async (req, res) => {
     const contract = resolveMnqFrontMonthSymbol(todayQ.rows[0].today);
     const result = await runReconciliation(client, killSwitch, contract.orderSymbol, 'MANUAL');
     res.json(result.reconciliationReport);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/sierra-chart/cancel-unknown-orders -- cancels every order currently in a
+// FRESH reconciliation's unknownToApp list (never a caller-supplied/stale one). Only
+// ever touches orders this app genuinely never placed -- see cancelUnknownOrders()'s
+// own header for why that's safe by construction, not just by inspection.
+router.post('/sierra-chart/cancel-unknown-orders', async (req, res) => {
+  const client = getClient();
+  if (!client || !client.isLive()) return res.status(503).json({ error: 'DTC connection not live.' });
+  try {
+    res.json(await cancelUnknownOrders(client));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

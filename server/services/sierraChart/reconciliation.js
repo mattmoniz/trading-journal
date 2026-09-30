@@ -477,7 +477,14 @@ export function getBrokerSnapshot(dtcClient, { collectWindowMs = 4000 } = {}) {
   return new Promise((resolve) => {
     const openOrders = [];
     const positionMessages = [];
-    const onOrderUpdate = (msg) => { if (msg.OrderUpdateReason === 1) openOrders.push(msg); };
+    // msg.ServerOrderID must be truthy -- found live 2026-09-29: an OPEN_ORDERS_REQUEST
+    // response includes a terminator message (OrderUpdateReason=1, but ServerOrderID=""
+    // and every other field blank/default, likely Sierra Chart's own NoOrders-style "end
+    // of list" signal, mirroring s_PositionUpdate's NoPositions flag) that otherwise
+    // passed this filter and showed up as a phantom unknownToApp entry -- exactly the
+    // same "permanently blocks arming" risk as the 8 real stale orders this function was
+    // just used to clean up, just from a parsing gap instead of real broker clutter.
+    const onOrderUpdate = (msg) => { if (msg.OrderUpdateReason === 1 && msg.ServerOrderID) openOrders.push(msg); };
     const onPositionUpdate = (msg) => { positionMessages.push(msg); };
     dtcClient.on('orderUpdate', onOrderUpdate);
     dtcClient.on('positionUpdate', onPositionUpdate);
@@ -572,6 +579,31 @@ export async function checkPositionInvariant(dtcClient, killSwitch, symbol, snap
 export async function reconcileAgainstBroker(dtcClient, opts) {
   const snapshot = opts?.snapshot || await getBrokerSnapshot(dtcClient, opts);
   return buildReconciliationReport(snapshot.openOrders, snapshot.positionMessages.filter((p) => !p.NoPositions));
+}
+
+/**
+ * Cancel every order currently in the FRESHLY-refetched unknownToApp list (never a
+ * caller-supplied/stale one) -- the dashboard's own remediation action for that finding
+ * (found live 2026-09-29: 8 old, unrelated manual/ATM bracket orders on already-expired
+ * MNQ contracts on Sim1, predating this app, permanently tripping the reconciliation
+ * halt). Safe by construction, not just by inspection: `order_placements` always gets its
+ * row via `insertPendingOrder()` BEFORE the order ever reaches the broker (placeEntryOrder/
+ * placeStopOrder/placeExitOrder all follow this order), so a genuinely app-placed order can
+ * never appear in unknownToApp due to a timing race -- everything this cancels is, by the
+ * same logic that flagged it, something this app never placed.
+ */
+export async function cancelUnknownOrders(dtcClient) {
+  const report = await reconcileAgainstBroker(dtcClient);
+  const results = [];
+  for (const o of report.unknownToApp) {
+    try {
+      dtcClient.cancelOrder({ serverOrderId: o.ServerOrderID, clientOrderId: o.ClientOrderID || '' });
+      results.push({ serverOrderId: o.ServerOrderID, symbol: o.Symbol, sent: true });
+    } catch (err) {
+      results.push({ serverOrderId: o.ServerOrderID, symbol: o.Symbol, sent: false, error: err.message });
+    }
+  }
+  return { attemptedAt: new Date().toISOString(), count: results.length, results };
 }
 
 async function buildReconciliationReport(brokerOpenOrders, brokerPositions) {
