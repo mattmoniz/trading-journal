@@ -346,6 +346,7 @@
   <div id="page-tabs">
     <button data-ptab="timeline">Timeline</button>
     <button data-ptab="performance">Performance</button>
+    <button data-ptab="ml">ML</button>
     <button data-ptab="shadow">Shadow</button>
     <button data-ptab="blocked">Blocked</button>
   </div>
@@ -413,6 +414,36 @@
     <div id="range-stats" class="range-stats-row"></div>
     <canvas id="range-equity" class="equity"></canvas>
     <div id="range-agg" style="margin-top:14px;"><div class="loading">Loading…</div></div>
+  </div>
+
+  <!-- ML Performance tab (2026-10-04, user request: "add ML performance right before shadow
+       so i can access it there and see the trades it picks... I want the ML tab to be
+       displayed like the performance tab") -- same Today/Week/Month/Year/All range filter +
+       stats-row + equity-curve shape as #sec-performance above, applied to the ML
+       meta-labeling silo's two populations (All scored vs ML-Approved) instead of one
+       account. Was a "tap for full detail" modal before this; see renderMlTab()'s own header
+       comment in the script block below for the full history. RTH only, matches Performance
+       -- does not include the live Globex VETO gate's own scored candidates. -->
+  <div class="section-block" id="sec-ml" style="display:none">
+    <h2>ML Performance</h2>
+    <div style="font-size:11px;color:var(--dim);margin-bottom:8px;">Fully isolated -- never changes what fires as a real alert. Scored across every level individually (not collapsed to one cluster "winner"). Out-of-sample = genuinely never seen by the model during training, the only honest comparison.</div>
+    <div id="ml-tab-model-line" style="font-size:11px;color:var(--dim);margin-bottom:8px;"></div>
+    <div id="ml-tab-range-tabs" class="range-filter"></div>
+    <div id="ml-tab-range-label" class="range-label"></div>
+
+    <div class="perf-head-row">
+      <div class="perf-subhead" style="color:#3b82f6;">All Trades</div>
+    </div>
+    <div id="ml-tab-all-stats" class="range-stats-row"></div>
+
+    <div class="perf-head-row" style="margin-top:10px;">
+      <div class="perf-subhead" style="color:#c4b5fd;">ML-Approved</div>
+    </div>
+    <div id="ml-tab-take-stats" class="range-stats-row"></div>
+
+    <canvas id="ml-tab-canvas" class="equity" style="margin-top:10px;"></canvas>
+    <div id="ml-tab-step-trail" style="margin-top:14px;"></div>
+    <div id="ml-tab-trades" style="margin-top:10px;"></div>
   </div>
 </div>
 
@@ -871,46 +902,62 @@ async function loadFrozenModelIllustration() {
 // comparison aggregation here -- per the DeepSeek critique's explicit warning against
 // reimplementing this kind of aggregation twice across two frontend surfaces. Standalone
 // card removed 2026-09-24 (user request: consolidate into the "Models" section,
-// loadModelsTab()) -- the modal below is now opened from there instead of its own card.
+// loadModelsTab()) -- a "tap for full detail" link there used to open this as a modal;
+// promoted to its own permanent page tab (#sec-ml, "ML") 2026-10-04 (user request: "add ML
+// performance right before shadow so i can access it there") -- the modal's own HTML-string
+// construction was deleted outright (not left dead) since this is now its only consumer.
 
-// Range-filterable ML silo modal (2026-09-21, user request: "the same views as i see here
-// in this photo but for ML? With the charts pnl and different timeframes") -- mirrors the
-// main Performance section's Today/Week/Month/Year/All tabs + Wins/Losses/Net/Gross/Comm/
-// Worst-Trade stats row + equity curve, applied to two populations (All scored vs
-// ML-Approved) instead of one account. Backed by /api/ml-silo/range-trades, which returns
-// raw per-trade rows (like /api/setups/range-summary does) so this computes stats/curves
-// client-side -- same division of labor as the main Performance section.
-let mlSiloRange = 'today';
-let mlSiloTradesCache = [];
+// Range-filterable ML tab (originally built as a modal 2026-09-21, promoted to a permanent
+// page tab 2026-10-04) -- mirrors the main Performance section's Today/Week/Month/Year/All
+// tabs + Wins/Losses/Net/Gross/Comm/Worst-Trade stats row + equity curve, applied to two
+// populations (All scored vs ML-Approved) instead of one account. Backed by
+// /api/ml-silo/range-trades, which returns raw per-trade rows (like /api/setups/range-summary
+// does) so this computes stats/curves client-side -- same division of labor as the main
+// Performance section. RTH only (see mlSiloService.js's own GLOBEX_EXCLUSION_SQL header
+// comment) -- the real live ML VETO gate also scores Globex candidates (mlLiveVetoGate.js,
+// 6pm-10am ET), but that population isn't shown on this page.
+let mlTabRange = 'today';
+let mlTabTradesCache = [];
+let mlTabLoadedOnce = false;
 
-async function openMlSiloModal() {
-  let html = '<div class="m-head"><span class="m-title">ML Meta-Labeling Silo</span>' +
-    '<button class="m-close" onclick="closeTradeModal()">×</button></div>' +
-    '<div class="m-sub">Fully isolated -- never changes what fires as a real alert. Scored across every level individually (not collapsed to one cluster "winner"). Out-of-sample = genuinely never seen by the model during training, the only honest comparison.</div>' +
-    '<div id="ml-silo-model-line" style="font-size:11px;color:var(--dim);margin-top:6px;"></div>' +
-    '<div id="ml-silo-range-tabs" class="range-filter" style="margin-top:10px;"></div>' +
-    '<div id="ml-silo-range-label" style="font-size:11px;color:var(--dim);margin-top:4px;"></div>' +
-    '<canvas id="ml-silo-canvas" class="equity" style="margin-top:10px;"></canvas>' +
-    '<div style="font-size:11px;color:#3b82f6;font-weight:700;margin-top:10px;">All Trades</div>' +
-    '<div id="ml-silo-all-stats" class="range-stats-row"></div>' +
-    '<div style="font-size:11px;color:#c4b5fd;font-weight:700;margin-top:8px;">ML-Approved</div>' +
-    '<div id="ml-silo-take-stats" class="range-stats-row"></div>' +
-    '<div id="ml-silo-step-trail" style="margin-top:14px;"></div>' +
-    '<div id="ml-silo-trades" style="margin-top:10px;"></div>';
-  $('modal').innerHTML = html;
-  $('modal-backdrop').classList.add('open');
-  await loadMlSiloRange(mlSiloRange);
-  loadMlSiloStepTrail();
+function renderMlTabRangeTabs() {
+  const el = $('ml-tab-range-tabs');
+  if (!el) return;
+  el.innerHTML = [['today', 'Today'], ['week', 'Week'], ['month', 'Month'], ['year', 'Year'], ['all', 'All']].map(([val, label]) =>
+    '<button class="range-btn ' + (mlTabRange === val ? 'active' : '') + '" data-ml-range="' + val + '">' + label + '</button>'
+  ).join('');
+  el.querySelectorAll('button').forEach(b => b.addEventListener('click', () => loadMlTabRange(b.dataset.mlRange)));
+}
+
+async function loadMlTabRange(range) {
+  mlTabRange = range;
+  renderMlTabRangeTabs();
+  const statsEl = $('ml-tab-all-stats');
+  if (statsEl) statsEl.innerHTML = '<span style="color:var(--dim);">Loading…</span>';
+  try {
+    const data = await fetch('/api/ml-silo/range-trades?range=' + range + '&sample=test', { cache: 'no-store' }).then(r => r.json());
+    mlTabTradesCache = data?.trades || [];
+    mlTabLoadedOnce = true;
+    const modelEl = $('ml-tab-model-line');
+    if (modelEl) modelEl.textContent = data?.modelVersion ? data.modelVersion + ' (out-of-sample)' : 'No trained model yet.';
+    const labelEl = $('ml-tab-range-label');
+    if (labelEl) labelEl.textContent = data?.rangeLabel ? data.rangeLabel + ' — ' + mlTabTradesCache.length + ' scored candidate' + (mlTabTradesCache.length === 1 ? '' : 's') + ' (RTH only, matches Performance)' : '';
+    renderMlTabRangeView();
+    loadMlTabStepTrail();
+  } catch (e) {
+    if (statsEl) statsEl.textContent = 'Failed to load.';
+  }
 }
 
 // "ML gates entry, a validated trail mechanism decides how far to let it run" -- the
 // coupling step (2026-09-21, user's explicit "next step" request). NEITHER piece is
 // individually validated yet (this model's own walk-forward CI crosses zero; step_trail_
 // shadow's own RESEARCH_CLAIM is PROVISIONAL) -- shown here purely as a research
-// comparison, clearly labeled, never as a claim either mechanism is ready. Fetched once per
-// modal open, not range-scoped (the underlying population is already thin, N<30).
-async function loadMlSiloStepTrail() {
-  const el = $('ml-silo-step-trail');
+// comparison, clearly labeled, never as a claim either mechanism is ready. Not range-scoped
+// (the underlying population is already thin, N<30) -- refetched on every range-tab click
+// anyway since it's cheap, just to keep behavior simple.
+async function loadMlTabStepTrail() {
+  const el = $('ml-tab-step-trail');
   if (!el) return;
   try {
     const data = await fetch('/api/ml-silo/step-trail-comparison?sample=test', { cache: 'no-store' }).then(r => r.json());
@@ -925,31 +972,12 @@ async function loadMlSiloStepTrail() {
   } catch (e) { el.innerHTML = ''; }
 }
 
-function renderMlSiloRangeTabs() {
-  const el = $('ml-silo-range-tabs');
-  if (!el) return;
-  el.innerHTML = [['today', 'Today'], ['week', 'Week'], ['month', 'Month'], ['year', 'Year'], ['all', 'All']].map(([val, label]) =>
-    '<button class="range-btn ' + (mlSiloRange === val ? 'active' : '') + '" data-ml-range="' + val + '">' + label + '</button>'
-  ).join('');
-  el.querySelectorAll('button').forEach(b => b.addEventListener('click', () => loadMlSiloRange(b.dataset.mlRange)));
-}
-
-async function loadMlSiloRange(range) {
-  mlSiloRange = range;
-  renderMlSiloRangeTabs();
-  const statsEl = $('ml-silo-all-stats');
-  if (statsEl) statsEl.innerHTML = '<span style="color:var(--dim);">Loading…</span>';
-  try {
-    const data = await fetch('/api/ml-silo/range-trades?range=' + range + '&sample=test', { cache: 'no-store' }).then(r => r.json());
-    mlSiloTradesCache = data?.trades || [];
-    const modelEl = $('ml-silo-model-line');
-    if (modelEl) modelEl.textContent = data?.modelVersion ? data.modelVersion + ' (out-of-sample)' : 'No trained model yet.';
-    const labelEl = $('ml-silo-range-label');
-    if (labelEl) labelEl.textContent = data?.rangeLabel ? data.rangeLabel + ' — ' + mlSiloTradesCache.length + ' scored candidate' + (mlSiloTradesCache.length === 1 ? '' : 's') + ' (RTH only, matches Performance)' : '';
-    renderMlSiloRangeView();
-  } catch (e) {
-    if (statsEl) statsEl.textContent = 'Failed to load.';
-  }
+// Pure re-render of already-fetched data, matching renderPerformance()/renderTimeline()'s
+// own convention for switchPageTab() -- fetches only on first visit to this tab (or if
+// somehow switched to before the background poll's first tick), never on every switch.
+function renderMlTab() {
+  if (!mlTabLoadedOnce) { loadMlTabRange(mlTabRange); return; }
+  renderMlTabRangeView();
 }
 
 // Deliberately does NOT filter is_cluster_primary -- see getRangeTrades()'s own header
@@ -1058,17 +1086,19 @@ function renderMlSiloRangeEquityChart(canvasId, allTrades, takeTrades, range) {
   ctx.fillStyle = '#c4b5fd'; ctx.fillText('● ML-Approved', padL + 70, 12);
 }
 
-function renderMlSiloRangeView() {
-  const all = mlSiloTradesCache;
-  const take = mlSiloTradesCache.filter(t => t.ml_verdict === 'TAKE');
-  renderMlStatsRow('ml-silo-all-stats', all);
-  renderMlStatsRow('ml-silo-take-stats', take);
-  renderMlSiloRangeEquityChart('ml-silo-canvas', all, take, mlSiloRange);
-  renderMlSiloTradeList(all.slice().sort((a, b) => (b.fired_at_str || '').localeCompare(a.fired_at_str || '')).slice(0, 15));
+function renderMlTabRangeView() {
+  const all = mlTabTradesCache;
+  const take = mlTabTradesCache.filter(t => t.ml_verdict === 'TAKE');
+  renderMlStatsRow('ml-tab-all-stats', all);
+  renderMlStatsRow('ml-tab-take-stats', take);
+  renderMlSiloRangeEquityChart('ml-tab-canvas', all, take, mlTabRange);
+  // 30, not the old modal's 15 -- a permanent full-width tab has room to show more of what
+  // the user asked to see ("the trades it picks"), not just a cramped preview.
+  renderMlSiloTradeList('ml-tab-trades', all.slice().sort((a, b) => (b.fired_at_str || '').localeCompare(a.fired_at_str || '')).slice(0, 30));
 }
 
-function renderMlSiloTradeList(trades) {
-  const el = $('ml-silo-trades');
+function renderMlSiloTradeList(containerId, trades) {
+  const el = $(containerId);
   if (!el) return;
   if (!trades.length) { el.innerHTML = ''; return; }
   const fmtD = n => (n < 0 ? '-$' : '$') + Math.abs(n).toFixed(0);
@@ -3296,7 +3326,7 @@ async function loadModelsTab() {
       const trades = rangeData?.trades || [];
       const takeTrades = trades.filter(t => t.ml_verdict === 'TAKE');
       renderMlSiloRangeEquityChart('models-history-canvas', trades, takeTrades, 'all');
-      detail.innerHTML = explainerHtml + '<div style="cursor:pointer;color:var(--dim);" onclick="openMlSiloModal()">tap for full detail (range filters, trade list) →</div>';
+      detail.innerHTML = explainerHtml + '<div style="cursor:pointer;color:var(--dim);" onclick="switchPageTab(\'ml\')">tap for full detail (range filters, trade list) →</div>';
     } catch (e) { detail.innerHTML = explainerHtml + '<div>Failed to load</div>'; }
   } else if (modelsTab === 'propensity') {
     if (canvasEl) canvasEl.style.display = 'none';
@@ -3480,10 +3510,11 @@ document.addEventListener('click', (e) => {
 // (like the collapse state it replaces) -- pure navigation state, never hides real data within
 // a view the way performanceFilter/clusterView/liveAllFilter's OWN persistence used to (that's
 // why those are forced-default/not persisted, and this is different).
-let pageTab = ['performance', 'shadow', 'blocked'].includes(localStorage.getItem('pageTab')) ? localStorage.getItem('pageTab') : 'timeline';
+let pageTab = ['performance', 'ml', 'shadow', 'blocked'].includes(localStorage.getItem('pageTab')) ? localStorage.getItem('pageTab') : 'timeline';
 function applyPageTab() {
   $('tab-panel-timeline').style.display = pageTab === 'timeline' ? '' : 'none';
   $('sec-performance').style.display = pageTab === 'performance' ? '' : 'none';
+  $('sec-ml').style.display = pageTab === 'ml' ? '' : 'none';
   $('tab-panel-shadow').style.display = pageTab === 'shadow' ? '' : 'none';
   $('tab-panel-blocked').style.display = pageTab === 'blocked' ? '' : 'none';
   // Shared Live/All + Clustered/Declustered toggle only applies to Timeline/Performance --
@@ -3509,6 +3540,7 @@ function switchPageTab(tab) {
   // extra network request.
   if (tab === 'timeline') renderTimeline();
   else if (tab === 'performance') renderPerformance();
+  else if (tab === 'ml') renderMlTab();
   else if (tab === 'shadow') renderShadowTab();
   else if (tab === 'blocked') renderBlockedTab();
   $('nav-menu').classList.remove('open');
@@ -3571,6 +3603,10 @@ setInterval(loadTimeline, 20000);
 setInterval(() => loadRange(currentRange), 60000);
 setInterval(loadVolRegime, 300000);
 setInterval(loadModelsTab, 300000);
+// Same 5-minute cadence as loadModelsTab/loadVolRegime (this data isn't second-to-second --
+// scored candidates, not live price) -- matches loadModelsTab's own "poll regardless of
+// which tab is visible" convention rather than gating on pageTab==='ml'.
+setInterval(() => loadMlTabRange(mlTabRange), 300000);
 setInterval(loadPulseReading, 60000);
 setInterval(checkFlagsBanner, 300000);
 
