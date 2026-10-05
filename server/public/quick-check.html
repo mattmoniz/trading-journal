@@ -348,7 +348,6 @@
     <button data-ptab="performance">Performance</button>
     <button data-ptab="ml">ML</button>
     <button data-ptab="shadow">Shadow</button>
-    <button data-ptab="blocked">Blocked</button>
   </div>
   <div id="shared-filter-row">
     <div id="liveall-toggle" class="perf-toggle"></div>
@@ -383,20 +382,10 @@
     </div>
     <div id="shadow-body">
       <div id="shadow-stats"></div>
+      <div style="margin:8px 0 10px;"><div id="shadow-reason-toggle" class="perf-toggle" style="flex-wrap:wrap;border-radius:6px;"></div></div>
       <div id="shadow-list"><div class="loading">Loading…</div></div>
     </div>
   </div>
-  <div id="tab-panel-blocked" style="display:none">
-    <div class="tab-head">
-      <h2 id="blocked-title">Blocked</h2>
-      <div id="blocked-view-toggle" class="perf-toggle"></div>
-    </div>
-    <div id="blocked-body">
-      <div id="blocked-stats"></div>
-      <div id="blocked-list"><div class="loading">Loading…</div></div>
-    </div>
-  </div>
-
   <div class="section-block" id="sec-performance">
     <h2>Performance</h2>
     <div id="range-filter" class="range-filter">
@@ -1134,11 +1123,23 @@ async function loadPulse() {
 // getOpenStandalonePosition()'s own header (acdShared.js) for why this exists. Deliberately
 // a SEPARATE card from #setup-card (that one is the main level-fade engine's own "active"
 // winner, a different mechanism entirely) so the two never get conflated.
+// Dismiss (2026-10-05, user request), keyed by the position's own trade id so the next real position
+// shows again. Same pattern as the setup card's dismissSetupCard(). SHADOW positions never show here
+// (user request 2026-10-05): this card is for real ACTIVE positions only.
+let standaloneCardDismissedId = localStorage.getItem('standaloneCardDismissedId');
+function dismissStandalonePositionCard(id) {
+  standaloneCardDismissedId = String(id);
+  localStorage.setItem('standaloneCardDismissedId', standaloneCardDismissedId);
+  const el = $('standalone-position-card');
+  if (el) { el.className = ''; el.innerHTML = ''; }
+}
 function renderStandalonePositionCard(setupData) {
   const el = $('standalone-position-card');
   if (!el) return;
   const pos = setupData?.openStandalonePosition;
-  if (!pos) { el.className = ''; el.innerHTML = ''; return; }
+  if (!pos || pos.origin_status !== 'ACTIVE' || (pos.id != null && String(pos.id) === standaloneCardDismissedId)) {
+    el.className = ''; el.innerHTML = ''; return;
+  }
   el.className = 'visible';
   const entry = pos.entry ?? pos.entry_high;
   const fmtP = n => n == null ? '--' : Math.round(n);
@@ -1146,7 +1147,8 @@ function renderStandalonePositionCard(setupData) {
   // the Session Timeline's own open-row badge -- falls back to nothing shown if a live price
   // isn't available yet, never a fabricated number.
   const isLong = isLongSetupType(pos.setup_type);
-  const openPnl = openPnlEstimate(entry, isLong);
+  // A cluster sibling whose resting entry never traded is not a position yet -- no P&L (2026-10-05).
+  const openPnl = pos.entry_filled === false ? null : openPnlEstimate(entry, isLong);
   const pnlHtml = openPnl == null ? '' :
     '<span class="setup-time mono" style="color:' + (openPnl >= 0 ? 'var(--green)' : 'var(--red)') + '">' +
     (openPnl >= 0 ? '+$' : '-$') + Math.abs(openPnl).toFixed(0) + '</span>';
@@ -1156,12 +1158,13 @@ function renderStandalonePositionCard(setupData) {
     '<span class="setup-type" style="color:var(--amber)">' + (pos.setup_type || '').replace(/_/g, ' ') + '</span>' +
     '<span class="setup-shadow-tag">BACKGROUND ONLY — NOT LIVE</span>' +
     pnlHtml +
-    '<span class="setup-time mono">fired ' + (pos.fired_at ? pos.fired_at.slice(11, 16) : '') + ' ET</span>' +
+    '<span class="setup-time mono" style="margin-left:auto;cursor:pointer;padding:0 6px;font-size:16px" title="Dismiss" onclick="dismissStandalonePositionCard(' + pos.id + ')">×</span>' +
     '</div>' +
     '<div class="setup-grid">' +
     '<span class="k">Entry <b class="mono" style="color:var(--text)">' + fmtP(entry) + '</b></span>' +
     '<span class="k">Stop <b class="mono" style="color:var(--red)">' + fmtP(pos.stop) + '</b></span>' +
     '<span class="k">Target <b class="mono" style="color:var(--green)">' + fmtP(pos.target) + '</b></span>' +
+    '<span class="k">Fired <b class="mono" style="color:var(--text)">' + (pos.fired_at ? pos.fired_at.slice(11, 16) : '--') + ' ET</b></span>' +
     '</div>';
 }
 
@@ -1504,11 +1507,8 @@ let liveAllFilter = 'live'; // 'live' | 'all'
 // 2026-09-25 user request) = every confluence-cluster sibling counted as its own trade too --
 // see getDecidedRows()'s header comment for the full incident this exists to prevent.
 let clusterView = 'declustered'; // 'collapsed' | 'declustered'
-// Blocked tab view mode (2026-09-29, user request: grouped-by-reason totals). In-session only,
-// never persisted -- matches this file's own standing "no localStorage on a display filter"
-// convention (a stale 'reason' value hiding the list would be the exact bug class the
-// tagFilter/performanceFilter/clusterView fixes already exist to prevent).
-let blockedViewMode = 'list'; // 'list' | 'reason'
+// Shadow tab reason filter: in-session only, never persisted (same convention as clusterView).
+let shadowReasonFilter = 'ALL';
 
 async function loadTimeline() {
   try {
@@ -1523,7 +1523,6 @@ async function loadTimeline() {
     // whichever of those is actually active AFTER renderTimeline(), so its own timelineRows
     // assignment wins last.
     if (pageTab === 'shadow') renderShadowTab();
-    else if (pageTab === 'blocked') renderBlockedTab();
     renderSweepWatch();
   } catch (e) { /* keep last good render */ }
 }
@@ -1862,8 +1861,9 @@ function renderTimeline() {
     // Unrealized P&L on the "open" badge itself (2026-09-22, user request), same inline-not-
     // hidden-behind-a-tap convention as everything else on this row. Falls back to plain
     // "open" if a live price isn't available yet -- never shows a fabricated number.
-    const openPnl = isOpen ? openPnlEstimate(s.entry_zone_low, isLong) : null;
-    const badgeText = isOpen ? (openPnl == null ? 'open' : (openPnl >= 0 ? '+$' : '-$') + Math.abs(openPnl).toFixed(0)) :
+    // Unfilled cluster sibling (server flag entry_filled, 2026-10-05): no P&L, labelled honestly.
+    const openPnl = isOpen && s.entry_filled !== false ? openPnlEstimate(s.entry_zone_low, isLong) : null;
+    const badgeText = isOpen ? (s.entry_filled === false ? 'pending fill' : openPnl == null ? 'open' : (openPnl >= 0 ? '+$' : '-$') + Math.abs(openPnl).toFixed(0)) :
       isTrail ? (isWin ? 'Trail ✓' : 'Trail ✗') :
       isWin ? 'T1 ✓' : isLoss ? 'Stop ✗' :
       (s.resolution === 'TIME_EXPIRED' || s.resolution === 'SESSION_CLOSED') ? 'expired' :
@@ -2043,35 +2043,7 @@ function abbrevReasonCode(s) {
   return 'NO_REASON_RECORDED';
 }
 
-function renderBlockedReasonGroups(rows) {
-  const byReason = {};
-  for (const s of rows) {
-    const reason = abbrevReasonCode(s);
-    if (!byReason[reason]) byReason[reason] = { total: 0, bySetup: {} };
-    byReason[reason].total++;
-    byReason[reason].bySetup[s.setup_type] = (byReason[reason].bySetup[s.setup_type] || 0) + 1;
-  }
-  const sorted = Object.entries(byReason).sort((a, b) => b[1].total - a[1].total);
-  if (!sorted.length) return '<div class="loading">Nothing blocked yet this session</div>';
-  return sorted.map(([reason, data]) => {
-    const setups = Object.entries(data.bySetup).sort((a, b) => b[1] - a[1]);
-    const setupRows = setups.map(([setup, count]) =>
-      '<div class="row" style="padding:4px 12px 4px 30px;">' +
-        '<span class="type" style="flex:1;">' + setup.replace(/_/g, ' ') + '</span>' +
-        '<span class="mono" style="color:var(--dim);">' + count + '</span>' +
-      '</div>'
-    ).join('');
-    return '<details style="border-bottom:1px solid var(--border);">' +
-      '<summary style="padding:8px 12px;cursor:pointer;display:flex;justify-content:space-between;align-items:center;list-style:none;">' +
-        '<span class="mono" style="font-size:12px;">' + reason + '</span>' +
-        '<b class="mono">' + data.total + '</b>' +
-      '</summary>' +
-      setupRows +
-    '</details>';
-  }).join('');
-}
-
-function shadowBlockedRowHtml(s, showReason) {
+function shadowRowHtml(s) {
   const rowPnl = s.actual_pnl != null ? parseFloat(s.actual_pnl) : null;
   const isOpen = s.status === 'SHADOW' || s.status === 'ACTIVE';
   const isWin = isWinRow(s), isLoss = isLossRow(s);
@@ -2082,53 +2054,40 @@ function shadowBlockedRowHtml(s, showReason) {
   const time = s.fired_at_str ? s.fired_at_str.slice(11, 16) : '';
   const timeLabel = to12Hour(time);
   const price = s.entry_zone_low != null ? '@ ' + Number(s.entry_zone_low).toLocaleString(undefined, {maximumFractionDigits: 0}) : '';
-  const reasonLine = showReason
-    ? '<div class="row-reason" style="padding:2px 12px 8px 30px;font-size:11px;color:var(--dim);line-height:1.4;">' + blockedReasonText(s) + '</div>'
-    : '';
   return '<div class="row" onclick="openTradeModal(' + s.id + ')" style="flex-wrap:wrap;">' +
     '<span class="rdot" style="background:' + dotColor + '"></span>' +
     '<span class="time mono">' + timeLabel + '</span>' +
     '<span class="type">' + (s.setup_type || '').replace(/_/g, ' ') + '</span>' +
     '<span class="price mono">' + price + '</span>' +
     '<span class="badge ' + badgeClass + '">' + badgeText + '</span>' +
-    reasonLine +
     '</div>';
 }
 
+function setShadowReasonFilter(v) {
+  shadowReasonFilter = v;
+  renderShadowTab();
+}
+
 function renderShadowTab() {
-  const rows = getShadowRows();
-  timelineRows = rows;
-  const stats = computeRangeStats(rows, true);
-  $('shadow-title').textContent = 'Shadow (' + rows.length + ')';
+  const all = getShadowRows();
+  const counts = {};
+  for (const r of all) { const c = abbrevReasonCode(r); counts[c] = (counts[c] || 0) + 1; }
+  if (shadowReasonFilter !== 'ALL' && !counts[shadowReasonFilter]) shadowReasonFilter = 'ALL';
+  const rows = shadowReasonFilter === 'ALL' ? all : all.filter(r => abbrevReasonCode(r) === shadowReasonFilter);
+  timelineRows = all;
+  const stats = computeRangeStats(all, true);
+  $('shadow-title').textContent = 'Shadow (' + all.length + ')';
   $('shadow-stats').innerHTML =
-    '<span>N <b class="mono">' + rows.length + '</b></span>' +
+    '<span>N <b class="mono">' + all.length + '</b></span>' +
     '<span>Wins <b style="color:var(--green)">' + stats.wins + '</b></span>' +
     '<span>Losses <b style="color:var(--red)">' + stats.losses + '</b></span>' +
     '<span>Net (hypothetical) <b style="color:' + (stats.netPnl >= 0 ? 'var(--green)' : 'var(--red)') + '">' + (stats.netPnl >= 0 ? '+' : '') + '$' + stats.netPnl.toFixed(0) + '</b></span>';
+  const reasonOptions = [['ALL', 'All (' + all.length + ')']].concat(
+    Object.entries(counts).sort((a, b) => b[1] - a[1]).map(([code, n]) => [code, code.replace(/_/g, ' ') + ' (' + n + ')']));
+  renderToggle('shadow-reason-toggle', reasonOptions, shadowReasonFilter, setShadowReasonFilter);
   $('shadow-list').innerHTML = rows.length
-    ? rows.map(s => shadowBlockedRowHtml(s, false)).join('')
-    : '<div class="loading">No shadow-tracked touches yet this session</div>';
-}
-
-function setBlockedViewMode(v) {
-  blockedViewMode = v;
-  renderBlockedTab();
-}
-
-function renderBlockedTab() {
-  const rows = getShadowRows();
-  timelineRows = rows;
-  const stats = computeRangeStats(rows, true);
-  $('blocked-title').textContent = 'Blocked (' + rows.length + ')';
-  renderToggle('blocked-view-toggle', [['list', 'List'], ['reason', 'By Reason']], blockedViewMode, setBlockedViewMode);
-  $('blocked-stats').innerHTML =
-    '<span>N <b class="mono">' + rows.length + '</b></span>' +
-    '<span>Wins <b style="color:var(--green)">' + stats.wins + '</b></span>' +
-    '<span>Losses <b style="color:var(--red)">' + stats.losses + '</b></span>' +
-    '<span>Net (hypothetical) <b style="color:' + (stats.netPnl >= 0 ? 'var(--green)' : 'var(--red)') + '">' + (stats.netPnl >= 0 ? '+' : '') + '$' + stats.netPnl.toFixed(0) + '</b></span>';
-  $('blocked-list').innerHTML = blockedViewMode === 'reason'
-    ? renderBlockedReasonGroups(rows)
-    : (rows.length ? rows.map(s => shadowBlockedRowHtml(s, true)).join('') : '<div class="loading">Nothing blocked yet this session</div>');
+    ? rows.map(s => shadowRowHtml(s)).join('')
+    : '<div class="loading">' + (all.length ? 'No shadow touches for this reason' : 'No shadow-tracked touches yet this session') + '</div>';
 }
 
 // Cluster group popup (2026-09-14) -- tap target for the 🔗 tag above. Lists every real row
@@ -2335,6 +2294,10 @@ function openTradeModal(id) {
     '<button class="m-close" onclick="closeTradeModal()">×</button></div>';
   html += '<div class="m-sub">' + (isRthAdjacent(s) ? 'RTH' : 'Overnight/Globex') + ' · ' + (s.origin_status || 'UNKNOWN') + ' · id ' + s.id + '</div>';
 
+  if (s.origin_status === 'SHADOW') {
+    html += mSection('Why it did not fire live');
+    html += '<div style="padding:4px 0 8px;font-size:12px;color:var(--dim);line-height:1.45;">' + blockedReasonText(s) + '</div>';
+  }
   html += mSection('Outcome');
   html += mRow('Resolution', s.resolution, color);
   html += mRow('Method', s.resolution_method);
@@ -3484,13 +3447,12 @@ document.addEventListener('click', (e) => {
 // (like the collapse state it replaces) -- pure navigation state, never hides real data within
 // a view the way performanceFilter/clusterView/liveAllFilter's OWN persistence used to (that's
 // why those are forced-default/not persisted, and this is different).
-let pageTab = ['performance', 'ml', 'shadow', 'blocked'].includes(localStorage.getItem('pageTab')) ? localStorage.getItem('pageTab') : 'timeline';
+let pageTab = ['performance', 'ml', 'shadow'].includes(localStorage.getItem('pageTab')) ? localStorage.getItem('pageTab') : 'timeline';
 function applyPageTab() {
   $('tab-panel-timeline').style.display = pageTab === 'timeline' ? '' : 'none';
   $('sec-performance').style.display = pageTab === 'performance' ? '' : 'none';
   $('sec-ml').style.display = pageTab === 'ml' ? '' : 'none';
   $('tab-panel-shadow').style.display = pageTab === 'shadow' ? '' : 'none';
-  $('tab-panel-blocked').style.display = pageTab === 'blocked' ? '' : 'none';
   // Shared Live/All + Clustered/Declustered toggle only applies to Timeline/Performance --
   // Shadow/Blocked are ALWAYS the full SHADOW population (every real touch that never became a
   // live trade, siblings included), unconditionally, since the whole point of these two tabs is
@@ -3510,13 +3472,12 @@ function switchPageTab(tab) {
   // last render happened before this tab was ever switched to. Switching display alone doesn't
   // retrigger a redraw, so the chart stayed broken until some OTHER trigger (a poll, a window
   // resize) happened to fire afterward. renderTimeline()/renderPerformance()/renderShadowTab()/
-  // renderBlockedTab() are all pure re-renders of already-fetched data -- safe to call here, no
+  // renderMlTab() are all pure re-renders of already-fetched data -- safe to call here, no
   // extra network request.
   if (tab === 'timeline') renderTimeline();
   else if (tab === 'performance') renderPerformance();
   else if (tab === 'ml') renderMlTab();
   else if (tab === 'shadow') renderShadowTab();
-  else if (tab === 'blocked') renderBlockedTab();
   $('nav-menu').classList.remove('open');
   // Deliberately no scrollIntoView here (2026-09-28, user report: "it keeps scrolling down" --
   // the tab buttons are already on screen when tapped, so force-scrolling back to them on every

@@ -1,19 +1,33 @@
 #!/bin/bash
 cd /home/mmoniz/trading-journal
+
+# Step runner (2026-10-05): the chain has no `set -e`, so a failing step used to go unnoticed
+# while the run still printed "complete". Each step now records its exit status; any failure
+# is listed at the end and makes the script exit non-zero.
+FAILED_STEPS=()
+run() {
+  "$@"
+  local rc=$?
+  if [ $rc -ne 0 ]; then
+    echo "!!! STEP FAILED (exit $rc): $*"
+    FAILED_STEPS+=("$*")
+  fi
+  return 0
+}
 echo "=== Weekly backtest run: $(date) ==="
 
 # --- Core calibration pipeline (order matters: unified → stops → status) ---
-/usr/bin/node scripts/backtest_unified.js
-/usr/bin/node scripts/backfill_mae_mfe.mjs
-/usr/bin/node scripts/update_optimal_stops.mjs
-/usr/bin/node scripts/backtest_day_type_alpha.js
-/usr/bin/node scripts/backtest_pulse_score.mjs
-/usr/bin/node scripts/backtest_setup_status.mjs
+run /usr/bin/node scripts/backtest_unified.js
+run /usr/bin/node scripts/backfill_mae_mfe.mjs
+run /usr/bin/node scripts/update_optimal_stops.mjs
+run /usr/bin/node scripts/backtest_day_type_alpha.js
+run /usr/bin/node scripts/backtest_pulse_score.mjs
+run /usr/bin/node scripts/backtest_setup_status.mjs
 
 # --- bet_class aggregation layer (roster-rebuild roadmap Phase 1, I3) — real N grows
 # slowly, weekly is the right cadence (unlike per-type SUPPRESS/PROMOTE above, which
 # needs daily). See scripts/backtest_bet_class_status.mjs's own header. ---
-/usr/bin/node scripts/backtest_bet_class_status.mjs
+run /usr/bin/node scripts/backtest_bet_class_status.mjs
 
 # --- Bet_class Phase 2 Stage 1 resweeps (roadmap Phase 2 + extension) — both self-
 # recalibrating, not one-offs: as real N grows, the walk-forward gets less thin and
@@ -22,15 +36,15 @@ echo "=== Weekly backtest run: $(date) ==="
 # stage1_backtest). CONTINUATION_LEGACY: SHIP_CALIBRATED but also not rigor-clean yet
 # (RESEARCH_CLAIM continuation_legacy_bet_class_phase2_stage1_backtest) — both 30-day
 # recheck. ---
-/usr/bin/node scripts/backtest_value_fade_bet_class_phase2.mjs
-/usr/bin/node scripts/backtest_continuation_legacy_bet_class_phase2.mjs
+run /usr/bin/node scripts/backtest_value_fade_bet_class_phase2.mjs
+run /usr/bin/node scripts/backtest_continuation_legacy_bet_class_phase2.mjs
 # GLOBEX_LEVEL (roadmap Phase 7, Setup F consolidation) resweep, same
 # betClassPhase2Resweep.mjs methodology as the two lines above -- found missing from this
 # cron file during Phase 8 cleanup (2026-08-11), a real gap: the script existed and had
 # already been run once manually, but was never wired in, so it would never self-recalibrate
 # per this file's own standing "cron scripts with genuinely open findings" rule. Currently
 # SHIP_FLAT, thin, not rigor-clean (RESEARCH_CLAIM globex_level_bet_class_phase7_stage1_backtest).
-/usr/bin/node scripts/backtest_globex_level_bet_class_phase7.mjs
+run /usr/bin/node scripts/backtest_globex_level_bet_class_phase7.mjs
 
 # Correlation monitor (roadmap Phase 8, I5, 2026-08-11) -- pairwise Pearson r on
 # overlapping-real-trading-days-only daily P&L, both bet_class-level and (restricted to
@@ -39,49 +53,49 @@ echo "=== Weekly backtest run: $(date) ==="
 # cadence table (Part 4's own "Daily job" line disagrees with Part 6.5 within the same
 # document -- resolved weekly, see this script's own header for the full reasoning,
 # confirmed by DeepSeek design critique before being built).
-/usr/bin/node scripts/monitor_bet_correlation.mjs
+run /usr/bin/node scripts/monitor_bet_correlation.mjs
 
 # --- Touch-quality (order-flow) calibration — feeds acd.js's live resolveSetupsByPrice
 # classification (informational-only mid-trade flag) and the antigravity/edges-context
 # card badge. See server/services/touchQuality.js and docs/OPEN_THREADS.md. ---
-/usr/bin/node scripts/calibrate_touch_quality.mjs
+run /usr/bin/node scripts/calibrate_touch_quality.mjs
 
 # --- Conditional-variant backtests (maintain population stats for setup type overrides) ---
-/usr/bin/node scripts/backtest_wpp_short_gap.mjs
-/usr/bin/node scripts/backtest_or5_low_gap_down.mjs
-/usr/bin/node scripts/backtest_momentum60_daytype.mjs
-/usr/bin/node scripts/backtest_ib_daytype_stop_target.mjs
+run /usr/bin/node scripts/backtest_wpp_short_gap.mjs
+run /usr/bin/node scripts/backtest_or5_low_gap_down.mjs
+run /usr/bin/node scripts/backtest_momentum60_daytype.mjs
+run /usr/bin/node scripts/backtest_ib_daytype_stop_target.mjs
 # Breakeven-then-trail trail-width calibration for FLOOR_R1_FADE_SHORT_TRAIL (and any of
 # the other 5 backtested survivors once they're wired live) — see
 # docs/SCALEOUT_RUNNER_SPEC.md. Writes performance_audit signal_type='BREAKEVEN_TRAIL_TEST',
 # read live by acd.js at insert time (never hardcode the trail width).
-/usr/bin/node scripts/backtest_breakeven_trail.mjs
+run /usr/bin/node scripts/backtest_breakeven_trail.mjs
 # Day-type-conditioned breakeven-then-trail test for IB_BULLISH/IB_BEARISH (resolves
 # extend_be_trail_to_bad_rr_live_setups) — 0/5 day-type buckets survived as of 2026-08-03
 # (RESEARCH_CLAIM ib_daytype_be_trail_no_survivor), kept scheduled so it self-recalibrates
 # as real ACTIVE/SHADOW-origin IB trades accumulate, same convention as every other
 # calibration in this file — never a dead end just because the first run was negative.
-/usr/bin/node scripts/backtest_ib_daytype_breakeven_trail.mjs
+run /usr/bin/node scripts/backtest_ib_daytype_breakeven_trail.mjs
 
 # --- Context + anticipation pipelines ---
-/usr/bin/node scripts/backtest_permission_slips.mjs
-/usr/bin/node scripts/backtest_level_approach.js
-/usr/bin/node scripts/calibrate_touch_orderflow_pressure.mjs
+run /usr/bin/node scripts/backtest_permission_slips.mjs
+run /usr/bin/node scripts/backtest_level_approach.js
+run /usr/bin/node scripts/calibrate_touch_orderflow_pressure.mjs
 # Monday override stats — used live in acd.js keepLevels for MON_BACKTEST signal_type
-/usr/bin/node scripts/backtest_monday_deep.js
+run /usr/bin/node scripts/backtest_monday_deep.js
 
 # --- Audit pipelines ---
-/usr/bin/node scripts/level_fade_audit.mjs
-/usr/bin/node scripts/audit_mae_mfe.mjs
+run /usr/bin/node scripts/level_fade_audit.mjs
+run /usr/bin/node scripts/audit_mae_mfe.mjs
 # Wider-target-on-fast-resolving-trades mechanism (docs/OPEN_THREADS.md 2026-08-17) --
 # closed-loop recheck of the SHADOW mechanism's real live outcomes vs. the frozen
 # one-time backtest (RESEARCH_CLAIM velocity_fast_wider_target_positive_provisional).
-/usr/bin/node scripts/audit_wider_target_live.mjs
+run /usr/bin/node scripts/audit_wider_target_live.mjs
 # 2D_POC/PD2_VAH/PD2_VAL confirmed-negative-EV recheck (RESEARCH_CLAIM 2d_poc_fade_no_edge)
 # — also writes real SETUP_STATUS rows so the live unified suppression pipeline stays
 # correctly gated even though these types have ~0 real active_setups history for
 # backtest_setup_status.mjs to otherwise pick up. See docs/OPEN_THREADS.md 2026-07-19.
-/usr/bin/node scripts/backtest_pd2_2dpoc_complete.mjs
+run /usr/bin/node scripts/backtest_pd2_2dpoc_complete.mjs
 
 # VWAP reclaim-and-hold Phase 1 (RTH + Globex), 2026-08-04 — RESEARCH_CLAIM
 # vwap_reclaim_hold_k{1,2,3}_{long,short}_phase1 (RTH) and _globex_ variants (overnight).
@@ -93,23 +107,23 @@ echo "=== Weekly backtest run: $(date) ==="
 # scan_regime_combinations.mjs already uses below. Both scripts are read-only against
 # price_bars_primary plus a recordClaim() upsert -- no DROP/DELETE/backup side effects,
 # safe to rerun unattended.
-/usr/bin/node scripts/backtest_vwap_reclaim_hold_phase1.mjs
-/usr/bin/node scripts/backtest_vwap_reclaim_hold_globex_phase1.mjs
+run /usr/bin/node scripts/backtest_vwap_reclaim_hold_phase1.mjs
+run /usr/bin/node scripts/backtest_vwap_reclaim_hold_globex_phase1.mjs
 
 # --- Session-bias / edge-mining pipelines (feed antigravity/edges-context cards) ---
 # mine_session_bias.mjs also runs daily via server/index.js cron; re-running here weekly
 # is harmless (idempotent DELETE+INSERT) and keeps it covered if that cron ever stalls.
-/usr/bin/node scripts/mine_session_bias.mjs
-/usr/bin/node scripts/backtest_ib_retest.mjs
-/usr/bin/node scripts/backtest_gap_fill.mjs
-/usr/bin/node scripts/backtest_v_pattern.mjs
-/usr/bin/node scripts/edge_miner.mjs
+run /usr/bin/node scripts/mine_session_bias.mjs
+run /usr/bin/node scripts/backtest_ib_retest.mjs
+run /usr/bin/node scripts/backtest_gap_fill.mjs
+run /usr/bin/node scripts/backtest_v_pattern.mjs
+run /usr/bin/node scripts/edge_miner.mjs
 
 # --- Independent research scanners (not level-touch based, tracked forward regardless of current profitability) ---
-/usr/bin/node scripts/backtest_minute_bar_scan.mjs
+run /usr/bin/node scripts/backtest_minute_bar_scan.mjs
 # Dimensional cross-cut mining for the same scanner families (dow/hour/daytype/session/etc.),
 # same pattern_discoveries table + ACTIVE/DEGRADED lifecycle as mineLevelFades() uses for levels
-/usr/bin/node scripts/mine_minutebar_conditions.mjs
+run /usr/bin/node scripts/mine_minutebar_conditions.mjs
 
 # All-time (full-history, not rolling-90-day) level-fade pattern scan -- catches rare/
 # low-frequency patterns the 90-day rolling mineLevelFades() call in server/index.js
@@ -117,14 +131,14 @@ echo "=== Weekly backtest run: $(date) ==="
 # (window_type='ALL_TIME', pattern_key prefixed 'ALLTIME:') in the same pattern_discoveries
 # table -- see server/services/patternScannerService.js's mineLevelFades() params. Measured
 # ~194s for 417 RTH trading days (2026-07-17) -- cheap enough for weekly, not nightly.
-/usr/bin/node scripts/mine_level_fades_alltime.mjs
+run /usr/bin/node scripts/mine_level_fades_alltime.mjs
 
 # Execution-efficiency audit (2026-07-27) -- how real fired setups performed vs their own
 # MAE/MFE and vs OPTIMAL_STOP's calibrated-achievable EV. Persists performance_audit
 # signal_type='EXECUTION_EFFICIENCY_AUDIT' per setup_type clearing N>=20 real (ACTIVE/
 # SHADOW-origin) resolved trades -- currently just IB_BEARISH, self-expands as real N
 # grows elsewhere. See docs/OPEN_THREADS.md and RESEARCH_CLAIM ib_bearish_mfe_left_on_table_20260727.
-/usr/bin/node scripts/analyze_execution_efficiency.mjs
+run /usr/bin/node scripts/analyze_execution_efficiency.mjs
 
 # Standing data-sanity audit (2026-07-17) -- catches the class of bug found manually this
 # session (impossible MAE/MFE values, a non-uniform $/pt constant defended by a false
@@ -132,7 +146,7 @@ echo "=== Weekly backtest run: $(date) ==="
 # find the next instance. Non-zero exit is expected right now (1 known/standing flag: ES
 # symbol data in price_bars_primary) -- not a failure, don't treat this script's exit
 # code as a build-breaking signal in this cron; read its output instead.
-/usr/bin/node scripts/data_sanity_audit.mjs
+run /usr/bin/node scripts/data_sanity_audit.mjs
 
 # Pipeline freshness/consumption audit (built 2026-07-17, scheduled 2026-09-07) -- was
 # manual-only until now, ironically the one script in this audit family not following its
@@ -144,7 +158,7 @@ echo "=== Weekly backtest run: $(date) ==="
 # flagged count is comparable run-over-run; grep-based, so ~half the roster flags by design
 # (informational RESEARCH_CLAIM-only signals correctly have no "live consumer") -- read the
 # notes JSON for the actual list before treating a flag as new/actionable.
-/usr/bin/node scripts/audit_pipeline_freshness.mjs
+run /usr/bin/node scripts/audit_pipeline_freshness.mjs
 
 # Rolling recalibration for the cumulative-delta-confirmation live badge (2026-07-28) --
 # RESEARCH_CLAIM cumulative_delta_confirms_breakout_beyond_price_alone /
@@ -152,7 +166,7 @@ echo "=== Weekly backtest run: $(date) ==="
 # 25th-percentile-of-positive-cumulative-delta floor per category (FADE/BREAKOUT), no
 # static threshold per the standing rule -- server/services/deltaConfirmation.js reads
 # this back live (12h cache).
-/usr/bin/node scripts/calibrate_delta_confirmation.mjs
+run /usr/bin/node scripts/calibrate_delta_confirmation.mjs
 
 # Wider-target pressure gate calibration (2026-08-24, RESEARCH_CLAIM
 # wider_target_pressure_gate_vs_always_extend) -- recomputes the top-tercile buying/selling
@@ -161,7 +175,7 @@ echo "=== Weekly backtest run: $(date) ==="
 # convention as calibrate_delta_confirmation.mjs just above -- must stay scheduled so the
 # live gate tracks the growing population rather than freezing at whatever it was on
 # 2026-08-24, per the standing "RESEARCH_CLAIM recheck is a flag, not an auto-rerun" rule.
-/usr/bin/node scripts/calibrate_wider_target_pressure_gate.mjs
+run /usr/bin/node scripts/calibrate_wider_target_pressure_gate.mjs
 
 # Step-trail runner extension shadow calibration (Opus Audit #12, 2026-09-04) -- derives the
 # ratchet step fraction + base-distance floor from the real, growing armed-trade population.
@@ -169,7 +183,7 @@ echo "=== Weekly backtest run: $(date) ==="
 # logger (never gates/sizes a real trade). Must stay scheduled -- a stale calibration here means
 # the shadow logger silently keeps using an old fraction instead of the current best one, same
 # risk this codebase has already been burned by with other calibrated gates.
-/usr/bin/node scripts/calibrate_step_trail_fraction.mjs
+run /usr/bin/node scripts/calibrate_step_trail_fraction.mjs
 
 # Pitch and Catch filter calibration -- REMOVED 2026-09-29 (0/213 real qualifying rate after
 # 3+ weeks live, plus a structurally degenerate calibration loop -- see
@@ -183,13 +197,13 @@ echo "=== Weekly backtest run: $(date) ==="
 # momentum_against_fade_shadow logger (never gates/sizes a real trade -- OPEN_DECISION
 # momentum_against_fade_sizemultiplier_wiring_pending tracks that separate decision). Must
 # stay scheduled -- same staleness risk as the two calibrations just above.
-/usr/bin/node scripts/calibrate_momentum_against_fade.mjs
+run /usr/bin/node scripts/calibrate_momentum_against_fade.mjs
 
 # SHORT entry-time selling-pressure sizeMultiplier boost (2026-08-24, RESEARCH_CLAIM
 # pressure_entry_sizing_direction_asymmetric) -- same convention as the pressure gate just
 # above: must stay scheduled so the live boost tracks the real, growing population and
 # floors to 0 automatically on a bad recalibration, rather than freezing at ship time.
-/usr/bin/node scripts/calibrate_pressure_entry_sizing_short.mjs
+run /usr/bin/node scripts/calibrate_pressure_entry_sizing_short.mjs
 
 # Regime-combination scanner (2026-08-02) -- the read-back half of the value-area regime
 # measurement layer (regime_pos_Nd/regime_label_Nd on active_setups, tagged at insert time
@@ -201,7 +215,7 @@ echo "=== Weekly backtest run: $(date) ==="
 # the actual path "into live," a human call, not an auto-wire. Will find ~nothing for a
 # while (2 total real regime-tagged resolved rows as of 2026-08-02) -- that's expected, this
 # is infrastructure for the months-long accumulation, see docs/OPEN_THREADS.md.
-/usr/bin/node scripts/scan_regime_combinations.mjs
+run /usr/bin/node scripts/scan_regime_combinations.mjs
 
 # --- Roadmap Phase 0 (2026-08-10): PROVISIONAL RESEARCH_CLAIM findings wired to weekly
 # cron per the roadmap's own Part 6.5 loop design ("if the finding is still open... wire its
@@ -216,27 +230,27 @@ echo "=== Weekly backtest run: $(date) ==="
 # cron-wiring those without first fixing that would just re-print console output weekly
 # with no lasting effect, so they're deliberately NOT added here; see OPEN_DECISION
 # roadmap_phase0_18_scripts_need_recordclaim_wiring.
-/usr/bin/node scripts/backtest_1yr_globex_inclusive_prop_challenge_20260720.mjs
-/usr/bin/node scripts/analyze_compression_tail_mfe.mjs
-/usr/bin/node scripts/backtest_globex_move_levels.mjs
-/usr/bin/node scripts/pilot_ib_bearish_2of3_target_1of3_trail.mjs
-/usr/bin/node scripts/analyze_intraday_ib_range_daytype.mjs
-/usr/bin/node scripts/analyze_intraday_ib_range_remainder.mjs
+run /usr/bin/node scripts/backtest_1yr_globex_inclusive_prop_challenge_20260720.mjs
+run /usr/bin/node scripts/analyze_compression_tail_mfe.mjs
+run /usr/bin/node scripts/backtest_globex_move_levels.mjs
+run /usr/bin/node scripts/pilot_ib_bearish_2of3_target_1of3_trail.mjs
+run /usr/bin/node scripts/analyze_intraday_ib_range_daytype.mjs
+run /usr/bin/node scripts/analyze_intraday_ib_range_remainder.mjs
 # The single most decisive open test in the codebase (roadmap Phase 0's named checkpoint) --
 # does RTH OPTIMAL_STOP calibration beat a flat baseline on genuinely chronological,
 # held-out data. Corrected 2026-08-10 (order-blind confound + a DISTINCT ON (signal_name)
 # staleness bug both fixed same day) -- see RESEARCH_CLAIM rth_calibration_genuine_holdout_test.
-/usr/bin/node scripts/backtest_rth_calibration_genuine_holdout.mjs
-/usr/bin/node scripts/backtest_structural_breakout_phase0.mjs
-/usr/bin/node scripts/backtest_trend_gate_suppression.mjs
-/usr/bin/node scripts/backtest_volatility_regime_roster_wide.mjs
+run /usr/bin/node scripts/backtest_rth_calibration_genuine_holdout.mjs
+run /usr/bin/node scripts/backtest_structural_breakout_phase0.mjs
+run /usr/bin/node scripts/backtest_trend_gate_suppression.mjs
+run /usr/bin/node scripts/backtest_volatility_regime_roster_wide.mjs
 # Roadmap Phase 3 (I4) re-run of mfe_runner_target_widening_mining on the uncensored,
 # chronological, real-only surface -- unlike the 2026-07-17 original, finds a minority of
 # setup_types (VWAP-magnet/IB family) with large but NOT rigor-clean deltas. Cron'd (not
 # left one-off) so RESEARCH_CLAIM mfe_runner_target_widening_uncensored_20260810 self-
 # recalibrates as real N grows for these actively-firing live types -- per the standing
 # "cron the scripts with genuinely open findings" rule, same as this file's other entries.
-/usr/bin/node scripts/backtest_mfe_runner_target_widening_uncensored.mjs
+run /usr/bin/node scripts/backtest_mfe_runner_target_widening_uncensored.mjs
 
 # ATR-compression breakout pilot (2026-08-11, user-sourced strategy) -- three bar widths
 # (15/30/60-min). CORRECTED same session (Opus consultation 6, docs/OPUS_AUDIT_PROMPT_6.md)
@@ -249,9 +263,9 @@ echo "=== Weekly backtest run: $(date) ==="
 # kept scheduled anyway, per this file's own standing "never a dead end just because the
 # first run was negative" rule, so this self-recalibrates if real forward data ever
 # changes the picture.
-/usr/bin/node scripts/pilot_atr_compression_breakout_mtf.mjs 15
-/usr/bin/node scripts/pilot_atr_compression_breakout_mtf.mjs 30
-/usr/bin/node scripts/pilot_atr_compression_breakout_mtf.mjs 60
+run /usr/bin/node scripts/pilot_atr_compression_breakout_mtf.mjs 15
+run /usr/bin/node scripts/pilot_atr_compression_breakout_mtf.mjs 30
+run /usr/bin/node scripts/pilot_atr_compression_breakout_mtf.mjs 60
 # Follow-up threads (2026-08-11) -- BOTH RETRACTED/DOWNGRADED same session, still cron'd
 # because the underlying 60-min baseline they depend on might get revisited later, but as
 # of now both were computed on the pre-correction (broken-fill-engine) 121-trade population
@@ -260,8 +274,8 @@ echo "=== Weekly backtest run: $(date) ==="
 # scripts still contain their OWN local copy of the old same-bar-stop-skipping logic and
 # need the same fix ported before their weekly re-runs mean anything. Not yet done --
 # flag if picked back up.
-/usr/bin/node scripts/pilot_atr_breakout_badge_confluence.mjs
-/usr/bin/node scripts/pilot_atr_breakout_parameter_sensitivity.mjs
+run /usr/bin/node scripts/pilot_atr_breakout_badge_confluence.mjs
+run /usr/bin/node scripts/pilot_atr_breakout_parameter_sensitivity.mjs
 
 # Post-ATR-thread forward-return checks (2026-08-11) -- both self-recalibrate as real
 # forward NQ history accumulates. Bollinger squeeze: clean negative (edge negative at all 5
@@ -270,8 +284,8 @@ echo "=== Weekly backtest run: $(date) ==="
 # significance at the signal level, but real trade-level backtests with actual stop/target
 # machinery already show modest provisional positive EV that this test doesn't contradict
 # (RESEARCH_CLAIM STACK_VOL_BREAK_HORIZON). See docs/OPEN_THREADS.md.
-/usr/bin/node scripts/pilot_bollinger_squeeze_forward_return.mjs
-/usr/bin/node scripts/pilot_stackvol_horizon_profile.mjs
+run /usr/bin/node scripts/pilot_bollinger_squeeze_forward_return.mjs
+run /usr/bin/node scripts/pilot_stackvol_horizon_profile.mjs
 
 # "Slow+deep adverse-grind early exit" (2026-08-18) -- consolidated/scheduled version of
 # scripts/pilot_zero_mfe_early_stop.mjs's Part 4, per docs/SLOW_DEEP_EARLY_EXIT_SPEC.md's
@@ -279,7 +293,7 @@ echo "=== Weekly backtest run: $(date) ==="
 # opposite-sign from the pooled result and computeRigor not clean -- self-recalibrates weekly
 # as real N grows per this file's own standing rule, RESEARCH_CLAIM
 # slow_deep_adverse_grind_early_exit. Does not wire anything live.
-/usr/bin/node scripts/backtest_slow_deep_early_exit.mjs
+run /usr/bin/node scripts/backtest_slow_deep_early_exit.mjs
 
 # Same-direction fire-density throttle, "Build 1" (2026-08-19, Opus Audit 8 §2.4/R4 re-test).
 # CONFIRMED negative as of first run per DeepSeek's bar (A): the 4+ rebound IS explained by
@@ -288,7 +302,7 @@ echo "=== Weekly backtest run: $(date) ==="
 # Still open, not a hard structural rejection -- scheduled so it self-recalibrates as real
 # ACTIVE N grows and the instability either resolves or hardens. RESEARCH_CLAIM
 # same_direction_throttle_stage1. Does not wire anything live.
-/usr/bin/node scripts/pilot_same_direction_throttle.mjs
+run /usr/bin/node scripts/pilot_same_direction_throttle.mjs
 
 # CONFIRMED negative as of first run (2026-08-19): IB-break-direction-match (live-knowable
 # at 10:30 ET, computeIbBullBear()) as a replacement for MOMENTUM_60m_60m_TREND's dead
@@ -299,7 +313,7 @@ echo "=== Weekly backtest run: $(date) ==="
 # self-recalibrates as real bar history/day-type calibration accumulates, not a hard
 # structural rejection. RESEARCH_CLAIM momentum60_ib_break_admission_gate_test. Does not
 # wire anything live.
-/usr/bin/node scripts/pilot_momentum60_ib_break_gate.mjs
+run /usr/bin/node scripts/pilot_momentum60_ib_break_gate.mjs
 
 # RTH_FLUSH_LONG/SHORT + GLOBEX_FLUSH_LONG/SHORT calibration (2026-08-27) --
 # docs/LIQUIDITY_ZONES_DEFENDED_LEVELS_SPEC.md sec 4.4-4.14. Writes SETUP_STATUS + OPTIMAL_STOP
@@ -308,7 +322,7 @@ echo "=== Weekly backtest run: $(date) ==="
 # (OPEN_DECISION globex_session_boundary_4to5pm_misattribution_bug) that materially weakened its
 # backtested edge after the fix -- wired SHADOW-only, self-recalibrates as real forward data
 # accumulates.
-/usr/bin/node scripts/backtest_flush_patterns.mjs
+run /usr/bin/node scripts/backtest_flush_patterns.mjs
 
 # VOLUME_BUILDING_CALIBRATION/ROSTER_WIDE_FADE (2026-08-28) -- recalibrates the median and p60
 # cutoffs for the volume-building signal wired live INFORMATIONAL-ONLY onto every real FADE fire
@@ -317,7 +331,7 @@ echo "=== Weekly backtest run: $(date) ==="
 # docs/OPEN_THREADS.md's 2026-08-28 entry and RESEARCH_CLAIMs fade_roster_volume_building_
 # pooled_vs_pertype / volz_day_relative_vs_timeofday_reference_frame / fade_roster_volume_
 # building_dose_response_cutoff.
-/usr/bin/node scripts/backtest_volume_building_signal.mjs
+run /usr/bin/node scripts/backtest_volume_building_signal.mjs
 
 # SAME_DAY_FORMING (IB/OR family) volume-building fade-quality re-verification (2026-09-01) --
 # re-checks docs/VOLUME_BUILDING_EXPANSION_SIGNAL_SPEC.md sec 6b's parked walk-forward finding
@@ -335,7 +349,7 @@ echo "=== Weekly backtest run: $(date) ==="
 # This is a staleness-preventing weekly recompute, not a fixed-calendar wait -- promotes the
 # moment the DATA clears the bar, which real trade volume (15-30 real IB/OR fires/day recently)
 # suggests is a few weeks out, not months, if the pattern holds.
-/usr/bin/node scripts/backtest_ib_or_volbuild_walkforward_refresh.mjs
+run /usr/bin/node scripts/backtest_ib_or_volbuild_walkforward_refresh.mjs
 
 # PRIOR_DAY_OR_DEVELOPING (PD_POC/VAH/VAL, VWAP, pivots) volume-building fade-quality follow-up
 # (2026-09-01, "chase it" per user) -- the SAME_DAY_FORMING correction above applies here too
@@ -349,7 +363,7 @@ echo "=== Weekly backtest run: $(date) ==="
 # no-dead-ends convention rather than declared permanently closed -- self-recalibrates as real N
 # grows. Do NOT re-run with yet another ad hoc bucket/measure choice hunting for a positive --
 # multiple-comparisons fishing risk already flagged once this thread.
-/usr/bin/node scripts/backtest_priorday_volbuild_walkforward.mjs
+run /usr/bin/node scripts/backtest_priorday_volbuild_walkforward.mjs
 
 # Approach-pace fade-quality signal (2026-09-01) -- found while root-causing why GLOBEX_VWAP_MAGNET/
 # PD_VAH_FADE_SHORT refires lose (user: "find a more strict way to trade it" rather than just a
@@ -361,7 +375,7 @@ echo "=== Weekly backtest run: $(date) ==="
 # wire_approach_pace_as_size_factor scopes what's needed first (real stop/target bar-by-bar
 # simulation, not just raw P&L correlation, per this codebase's own new-setup-type checklist item
 # 5). Self-recalibrates weekly as real N grows.
-/usr/bin/node scripts/backtest_approach_pace_fade_quality.mjs
+run /usr/bin/node scripts/backtest_approach_pace_fade_quality.mjs
 
 # Displacement-since-last-visit fade-quality test (2026-09-01) -- user's idea: instead of a
 # time-based refire cooldown, does how far price has traveled from a level since it was last
@@ -372,7 +386,7 @@ echo "=== Weekly backtest run: $(date) ==="
 # one day showing clustering=better) was describing one unusual session, not a real pattern.
 # Approach pace (above) remains the validated lead from this investigation. Kept scheduled per
 # this codebase's no-dead-ends convention.
-/usr/bin/node scripts/backtest_displacement_since_last_visit.mjs
+run /usr/bin/node scripts/backtest_displacement_since_last_visit.mjs
 
 # Promotion-gate placebo-control test (2026-09-01) -- does the SETUP_STATUS PROMOTE gate admit
 # setup_types that underperform MORE than a statistically-matched "just missed the bar" placebo
@@ -384,7 +398,7 @@ echo "=== Weekly backtest run: $(date) ==="
 # PROMOTED N=7 is far below this codebase's N>=20 floor and computeRigor shows clean=false for it.
 # RESEARCH_CLAIM promotion_gate_regression_to_mean_thin_20260901 (PROVISIONAL, not decision-grade).
 # Self-recalibrates weekly as real N grows toward the N>=20 recheck floor.
-/usr/bin/node scripts/backtest_promotion_gate_placebo_control.mjs
+run /usr/bin/node scripts/backtest_promotion_gate_placebo_control.mjs
 
 # Flush post-entry exit-signal promotion/retirement trigger (2026-09-02) -- part 3 of
 # OPEN_DECISION wire_flush_post_entry_exit_signals_globex. acd.js's resolveSetupsByPrice()
@@ -394,7 +408,7 @@ echo "=== Weekly backtest run: $(date) ==="
 # real forward data (paired vs the trade's own actual_pnl, segmented ALL vs BIG-MOVE-ONLY) and
 # writes a final CONFIRMED verdict -- positive flags a live-wiring OPEN_DECISION, negative closes
 # the mechanism out. No-op below N=20 (the pilot's own PROVISIONAL claim stands until then).
-/usr/bin/node scripts/backtest_flush_post_entry_exit_signals_promotion.mjs
+run /usr/bin/node scripts/backtest_flush_post_entry_exit_signals_promotion.mjs
 
 # PD-level-fade VWAP-deviation-magnitude filter + volume-size follow-up (2026-09-02) --
 # RESEARCH_CLAIM pd_level_fade_vwap_deviation_magnitude_filter / pd_level_fade_volume_size_as_
@@ -404,9 +418,9 @@ echo "=== Weekly backtest run: $(date) ==="
 # with no standing recheck path is a dead end in practice. Not yet decision-grade (design
 # critique flagged several remaining checks, see docs/OPEN_THREADS.md) -- these two scripts are
 # what keeps it moving toward that bar on its own.
-/usr/bin/node scripts/pilot_pd_level_fade_vwap_deviation_filter.mjs
-/usr/bin/node scripts/pilot_low_deviation_volume_size_filter.mjs
-/usr/bin/node scripts/pilot_opposite_direction_post_win_pause.mjs
+run /usr/bin/node scripts/pilot_pd_level_fade_vwap_deviation_filter.mjs
+run /usr/bin/node scripts/pilot_low_deviation_volume_size_filter.mjs
+run /usr/bin/node scripts/pilot_opposite_direction_post_win_pause.mjs
 
 # Cross-direction fast-flip live calibration: MOVED to run_daily_calibration.sh 2026-09-02
 # (user request -- this gates real live/SHADOW trade eligibility, waiting up to 6 days for a
@@ -421,7 +435,7 @@ echo "=== Weekly backtest run: $(date) ==="
 # (single-digit distinct days). Self-recalibrates weekly so the finding firms up or fades as real
 # data accumulates instead of sitting as a dead one-off analysis. Not wired live -- see
 # OPEN_DECISION per_setup_daily_loss_cap_recent_regime_reversal for the ship/shadow/shelve call.
-/usr/bin/node scripts/backtest_per_setup_daily_loss_cap.mjs
+run /usr/bin/node scripts/backtest_per_setup_daily_loss_cap.mjs
 
 # Per-(setup_type x time-of-day) step-trail calibration (2026-09-05, user request: monitor and
 # calibrate the step-trail runner extension for every setup automatically, not just the 3 leads
@@ -431,7 +445,7 @@ echo "=== Weekly backtest run: $(date) ==="
 # calibration only -- see OPEN_DECISION step_trail_per_cell_live_wiring_pending for whether/how
 # this ever feeds live wiring once the overall step-trail mechanism itself clears its own
 # Phase 2 bar (still at zero real armed data as of 2026-09-05).
-/usr/bin/node scripts/calibrate_step_trail_per_setup_time.mjs
+run /usr/bin/node scripts/calibrate_step_trail_per_setup_time.mjs
 
 # Globex overnight rotation-count badge self-recalibration (2026-09-21, user request: "can this
 # be tested and calibrated weekly? incase the states or times change") -- re-derives BOTH the
@@ -441,12 +455,12 @@ echo "=== Weekly backtest run: $(date) ==="
 # RESEARCH_CLAIM overnight_rotation_count_predicts_rth_range_20260921 and docs/OPEN_THREADS.md's
 # 2026-09-21 entry. Purely informational (direction-agnostic RTH-range-magnitude lean) -- never
 # gates/sizes a real trade.
-/usr/bin/node scripts/calibrate_globex_rotation_badge.mjs
+run /usr/bin/node scripts/calibrate_globex_rotation_badge.mjs
 
 # Per-setup live time-window overrides (LIVE_TIME_WINDOW_OVERRIDE, setupEligibility.js; first
 # entry PD_VAL_FADE_LONG after 13:00 ET, 2026-09-25). Re-derives each override's value on realized
 # actual_pnl and runs its pre-registered prospective look -- remove the entry if it fails.
-/usr/bin/node scripts/recheck_live_time_window_overrides.mjs
+run /usr/bin/node scripts/recheck_live_time_window_overrides.mjs
 
 # ML meta-labeling silo: weekly checkpoint promotion (2026-09-29, fixes
 # RESEARCH_CLAIM ml_verdict_instability_from_daily_retrain_20260929 -- daily retraining,
@@ -458,12 +472,21 @@ echo "=== Weekly backtest run: $(date) ==="
 # before/after EV comparison on real trades resolved since the last promotion -- read this
 # weekly, per the user's own request, before assuming a retrain "helped." See
 # promote_weekly_checkpoint.py's own header for the full design.
-./venv/bin/python3 scripts/ml_meta_labeling/promote_weekly_checkpoint.py
+run ./venv/bin/python3 scripts/ml_meta_labeling/promote_weekly_checkpoint.py
 
 # Forward check of the hourly volume-build magnitude effect (RESEARCH_CLAIM
 # hourly_volume_build_next60m_excursion_descriptive_20261004). Scores only hours on/after the
 # fixed FORWARD_START in the script; persists HOURLY_VOLBUILD_FORWARD rows to performance_audit.
 # Its ev_per_trade column holds the high-build residual in POINTS, not dollars (see notes).
-./venv/bin/python3 scripts/backtest_hourly_volume_build_forward.py
+run ./venv/bin/python3 scripts/backtest_hourly_volume_build_forward.py
 
+# Pre-registered forward test of stop_width_top_volbuild_prereg_20261005 (RESULT: NO DATA YET
+# until trades fired on/after 2026-10-06 exist). Prints PASS/FAIL against the locked criteria;
+# never changes live behavior. Stays on scratch/ until the rule is promoted by its own decision.
+run ./venv/bin/python3 scratch/stop_width_prereg_eval_20261005.py
+
+if [ ${#FAILED_STEPS[@]} -gt 0 ]; then
+  echo "=== ${#FAILED_STEPS[@]} step(s) failed:"
+  printf "  %s\n" "${FAILED_STEPS[@]}"
+fi
 echo "=== Weekly backtest run complete: $(date) ==="

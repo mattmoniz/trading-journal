@@ -821,9 +821,9 @@ async function detectGlobexSetup(sessionDate, io) {
       // full design/evidence. Last gate before the INSERT, on purpose (per DeepSeek's design
       // critique): scoring is the most expensive of these checks and the most likely to be
       // moot, so it only runs on a candidate that already survived every cheaper gate above.
-      // Covers 6pm-9:30am here; the 9:30-10am RTH portion of the approved window is a
-      // separate insert path, not yet wired -- see OPEN_DECISION
-      // ml_veto_gate_rth_930_to_10am_not_yet_wired_20260929.
+      // Covers 6pm-4pm ET (mlLiveVetoGate.js's own header has the full scope/evidence,
+      // including the 2026-10-04 extension from the original 6pm-10am window) -- the RTH
+      // portion is wired separately at 4 other insert sites, not here.
       let mlGateResult = null;
       if (live.status !== 'SHADOW') {
         // FIXED 2026-09-29 (DeepSeek code review, real BLOCKER): minutes_from_open was
@@ -3100,11 +3100,11 @@ export default function createACDRouter(io) {
                 if (live.status !== 'SHADOW' && (await isOpeningDriveCounterTrade(direction)).blocked) {
                   live = { status: 'SHADOW', reason: OPENING_DRIVE_GATE.REASON };
                 }
-                // ML meta-labeling VETO gate (2026-09-29) -- see mlLiveVetoGate.js's header.
-                // RTH-side wiring (the 9:35-10:00 portion of the approved 6pm-10am window --
-                // 9:30-9:35 is already fully skipped above via inStackVolDeadZone). Only runs
-                // inside the window; a no-op (shadow:false, isInMlVetoGateWindow guards the
-                // call) the rest of the RTH day.
+                // ML meta-labeling VETO gate (2026-09-29, window extended 2026-10-04 to cover
+                // full RTH -- see mlLiveVetoGate.js's header). RTH-side wiring (9:30-9:35 is
+                // already fully skipped above via inStackVolDeadZone). Only runs inside the
+                // window; a no-op (shadow:false, isInMlVetoGateWindow guards the call)
+                // outside it.
                 let svMlGateResult = null;
                 if (live.status !== 'SHADOW' && isInMlVetoGateWindow(bar.tod)) {
                   svMlGateResult = await scoreMlVetoGate({
@@ -6492,12 +6492,13 @@ export default function createACDRouter(io) {
         // backfill loop's own bt.etMin comment already documents for exactly this reason.
         const mainInNewEntryDeadZone = isInNewEntryDeadZone(firedEtMin);
         const mainInRthOpenDeadZone = isInRthOpenDeadZone(firedEtMin);
-        // ML meta-labeling VETO gate (2026-09-29) -- see mlLiveVetoGate.js's header. RTH-side
-        // wiring, the highest-volume of the 4 real RTH insert sites. Short-circuited on every
-        // other gate already being clear, same "last gate" convention as oppositeDirectionOpen/
-        // sameTypeRefireBlocked/openingDriveCounter above -- and additionally on the 9:30-10am
-        // window itself (isInMlVetoGateWindow), so this never even queries the scoring service
-        // outside the approved window. nl30AtDetection passed explicitly (real value here,
+        // ML meta-labeling VETO gate (2026-09-29, window extended 2026-10-04 to cover full
+        // RTH -- see mlLiveVetoGate.js's header). RTH-side wiring, the highest-volume of the
+        // 4 real RTH insert sites. Short-circuited on every other gate already being clear,
+        // same "last gate" convention as oppositeDirectionOpen/sameTypeRefireBlocked/
+        // openingDriveCounter above -- and additionally on the gate window itself
+        // (isInMlVetoGateWindow), so this never even queries the scoring service outside the
+        // approved window (now 6pm-4pm). nl30AtDetection passed explicitly (real value here,
         // unlike every other insert site where it's genuinely null) -- this is the same
         // "hardcoded null was wrong for a real value" bug class DeepSeek's review caught for
         // minutes_from_open at the Globex site, checked and fixed here before it could recur.
@@ -7186,6 +7187,32 @@ export default function createACDRouter(io) {
         FROM active_setups s
         WHERE s.trade_date = ANY($1) ORDER BY s.fired_at
       `, [dates]);
+
+      // Cluster-sibling fill check (2026-10-05). A sibling's entry is its own resting level, not the
+      // touch price, so an OPEN sibling is only a position once a bar has traded through that entry.
+      // Found live: CAM_R4_FADE_LONG id 131076 (sibling, entry 31232) showed a $160 open P&L on
+      // quick-check.html, but price never traded down to 31232 -- the order never filled. Primaries
+      // enter at the touch price and are always treated as filled. Only open siblings get a bar scan,
+      // so this stays a handful of bounded queries per poll. Naive ET text throughout (no Date
+      // parameters -- see the 4-hour shift note in scripts/backtest_exit_tightening_20261005.mjs).
+      for (const row of setupsRes.rows) {
+        row.entry_filled = true;
+        const isOpen = (row.status === 'ACTIVE' || row.status === 'SHADOW') && row.resolution == null;
+        if (row.is_cluster_primary !== false || !isOpen) continue;
+        const entry = Number(row.entry_zone_high ?? row.entry_zone_low);
+        const dir = resolveDirection(row);
+        if (!Number.isFinite(entry) || dir == null) { row.entry_filled = false; continue; }
+        const touched = dir === 'LONG'
+          ? await query(`SELECT 1 FROM price_bars_primary WHERE symbol='NQ'
+                           AND ts >= date_trunc('minute', $1::timestamp)
+                           AND ts <= (NOW() AT TIME ZONE 'America/New_York')::timestamp
+                           AND low <= $2 LIMIT 1`, [row.fired_at_str, entry])
+          : await query(`SELECT 1 FROM price_bars_primary WHERE symbol='NQ'
+                           AND ts >= date_trunc('minute', $1::timestamp)
+                           AND ts <= (NOW() AT TIME ZONE 'America/New_York')::timestamp
+                           AND high >= $2 LIMIT 1`, [row.fired_at_str, entry]);
+        row.entry_filled = touched.rows.length > 0;
+      }
 
       // body_pct/bar_dir of the exact 1-min bar matching each setup's fired_at — was a
       // correlated LATERAL subquery against `price_bars` (raw, partitioned) per row, ~35
