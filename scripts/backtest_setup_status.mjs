@@ -79,7 +79,10 @@ const SUPPRESS_MAX_EV  = -5;   // EV below -$5/trade (sole condition — no WR g
 // price history, but the live system would never actually leave a resting order open that
 // long -- it marks NOT_FILLED at expiry, full stop. Flagged so these can be inspected without
 // silently inflating any setup_type's real N/EV with fills that could never have happened live.
-export const REAL_TRADE_FILTER = `origin_status IN ('ACTIVE','SHADOW') AND (resolution_method IS NULL OR resolution_method NOT IN ('MARK_TO_MARKET','RECOVERY_MTM')) AND ib_window_stale_basis IS NOT TRUE AND stale_entry_price_basis IS NOT TRUE AND late_fill_past_expiry_basis IS NOT TRUE`;
+export const REAL_TRADE_FILTER = `origin_status IN ('ACTIVE','SHADOW') AND (resolution_method IS NULL OR resolution_method NOT IN ('MARK_TO_MARKET','RECOVERY_MTM')) AND ib_window_stale_basis IS NOT TRUE AND stale_entry_price_basis IS NOT TRUE AND late_fill_past_expiry_basis IS NOT TRUE AND bad_bars_basis IS NOT TRUE`;
+// bad_bars_basis (2026-10-05): rows built from the contaminated NQH26 back-month bars for Sep 28 - Nov 19
+// 2025 (KNOWN_ISSUES item 16). Excluded from real N/EV here AND from the all-origin blended aggregates
+// below (the blended n/wr/ev fields were otherwise folding them in). See scripts/flag_nq_bad_window_setups_20261005.mjs.
 
 // Cluster touch credit Phase 2 (2026-09-07, OPEN_DECISION
 // cluster_touch_credit_phase3_sibling_rows_shipped, DeepSeek design-critiqued): a cluster's
@@ -278,6 +281,7 @@ async function run() {
     FROM active_setups
     WHERE resolution IN ('TARGET_HIT','STOP_HIT','TIME_EXPIRED')
       AND actual_pnl IS NOT NULL
+      AND bad_bars_basis IS NOT TRUE
     GROUP BY setup_type
     ORDER BY setup_type
   `);
@@ -302,6 +306,7 @@ async function run() {
     WHERE resolution IN ('TARGET_HIT','STOP_HIT','TIME_EXPIRED')
       AND actual_pnl IS NOT NULL
       AND trade_date >= CURRENT_DATE - 90
+      AND bad_bars_basis IS NOT TRUE
     GROUP BY setup_type
   `);
   const recent = {};

@@ -35,7 +35,7 @@
 import { query } from '../db.js';
 import { getCached, setCached, DAY_CACHE_TTL } from './acdShared.js';
 import { getPriorDayProfile, getOrVolBaseline20d } from './acdLiveCalibration.js';
-import { getBetClass } from '../config/setupTypes.js';
+import { getBetClass, usesLevelAnchoredExit } from '../config/setupTypes.js';
 import { matchPermissionSlips } from './permissionSlip.js';
 import { computeIbBullBear } from './caseEngine.js';
 import { classifyACDOpeningCall } from './openingCallClassifier.js';
@@ -1361,10 +1361,24 @@ export async function buildAllCandidates(ctx) {
       }
 
 
+  // Null-target / null-stop guard (2026-10-05). A level-anchored candidate whose t1GuardLabeled()/t1Guard()
+  // found no viable target comes back with target=null (label NO_VIABLE_TARGET). It was still
+  // returned, so it got inserted as ACTIVE/SHADOW with no t1_level and could never resolve --
+  // found live as SHADOW A_UP_STRONG id 131140 stuck open since 13:24. Drop it here, loudly, so the
+  // consumer never sees it. Only the level-anchored types are affected; calibrated-stop types take
+  // their target from OPTIMAL_STOP and never reach this branch with a null target.
+  const dropNoTarget = (c) => {
+    if (c && !Array.isArray(c) && typeof c === 'object' && usesLevelAnchoredExit(c.type) && (c.target == null || c.stop == null)) {
+      console.warn(`[buildAllCandidates] dropped ${c.type}: ${c.target == null ? `no viable target (${c.targetLabel || 'NO_VIABLE_TARGET'})` : 'null stop'}, would have been an unresolvable row`);
+      return null;
+    }
+    return c;
+  };
+
   return {
-    trtLongV2, trtShortV2, otdSetup, aUpStrong, aDownWeak, trtMah, trt,
+    trtLongV2: dropNoTarget(trtLongV2), trtShortV2: dropNoTarget(trtShortV2), otdSetup, aUpStrong: dropNoTarget(aUpStrong), aDownWeak: dropNoTarget(aDownWeak), trtMah: dropNoTarget(trtMah), trt: dropNoTarget(trt),
     dtClass, sessionConflictFor, ibSetup,
-    openDrive, openingDrive15Min, cPairedLong, cPairedShort, cReversalLong, cReversalShort,
+    openDrive, openingDrive15Min, cPairedLong: dropNoTarget(cPairedLong), cPairedShort: dropNoTarget(cPairedShort), cReversalLong: dropNoTarget(cReversalLong), cReversalShort: dropNoTarget(cReversalShort),
     failedAuction, bracketBreakout, valueAreaResp, cStandalone, gapFill,
     morningRegime, absorptionSetup, coilSurgeSetup, rsiDivSetup,
   };

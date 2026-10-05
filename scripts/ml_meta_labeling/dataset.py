@@ -93,6 +93,25 @@ EXISTING_FEATURE_COLS = [
     'nl30_at_detection', 'confluence_score_at_detection', 'minutes_from_open',
 ]
 
+# Direction-aligned order-flow features, added 2026-10-04 after a Phase 0 pretest
+# (scratch/pretest_orderflow_alignment_entry.mjs) found the model's existing
+# intraday_recentDelta15Bars/intraday_sessionCumulativeDelta are UNSIGNED relative to the
+# trade's own direction, and the model has NO feature telling it which direction a candidate
+# even is -- so it structurally cannot learn "is this flow working with or against me" on
+# its own. Pretest on N=4036 real trades (62+ distinct days): sign-aligning
+# recentDelta15Bars to direction cleanly separated outcomes (flow-against: WR=44.7%,
+# mean=-$7.00/trade, day-blocked CI=[-$11.37,-$2.65], not day-clustered, stable -- flow-with
+# was directionally positive but its own CI crossed zero, so this is an asymmetric
+# "avoid trading against recent flow" effect, not a symmetric one). The WHOLE-SESSION
+# cumulative version (the model's single most-weighted feature, 14% importance) showed NO
+# such split once sign-aligned -- a recency-window order-flow read carries real signal the
+# model's existing dominant feature apparently doesn't, at least not in a form the tree can
+# use. Globex-only was thin and noisy either direction (consistent with the standing
+# "Globex reverses against the trade" finding elsewhere in this codebase) -- do not assume
+# this feature behaves the same way in both sessions; check the RTH/Globex split separately
+# after retraining, same as every other feature here.
+DIRECTION_FEATURE_COLS = ['drv_is_long', 'drv_recentDeltaAligned15Bars']
+
 
 def feature_cols():
     """The full ordered feature column list -- same shape fetch_training_dataframe() returns
@@ -107,10 +126,11 @@ def feature_cols():
         + [f'intraday_{k}' for k in INTRADAY_FEATURE_KEYS]
         + [f'pd_migration_{c}' for c in MIGRATION_CATEGORIES]
         + EXISTING_FEATURE_COLS
+        + DIRECTION_FEATURE_COLS
     )
 
 
-def build_feature_dict(pd_features: dict, intraday_features: dict, existing: dict) -> dict:
+def build_feature_dict(pd_features: dict, intraday_features: dict, existing: dict, is_long=None) -> dict:
     """Single-row equivalent of fetch_training_dataframe()'s own flattening logic, extracted
     2026-09-21 so score_one.py (fire-time scoring, see its own header) uses the EXACT SAME
     flattening as batch training -- never a second hand-rolled copy. pd_features/
@@ -118,7 +138,11 @@ def build_feature_dict(pd_features: dict, intraday_features: dict, existing: dic
     existing is a dict with the EXISTING_FEATURE_COLS keys already resolved (is_rth already
     cast to is_rth_int by the caller, matching fetch_training_dataframe()'s own SQL-side cast).
     Missing keys become None -- LightGBM handles this identically to a NaN from the batch
-    path, same native split-direction handling either way."""
+    path, same native split-direction handling either way.
+
+    is_long: True/False/None (unknown), added 2026-10-04 for DIRECTION_FEATURE_COLS -- the
+    caller derives this from stop vs entry (the standing convention: stop < entry == long),
+    never recomputed here, since different callers have different columns in scope already."""
     pd_features = pd_features or {}
     intraday_features = intraday_features or {}
     out = {}
@@ -131,6 +155,14 @@ def build_feature_dict(pd_features: dict, intraday_features: dict, existing: dic
         out[f'pd_migration_{cat}'] = int(migration == cat)
     for col in EXISTING_FEATURE_COLS:
         out[col] = existing.get(col)
+    recent_delta = intraday_features.get('recentDelta15Bars')
+    if is_long is None or recent_delta is None:
+        out['drv_is_long'] = None if is_long is None else int(is_long)
+        out['drv_recentDeltaAligned15Bars'] = None
+    else:
+        sign = 1 if is_long else -1
+        out['drv_is_long'] = int(is_long)
+        out['drv_recentDeltaAligned15Bars'] = sign * recent_delta
     return out
 
 
@@ -154,6 +186,7 @@ def fetch_training_dataframe(conn, label_column='ml_extended_label'):
     query = f"""
         SELECT id, setup_type, fired_at::text AS fired_at, trade_date::text AS trade_date,
             cluster_touch_id, is_rth::int AS is_rth_int,
+            entry_zone_low::float AS entry_zone_low, stop_level::float AS stop_level,
             {label_column}, ml_pd_features, ml_intraday_features,
             {', '.join(EXISTING_FEATURE_COLS)}
         FROM active_setups
@@ -166,12 +199,18 @@ def fetch_training_dataframe(conn, label_column='ml_extended_label'):
     df = pd.read_sql(query, conn)
 
     df['label'] = df[label_column].apply(lambda x: x.get('label'))
+    # Standing convention (acdShared.js and dozens of backtest scripts): direction is
+    # inferred from stop vs entry, never a separate stored column. entry_zone_low/
+    # stop_level are both NOT NULL on every REAL_TRADE_FILTER row (enforced by the filter
+    # itself requiring a real resolved trade), so this is always resolvable here.
+    df['is_long'] = df['stop_level'] < df['entry_zone_low']
 
     cols = feature_cols()
     flattened = df.apply(
         lambda row: build_feature_dict(
             row['ml_pd_features'], row['ml_intraday_features'],
             {c: row[c] for c in EXISTING_FEATURE_COLS},
+            is_long=row['is_long'],
         ),
         axis=1, result_type='expand',
     )

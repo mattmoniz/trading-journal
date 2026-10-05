@@ -351,7 +351,10 @@ export async function scanAndSaveSetupEvents(date) {
 }
 
 // Compute just the OR and A levels from the first 5 bars after 9:30
-export async function computeORLevelsOnly(date, aMult) {
+// overwrite (2026-10-05, default false = unchanged live behavior): when true, replaces an existing
+// OR row. Used only by the one-off NQ window rebuild (scripts/rebuild_nq_window_derived_levels_20261005.mjs)
+// after the underlying bars were corrected; the live path never passes it.
+export async function computeORLevelsOnly(date, aMult, { overwrite = false } = {}) {
   try {
     const orBars = await query(`
       SELECT high::float, low::float
@@ -371,7 +374,7 @@ export async function computeORLevelsOnly(date, aMult) {
       VALUES ($1,$2,$3,$4,$5,$6)
       ON CONFLICT (trade_date) DO UPDATE SET
         or_high=$2, or_low=$3, a_multiplier=$4, a_up_level=$5, a_down_level=$6
-      WHERE acd_daily_log.or_high IS NULL
+      WHERE ${overwrite ? 'TRUE' : 'acd_daily_log.or_high IS NULL'}
     `, [date, orHigh, orLow, aMult, aUpLevel, aDownLevel]);
     return { orHigh, orLow, aUpLevel, aDownLevel };
   } catch(e) { return null; }
