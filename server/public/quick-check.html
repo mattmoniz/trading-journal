@@ -1935,32 +1935,6 @@ function renderTimeline() {
     // Same tap-to-see-hypothetical-vs-real convention as every tag above. Applies to the PLAIN
     // (non-wider-target-armed) T1-hit population, distinct from stTag/pcTag above.
     const t1fTag = s.t1_floor_runner_shadow ? '<span class="vb-tag t1floor-tag sig-tag" onclick="event.stopPropagation(); openT1FloorRunnerPopup(' + s.id + ')">T1F</span>' : '';
-    // Direction-loss-alternation gate tag (user idea + user-provided live example, 2026-09-05
-    // -- see acd.js's isDirectionLossBlocked() header). Only shown when this trade WOULD have
-    // been blocked (the informative case) -- every real trade gets tagged internally, but
-    // showing that on every row would just be noise; this is the one worth a human looking at.
-    const dgTag = s.direction_gate_shadow?.wouldBeBlocked ? '<span class="vb-tag dirgate-tag sig-tag" onclick="event.stopPropagation(); openDirectionGatePopup(' + s.id + ')">DG</span>' : '';
-    // Momentum-against-fade shadow tag (user idea, 2026-09-05 -- see acd.js's
-    // getMomentumAgainstFade()/tagMomentumAgainstFadeShadow() header). Only shown when this
-    // trade's own reading cleared the calibrated top-quartile "against" cutoff -- the
-    // informative case, same convention as dgTag above.
-    const mfTag = s.momentum_against_fade_shadow?.against ? '<span class="vb-tag momfade-tag sig-tag" onclick="event.stopPropagation(); openMomentumFadePopup(' + s.id + ')">MF</span>' : '';
-    // Breakeven-stop-on-order-flow-rejection shadow tag (2026-09-16) -- only shown on the
-    // REWARDED-classified subset (the only class this mechanism ever has a hypothetical
-    // response for), same convention as every tag above.
-    const bsTag = s.breakeven_stop_shadow?.classification === 'REWARDED' ? '<span class="vb-tag breakevenstop-tag sig-tag" onclick="event.stopPropagation(); openBreakevenStopPopup(' + s.id + ')">BS</span>' : '';
-    // Entry-order-flow shadow tag (2026-09-16, entryOrderFlowShadow.js) -- only shown when
-    // wouldBeFlagged is true; tag text distinguishes the LONG vs SHORT rule since they're
-    // genuinely different conditions (see that file's own header).
-    const efTag = s.entry_orderflow_shadow?.wouldBeFlagged
-      ? '<span class="vb-tag entryflow-tag sig-tag" onclick="event.stopPropagation(); openEntryFlowPopup(' + s.id + ')">' + (s.entry_orderflow_shadow.rule === 'LONG_REPEAT_ADVERSE_FLOW' ? 'EFL' : 'EFS') + '</span>'
-      : '';
-    // Touch-time order-flow-pressure shadow tag (2026-09-27, touchOrderflowPressureShadow.js)
-    // -- only shown when wouldSkip is true (heavy adverse pressure approaching the touch),
-    // same "only the informative case" convention as dgTag/mfTag above.
-    const ofpTag = s.touch_orderflow_pressure_shadow?.wouldSkip
-      ? '<span class="vb-tag orderflowpressure-tag sig-tag" onclick="event.stopPropagation(); openOrderflowPressurePopup(' + s.id + ')">OFP</span>'
-      : '';
     // Late-backfill tag (OPEN_DECISION poller_late_backfill_display_gap_20260914) -- see the
     // CSS comment above. late_backfill_min comes straight from the API (created_at minus
     // fired_at, both naive-timestamp columns diffed in SQL, no JS date-parsing needed here).
@@ -1982,7 +1956,7 @@ function renderTimeline() {
       '<span class="rdot" style="background:' + dotColor + '"></span>' +
       '<span class="time mono">' + timeLabel + '</span>' +
       '<span class="type">' + (s.setup_type || '').replace(/_/g, ' ') + '</span>' +
-      clusterBadge + vbTag + wideTag + rsTag + vrTag + stTag + pcTag + t1fTag + dgTag + mfTag + bsTag + efTag + ofpTag + lateTag +
+      clusterBadge + vbTag + wideTag + rsTag + vrTag + stTag + pcTag + t1fTag + lateTag +
       '<span class="price mono">' + price + '</span>' +
       '<span class="badge ' + badgeClass + '">' + badgeText + '</span>' +
       '</div>';
@@ -2316,7 +2290,7 @@ function shadowTagRows(s) {
   const pnl = s.actual_pnl != null ? parseFloat(s.actual_pnl) : null;
   function gateRow(label, flagged, extra) {
     // Only the flagged case is shown -- same "showing every row would just be noise" convention
-    // as the row-level tags (dgTag/mfTag/efTag above only render when true). Fixed 2026-09-16
+    // as the row-level tags. Fixed 2026-09-16
     // after the user pointed out a "not flagged" row is exactly that noise.
     if (!flagged) return '';
     // All 3 gate-type mechanisms evaluate the exact same "as of entry" moment (see header) --

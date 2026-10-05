@@ -78,6 +78,7 @@ def _ensure_current_model():
 
 
 class Handler(BaseHTTPRequestHandler):
+    timeout = 10  # a stalled client or request must not hold its thread forever
     def log_message(self, fmt, *args):
         print(f'[scoring_service] {self.address_string()} {fmt % args}', file=sys.stderr)
 

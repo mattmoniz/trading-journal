@@ -58,13 +58,39 @@ function spawnChild() {
   });
 }
 
+// A process that is alive but no longer answering never triggers the exit handler above, so
+// it would sit wedged forever while every live Globex candidate fails closed. The watchdog
+// polls /health and kills the child after consecutive failures; the exit handler then respawns it.
+const WATCHDOG_INTERVAL_MS = 15000;
+const WATCHDOG_FAIL_THRESHOLD = 3;
+let watchdogTimer = null;
+let consecutiveHealthFailures = 0;
+
+async function checkHealthOnce() {
+  try {
+    const res = await fetch(`${ML_SCORING_SERVICE_URL}/health`, { signal: AbortSignal.timeout(3000) });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    consecutiveHealthFailures = 0;
+  } catch (e) {
+    consecutiveHealthFailures++;
+    console.error(`[mlScoringServiceManager] health check failed (${consecutiveHealthFailures}/${WATCHDOG_FAIL_THRESHOLD}): ${e.message}`);
+    if (consecutiveHealthFailures >= WATCHDOG_FAIL_THRESHOLD && child) {
+      console.error('[mlScoringServiceManager] service is alive but unresponsive -- killing it so it respawns');
+      consecutiveHealthFailures = 0;
+      child.kill('SIGKILL');
+    }
+  }
+}
+
 /** Call once at server startup, same convention as sierraChart's startConnectionManager(). */
 export function startMlScoringService() {
   if (child) return;
   spawnChild();
+  if (!watchdogTimer) watchdogTimer = setInterval(checkHealthOnce, WATCHDOG_INTERVAL_MS);
 }
 
 export function stopMlScoringService() {
+  if (watchdogTimer) { clearInterval(watchdogTimer); watchdogTimer = null; }
   if (restartTimer) { clearTimeout(restartTimer); restartTimer = null; }
   if (child) { child.kill(); child = null; }
 }

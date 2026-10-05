@@ -460,4 +460,10 @@ echo "=== Weekly backtest run: $(date) ==="
 # promote_weekly_checkpoint.py's own header for the full design.
 ./venv/bin/python3 scripts/ml_meta_labeling/promote_weekly_checkpoint.py
 
+# Forward check of the hourly volume-build magnitude effect (RESEARCH_CLAIM
+# hourly_volume_build_next60m_excursion_descriptive_20261004). Scores only hours on/after the
+# fixed FORWARD_START in the script; persists HOURLY_VOLBUILD_FORWARD rows to performance_audit.
+# Its ev_per_trade column holds the high-build residual in POINTS, not dollars (see notes).
+./venv/bin/python3 scripts/backtest_hourly_volume_build_forward.py
+
 echo "=== Weekly backtest run complete: $(date) ==="

@@ -1,23 +1,49 @@
-// Live ML VETO gate for the pre-10am window -- RESEARCH_CLAIM
-// ml_verdict_discriminates_pre10am_window_20260929 + a true frozen-model walk-forward
-// (both confirmed real, checked 2026-09-29), design-critiqued by DeepSeek before any code
-// was written (see docs/OPEN_THREADS.md's same-day entry for the full critique).
+// Live ML VETO gate, covering the full CME week except the 4-6pm ET maintenance gap --
+// RESEARCH_CLAIM ml_verdict_discriminates_pre10am_window_20260929 + a true frozen-model
+// walk-forward (both confirmed real, checked 2026-09-29), design-critiqued by DeepSeek
+// before any code was written (see docs/OPEN_THREADS.md's same-day entry for the full
+// critique). EXTENDED 2026-10-04 from the original 6pm-10am scope to cover full RTH
+// (through 4pm ET) -- see below.
 //
-// Scope: 6:00pm ET (Globex open) through 10:00am ET. A real Globex candidate that clears
+// Scope: 6:00pm ET (Globex open) through 4:00pm ET (RTH close) -- i.e. the gate is live
+// everywhere except the existing 4-6pm no-new-entries dead zone, which already fully skips
+// new inserts at every real site regardless of this gate. A real candidate that clears
 // every existing risk-discipline gate (cross-direction, sibling-reversal, opposite-
 // direction-open, same-type-refire) still gets scored by the ML meta-labeling model; a
 // VETO verdict forces SHADOW, same "force-SHADOW, never skip" convention as every other
 // gate in this chain, so the population keeps generating real outcome data that can keep
 // validating (or invalidating) this gate going forward. A TAKE verdict changes nothing.
 //
-// Wired to BOTH sides of the window as of 2026-09-29: detectGlobexSetup() (6pm-9:30am)
-// and 4 separate RTH insert sites for the 9:30-10am portion (STACK_VOL_BREAK_LIVE,
-// cluster-sibling-touch-credit, the main active-slot path, shadowCandidates) -- these are
-// structurally different insert paths in acd.js, not one shared "insert a candidate"
-// function, so each needed its own call site (matching how isOppositeDirectionOpen()/
-// isSameSetupRefireBlocked() are already wired at all 5 of these sites). The
-// isInRthOpenDeadZone() full-skip already covers 9:30-9:35 ET, so this gate's RTH-side
-// effect is really 9:35-10:00 ET.
+// EXTENSION EVIDENCE (2026-10-04): the original 6pm-10am scope left the bulk of RTH
+// (10am-4pm, ~71% of real RTH volume in the test population) completely unguarded. Backtest
+// against the real 9-fold expanding walk-forward (scripts/ml_meta_labeling/walkforward.py,
+// Aug 5-Oct 2 2026, with the new drv_recentDeltaAligned15Bars feature -- see dataset.py's
+// own header): candidates in the 10am-4pm window that the model would have VETO'd had a
+// real mean of -$6.77/trade (N=3399, day-blocked bootstrap CI=[-$11.55,-$2.27] -- excludes
+// zero, 40 distinct real days, NOT flagged clustered by computeRigor(), though the
+// chronological-thirds stability check does not hold and 3 of the worst 5 days sit
+// consecutively 2026-08-26/27/28 -- a real rough stretch, not proof of a permanent regime).
+// The retained TAKE population in the same window (N=356) point-estimates positive
+// (+$8.54/trade) but its own CI=[-$3.14,$19.98] crosses zero -- not yet proven profitable
+// on its own, so the honest claim here is "removes a statistically real loss source," not
+// "preserves a statistically proven gain." Net: extending is a defensible, evidence-backed
+// move to STOP a confirmed leak, not a claim that the retained trades are a validated edge.
+// A separate, harsher Deflated Sharpe Ratio check (scripts/ml_meta_labeling/deflated_sharpe.py)
+// on the model's pooled TAKE population did NOT survive multiple-testing correction at any
+// plausible trial count -- that check answers a different question ("is this a genuinely
+// new, publishable edge") than this extension answers ("does removing this gate's blind
+// spot avoid a real, already-observed loss") -- do not conflate the two when deciding
+// whether to trust this gate further. See docs/OPEN_THREADS.md's 2026-10-04 entry.
+//
+// Wired to BOTH sides of the window as of 2026-09-29, unchanged by the 2026-10-04 extension
+// (it's a pure constant change -- GATE_WINDOW_END_MOD -- read by the same isInMlVetoGateWindow()
+// every call site already gates on): detectGlobexSetup() (Globex) and 4 separate RTH insert
+// sites (STACK_VOL_BREAK_LIVE, cluster-sibling-touch-credit, the main active-slot path,
+// shadowCandidates) -- these are structurally different insert paths in acd.js, not one
+// shared "insert a candidate" function, so each needed its own call site (matching how
+// isOppositeDirectionOpen()/isSameSetupRefireBlocked() are already wired at all 5 of these
+// sites). The isInRthOpenDeadZone() full-skip already covers 9:30-9:35 ET, so this gate's
+// RTH-side effect is really 9:35am-4:00pm ET.
 //
 // Architecture (per DeepSeek's critique): a persistent Python scoring service
 // (mlScoringServiceManager.js/scripts/ml_meta_labeling/scoring_service.py) eliminates the
@@ -51,7 +77,10 @@ import { computePriorDayLevelFeatures, computeDevelopingValueFeatures } from './
 import { ML_SCORING_SERVICE_URL } from './mlScoringServiceManager.js';
 
 const GATE_WINDOW_START_MOD = 1080; // 6:00pm ET
-const GATE_WINDOW_END_MOD = 600;    // 10:00am ET (window wraps past midnight)
+const GATE_WINDOW_END_MOD = 960;    // 4:00pm ET (window wraps past midnight). Extended
+// 2026-10-04 from 600 (10:00am) -- see this file's header comment for the walk-forward
+// evidence. A strict superset of the old window: nothing between 6pm and 10am loses
+// coverage, 10am-4pm RTH gains it.
 // Session-open boundaries for the intraday bar query -- matches mlFireTimeScoring.js's
 // own RTH_OPEN_MOD/GLOBEX_OPEN_MOD constants exactly (never a second, possibly-drifting
 // copy of these two numbers).
@@ -65,7 +94,9 @@ const SCORE_TIMEOUT_MS = 500;       // DeepSeek's recommended budget -- local IP
 // live forward data ever decays (DeepSeek's explicit recommendation, section 6 of the
 // critique: "land the gate behind a kill-switch/config flag... the difference between a
 // real finding wired with evidence and a provisional finding wired on enthusiasm").
-export const ML_VETO_GATE = { enabled: true };
+// enforce=false: score and log every verdict (ml_verdicts) but never force-SHADOW a candidate.
+// Set 2026-10-04 after the forward check showed the VETO population averaging slightly positive.
+export const ML_VETO_GATE = { enabled: true, enforce: false };
 
 export function isInMlVetoGateWindow(etMin) {
   return etMin >= GATE_WINDOW_START_MOD || etMin < GATE_WINDOW_END_MOD;
@@ -103,7 +134,7 @@ async function computeInlineFeatures({ entry, tradeDate, boundaryMod }) {
 }
 
 /**
- * Scores a not-yet-inserted candidate (Globex OR the 9:30-10am RTH portion of the same
+ * Scores a not-yet-inserted candidate (Globex OR the 9:35am-4pm RTH portion of the same
  * approved window -- `isRth` selects the session boundary for the intraday bar query and
  * which approval_threshold the scoring service applies, matching score_one.py's own
  * within-session threshold selection exactly). Returns:
@@ -120,7 +151,12 @@ async function computeInlineFeatures({ entry, tradeDate, boundaryMod }) {
  * code review caught for the Globex site: hardcoding null here would be silently WRONG
  * wherever a real value exists, for the same reason.
  */
-export async function scoreMlVetoGate({ entry, tradeDate, confluenceScore, minutesFromOpen, nl30AtDetection = null, isRth }) {
+export async function scoreMlVetoGate(args) {
+  const result = await scoreMlVetoGateInner(args);
+  return ML_VETO_GATE.enforce ? result : { ...result, shadow: false };
+}
+
+async function scoreMlVetoGateInner({ entry, tradeDate, confluenceScore, minutesFromOpen, nl30AtDetection = null, isRth }) {
   if (!ML_VETO_GATE.enabled) return { shadow: false, reason: null, verdict: null, probability: null, modelVersion: null };
 
   let pdFeatures, intradayFeatures;
@@ -181,7 +217,9 @@ export async function scoreMlVetoGate({ entry, tradeDate, confluenceScore, minut
   }
   return {
     shadow: verdict === 'VETO',
-    reason: verdict === 'VETO' ? 'ML_VETO_PRE10AM' : null,
+    reason: verdict === 'VETO' ? 'ML_VETO_GATE_WINDOW' : null, // renamed from ML_VETO_PRE10AM
+    // 2026-10-04 (the window is no longer "pre-10am" -- verified this string has no other
+    // readers in the codebase before renaming, so this is a pure rename, not a migration)
     verdict, probability, modelVersion,
   };
 }

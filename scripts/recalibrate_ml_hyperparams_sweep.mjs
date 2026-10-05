@@ -109,6 +109,8 @@ async function main() {
     process.exit(1);
   }
   const { rows: [{ today }] } = await query('SELECT CURRENT_DATE::text as today');
+  const baselineSummary = summary.find(s => s.candidate === 'current');
+  const totalOosTrades = rows.filter(r => r.candidate === 'current').length;
 
   await query(`
     INSERT INTO performance_audit (run_date, window_days, signal_type, signal_name, sample_size, win_rate, ev_per_trade, notes)
@@ -129,7 +131,7 @@ async function main() {
     slug: 'ml_hyperparams_sweep_item5_20260922',
     claimText: `Item 5 (2026-09-21 DeepSeek ML silo review): swept 5 LightGBM hyperparameter candidates `
       + `(including 'current', DEFAULT_HYPERPARAMS, scored by the exact same method) through the real `
-      + `walk-forward logic (run_walkforward_folds(), 7 real folds, 3,805 trades), judged by day-blocked `
+      + `walk-forward logic (run_walkforward_folds(), ${baselineSummary?.folds ?? 'unknown'} real folds, ${totalOosTrades} out-of-sample trades), judged by day-blocked `
       + `bootstrap CI + distinctDates on each candidate's own TAKE population, matching `
       + `recalibrate_ml_walkforward.mjs's own standard -- never raw AUC or raw P&L alone. `
       + `Results: ${results.map(r => `${r.candidate}: N=${r.n}, meanPnl=$${r.meanPnl.toFixed(2)}, distinctDates=${r.distinctDates}, CI=[$${r.ciLo.toFixed(2)},$${r.ciHi.toFixed(2)}], ${r.clean ? 'CLEAN' : 'not clean'}`).join(' | ')}. `

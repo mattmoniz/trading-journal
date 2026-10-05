@@ -20,5 +20,5 @@ def get_connection():
     conn = psycopg2.connect(
         host=env_vars.get('DB_HOST', 'localhost'), port=env_vars.get('DB_PORT', '5432'),
         dbname=env_vars.get('DB_NAME', 'trading_journal'), user=env_vars.get('DB_USER', 'trader'),
-        password=env_vars.get('DB_PASSWORD', 'trader123'))
+        password=env_vars.get('DB_PASSWORD', 'trader123'), connect_timeout=5)
     return conn

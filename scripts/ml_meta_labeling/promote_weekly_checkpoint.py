@@ -38,6 +38,11 @@ sys.path.insert(0, os.path.dirname(__file__))
 from db import get_connection
 from dataset import EXISTING_FEATURE_COLS, build_feature_dict, REAL_TRADE_FILTER
 from score import load_model, score_candidate
+import numpy as np
+
+PROMOTE_MIN_UNSEEN_TRADES = 60
+PROMOTE_MIN_DISTINCT_DAYS = 20
+PROMOTE_MIN_UNSEEN_TAKE_N = 20
 
 
 def get_model_row(conn, where_clause, params=()):
@@ -109,61 +114,116 @@ def main():
     # retraining help," since anything older was already live-scored under the checkpoint
     # (or an even earlier one) and re-litigating it would just be in-sample hindsight.
     cur = conn.cursor()
+    cur.execute("SELECT test_start_at FROM ml_models WHERE model_version = %s", (candidate['model_version'],))
+    cand_test_start = cur.fetchone()[0]
+    if cand_test_start is None:
+        print("HELD: candidate has no test_start_at, so no unseen window can be defined. Checkpoint stays live.")
+        cur.execute("""
+            INSERT INTO performance_audit (run_date, window_days, signal_type, signal_name, sample_size, notes)
+            VALUES (%s, 7, 'ML_CHECKPOINT_PROMOTION', 'LATEST', 0, %s)
+            ON CONFLICT (run_date, window_days, signal_type, signal_name) DO UPDATE SET
+                sample_size = EXCLUDED.sample_size, notes = EXCLUDED.notes
+        """, (date.today(), json.dumps({'candidate_model_version': candidate['model_version'],
+                                        'checkpoint_model_version': checkpoint['model_version'],
+                                        'action': 'held', 'reason': 'candidate_test_start_at_null'})))
+        conn.commit()
+        return
     cur.execute(f"""
         SELECT id, ml_pd_features, ml_intraday_features, is_rth::int AS is_rth_int,
-            actual_pnl::float, {', '.join(EXISTING_FEATURE_COLS)}
+            actual_pnl::float, fired_at, {', '.join(EXISTING_FEATURE_COLS)}
         FROM active_setups
         WHERE {REAL_TRADE_FILTER}
             AND fired_at >= %s
             AND actual_pnl IS NOT NULL
             AND ml_pd_features IS NOT NULL AND ml_intraday_features IS NOT NULL
-    """, (checkpoint['trained_at'],))
-    cols = ['id', 'ml_pd_features', 'ml_intraday_features', 'is_rth_int', 'actual_pnl'] + EXISTING_FEATURE_COLS
+    """, (cand_test_start,))
+    cols = ['id', 'ml_pd_features', 'ml_intraday_features', 'is_rth_int', 'actual_pnl', 'fired_at'] + EXISTING_FEATURE_COLS
     rows = [dict(zip(cols, r)) for r in cur.fetchall()]
 
     checkpoint_bundle = load_model(checkpoint['model_path'])
     candidate_bundle = load_model(candidate['model_path'])
 
-    ckpt_take, ckpt_veto, cand_take, cand_veto, agree, flip = [], [], [], [], 0, []
+    # Both models are compared as POLICIES on the SAME universe of unseen trades: a trade
+    # contributes its real P&L if the model says TAKE, else 0. Comparing only each model's own
+    # TAKE set would reward a pickier model for selectivity, not accuracy.
+    agree, flip, universe = 0, [], []
     for row in rows:
         ckpt_result = score_row_under(checkpoint_bundle, checkpoint['approval_threshold_rth'], checkpoint['approval_threshold_globex'], row)
         cand_result = score_row_under(candidate_bundle, candidate['approval_threshold_rth'], candidate['approval_threshold_globex'], row)
         if ckpt_result is None or cand_result is None:
             continue
-        (ckpt_take if ckpt_result['verdict'] == 'TAKE' else ckpt_veto).append(row['actual_pnl'])
-        (cand_take if cand_result['verdict'] == 'TAKE' else cand_veto).append(row['actual_pnl'])
+        pnl = row['actual_pnl']
+        universe.append({
+            'date': row['fired_at'].date(), 'pnl': pnl,
+            'cand_take': cand_result['verdict'] == 'TAKE', 'ckpt_take': ckpt_result['verdict'] == 'TAKE',
+        })
         if ckpt_result['verdict'] == cand_result['verdict']:
             agree += 1
         else:
-            flip.append(row['actual_pnl'])
+            flip.append(pnl)
 
-    n = len(rows)
-    n_comparable = len(ckpt_take) + len(ckpt_veto)
+    n_comparable = len(universe)
+    days = sorted({u['date'] for u in universe})
+    cand_val = [u['pnl'] if u['cand_take'] else 0.0 for u in universe]
+    ckpt_val = [u['pnl'] if u['ckpt_take'] else 0.0 for u in universe]
+    cand_mean = float(np.mean(cand_val)) if universe else None
+    ckpt_mean = float(np.mean(ckpt_val)) if universe else None
+
+    rng = np.random.default_rng(0)
+    diff_ci = [None, None]
+    if universe:
+        by_day = {}
+        for u, cv, kv in zip(universe, cand_val, ckpt_val):
+            by_day.setdefault(u['date'], []).append(cv - kv)
+        day_keys = list(by_day)
+        boots = []
+        for _ in range(2000):
+            pick = rng.choice(day_keys, len(day_keys))
+            vals = np.concatenate([by_day[k] for k in pick])
+            boots.append(vals.mean())
+        diff_ci = [float(np.percentile(boots, 2.5)), float(np.percentile(boots, 97.5))]
 
     def ev(lst):
         return round(sum(lst) / len(lst), 2) if lst else None
 
+    cand_take_n = sum(1 for u in universe if u['cand_take'])
     report = {
         'checkpoint_model_version': checkpoint['model_version'],
         'candidate_model_version': candidate['model_version'],
         'checkpoint_test_auc': checkpoint['test_auc'],
         'candidate_test_auc': candidate['test_auc'],
-        'real_trades_since_checkpoint': n,
+        'unseen_window_from': str(cand_test_start),
         'n_comparable': n_comparable,
-        'checkpoint_take_n': len(ckpt_take), 'checkpoint_take_ev': ev(ckpt_take),
-        'checkpoint_veto_n': len(ckpt_veto), 'checkpoint_veto_ev': ev(ckpt_veto),
-        'candidate_take_n': len(cand_take), 'candidate_take_ev': ev(cand_take),
-        'candidate_veto_n': len(cand_veto), 'candidate_veto_ev': ev(cand_veto),
+        'distinct_days': len(days),
+        'candidate_take_n': cand_take_n,
+        'candidate_policy_mean': round(cand_mean, 2) if cand_mean is not None else None,
+        'checkpoint_policy_mean': round(ckpt_mean, 2) if ckpt_mean is not None else None,
+        'paired_diff_day_blocked_ci': [round(x, 2) if x is not None else None for x in diff_ci],
         'agreement_rate': round(agree / n_comparable, 3) if n_comparable else None,
         'flip_n': len(flip), 'flip_ev': ev(flip),
+        'promotion_rule': (f'promote only if unseen comparable trades >= {PROMOTE_MIN_UNSEEN_TRADES}, '
+                           f'distinct days >= {PROMOTE_MIN_DISTINCT_DAYS}, candidate TAKE count >= {PROMOTE_MIN_UNSEEN_TAKE_N}, '
+                           f'candidate policy mean > 0 and > checkpoint policy mean, and the day-blocked CI on the '
+                           f'paired difference excludes zero; all on trades fired at/after candidate test_start_at'),
     }
-
+    gate_pass = (n_comparable >= PROMOTE_MIN_UNSEEN_TRADES
+                 and len(days) >= PROMOTE_MIN_DISTINCT_DAYS
+                 and cand_take_n >= PROMOTE_MIN_UNSEEN_TAKE_N
+                 and cand_mean is not None and cand_mean > 0
+                 and cand_mean > ckpt_mean
+                 and diff_ci[0] is not None and diff_ci[0] > 0)
     print(json.dumps(report, indent=2))
-    if n_comparable < 20:
-        print(f"NOTE: only {n_comparable} comparable real trades since last promotion -- this "
-              f"comparison is too thin to draw a real conclusion from (this codebase's own "
-              f"N>=20 floor). Promoting anyway per design (weekly cadence is not gated on a "
-              f"single week's thin sample), but do not treat this week's numbers as decisive.")
+    if not gate_pass:
+        print(f"HELD: candidate {candidate['model_version']} did not clear the promotion gate on unseen trades. "
+              f"Checkpoint {checkpoint['model_version']} stays live.")
+        cur.execute("""
+            INSERT INTO performance_audit (run_date, window_days, signal_type, signal_name, sample_size, notes)
+            VALUES (%s, 7, 'ML_CHECKPOINT_PROMOTION', 'LATEST', %s, %s)
+            ON CONFLICT (run_date, window_days, signal_type, signal_name) DO UPDATE SET
+                sample_size = EXCLUDED.sample_size, notes = EXCLUDED.notes
+        """, (date.today(), n_comparable, json.dumps({**report, 'action': 'held'})))
+        conn.commit()
+        return
 
     cur.execute("UPDATE ml_models SET is_checkpoint = false WHERE is_checkpoint = true")
     cur.execute("UPDATE ml_models SET is_checkpoint = true WHERE model_version = %s", (candidate['model_version'],))
