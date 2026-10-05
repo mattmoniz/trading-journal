@@ -40,12 +40,15 @@ def load_hours(conn):
         "FROM price_bars_primary WHERE symbol='NQ' AND ts >= %(s)s ORDER BY ts",
         conn, params={'s': HISTORY_START})
     b['ts'] = pd.to_datetime(b['ts'])
+    b['hour'] = b['ts'].dt.floor('h')
+    g = b.groupby('hour')
+    nctr = g['contract'].nunique()
     b = b.drop_duplicates('ts').set_index('ts').sort_index()
     b['hour'] = b.index.floor('h')
     g = b.groupby('hour')
     H = pd.DataFrame({
         'vol': g['v'].sum(), 'hi': g['h'].max(), 'lo': g['l'].min(), 'close': g['c'].last(),
-        'nctr': g['contract'].nunique(), 'nbars': g['c'].size(),
+        'nctr': nctr.reindex(g.size().index), 'nbars': g['c'].size(),
     })
     H['hod'] = H.index.hour
     H['date'] = H.index.date

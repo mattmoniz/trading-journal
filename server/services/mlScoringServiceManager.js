@@ -63,8 +63,11 @@ function spawnChild() {
 // polls /health and kills the child after consecutive failures; the exit handler then respawns it.
 const WATCHDOG_INTERVAL_MS = 15000;
 const WATCHDOG_FAIL_THRESHOLD = 3;
+const WATCHDOG_KILL_WINDOW_MS = 30 * 60 * 1000;
+const WATCHDOG_MAX_KILLS_IN_WINDOW = 4;
 let watchdogTimer = null;
 let consecutiveHealthFailures = 0;
+const watchdogKillTimes = [];
 
 async function checkHealthOnce() {
   try {
@@ -75,6 +78,13 @@ async function checkHealthOnce() {
     consecutiveHealthFailures++;
     console.error(`[mlScoringServiceManager] health check failed (${consecutiveHealthFailures}/${WATCHDOG_FAIL_THRESHOLD}): ${e.message}`);
     if (consecutiveHealthFailures >= WATCHDOG_FAIL_THRESHOLD && child) {
+      const now = Date.now();
+      while (watchdogKillTimes.length && now - watchdogKillTimes[0] > WATCHDOG_KILL_WINDOW_MS) watchdogKillTimes.shift();
+      if (watchdogKillTimes.length >= WATCHDOG_MAX_KILLS_IN_WINDOW) {
+        console.error(`[mlScoringServiceManager] watchdog killed the scorer ${WATCHDOG_MAX_KILLS_IN_WINDOW} times in 30min -- giving up. The ML gate fails closed until the server is restarted and the scorer is checked directly.`);
+        return;
+      }
+      watchdogKillTimes.push(now);
       console.error('[mlScoringServiceManager] service is alive but unresponsive -- killing it so it respawns');
       consecutiveHealthFailures = 0;
       child.kill('SIGKILL');

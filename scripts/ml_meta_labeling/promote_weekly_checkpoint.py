@@ -16,13 +16,11 @@ mlSiloService.js, mlFireTimeScoring.js) now reads ml_models.is_checkpoint instea
 trained_at DESC, and ONLY this script ever changes which row that is -- once a week,
 via run_weekly_backtests.sh (Sunday 22:30pm ET).
 
-This is not a blind swap. Before promoting, it scores every real trade that fired since
-the CURRENT checkpoint was promoted through BOTH the current checkpoint and the candidate
-(newest-trained) model, and reports the real EV difference -- the actual "did retraining
-this week help or hurt" number, computed on real, already-resolved outcomes, not a
-backtest re-simulation. Promotion happens regardless of the sign (this is a stability fix,
-not a gate -- a week is too short a sample to condition promotion on; see the printed
-report's own honesty about N). The report is what a weekly review reads, not a blocker.
+This is not a blind swap. Promotion is GATED (2026-10-05): it scores real, already-resolved
+trades fired at/after the candidate's own test_start_at through both the live checkpoint and
+the candidate, as policies on the same trades (pnl if TAKE, else 0). It promotes only if the
+candidate clears the rule in PROMOTE_* constants and the paired day-blocked CI excludes zero;
+otherwise it records action='held' and leaves is_checkpoint unchanged.
 Persisted to performance_audit (signal_type='ML_CHECKPOINT_PROMOTION', signal_name=
 model_version being promoted TO) so it's queryable/discoverable per this codebase's
 standing no-dead-ends rule, not just console output that scrolls off scratch/weekly_backtests.log.
@@ -109,10 +107,7 @@ def main():
     print(f"Current checkpoint: {checkpoint['model_version']} (trained {checkpoint['trained_at']}, test_auc={checkpoint['test_auc']})")
     print(f"Candidate (newest): {candidate['model_version']} (trained {candidate['trained_at']}, test_auc={candidate['test_auc']})")
 
-    # Real trades that fired since the CURRENT checkpoint was set -- these are the only
-    # trades whose real, already-known outcome can honestly judge "did this week's
-    # retraining help," since anything older was already live-scored under the checkpoint
-    # (or an even earlier one) and re-litigating it would just be in-sample hindsight.
+    # Trades the candidate never saw in training or testing (fired at/after its test_start_at).
     cur = conn.cursor()
     cur.execute("SELECT test_start_at FROM ml_models WHERE model_version = %s", (candidate['model_version'],))
     cand_test_start = cur.fetchone()[0]
