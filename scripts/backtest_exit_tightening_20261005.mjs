@@ -71,7 +71,24 @@ for (const r of rows) {
   if (entry == null) { excluded.no_entry++; continue; }
   trades.push({ ...r, dir, long: dir === 'LONG', entry });
 }
-console.log(`population: ${rows.length} rows; scorable ${trades.length}; excluded ${JSON.stringify(excluded)}`);
+// Optional restriction + placebo (added 2026-10-06). SETUP_ONLY=<setup_type> restricts the population.
+// PLACEBO_SEED=<n> flips each trade's direction at random (seeded), then recomputes BOTH the stored
+// baseline geometry and every candidate under that flipped direction, so the delta still compares
+// like with like. A real edge should beat the placebo distribution; a geometric artifact will not.
+const SETUP_ONLY = process.env.SETUP_ONLY || null;
+const PLACEBO_SEED = process.env.PLACEBO_SEED != null ? Number(process.env.PLACEBO_SEED) : null;
+const OUT_TAG = process.env.OUT_TAG || '';
+if (SETUP_ONLY) {
+  for (let i = trades.length - 1; i >= 0; i--) if (trades[i].setup_type !== SETUP_ONLY) trades.splice(i, 1);
+}
+if (PLACEBO_SEED != null) {
+  let ps = PLACEBO_SEED >>> 0;
+  for (const t of trades) {
+    ps = (ps * 1664525 + 1013904223) >>> 0;
+    if (ps / 4294967296 < 0.5) { t.long = !t.long; t.dir = t.long ? 'LONG' : 'SHORT'; }
+  }
+}
+console.log(`population: ${rows.length} rows; scorable ${trades.length}; excluded ${JSON.stringify(excluded)}` + (SETUP_ONLY ? `; SETUP_ONLY=${SETUP_ONLY}` : '') + (PLACEBO_SEED != null ? `; PLACEBO_SEED=${PLACEBO_SEED}` : ''));
 
 // fired_at/expires_at are selected as TEXT on purpose: node-postgres turns a naive timestamp into a JS Date
 // (parsed as UTC), and passing that Date back as a query parameter shifts it by the local offset (4 hours
@@ -247,7 +264,47 @@ for (const r of report) {
   console.log(`${String(r.stopMult).padEnd(9)} ${String(r.targetMult).padEnd(10)} ${r.tie.padEnd(7)} ${String(r.trades).padEnd(6)} ${String(r.distinctDays).padEnd(5)} ${String(r.meanDeltaPerTrade).padEnd(12)} [${r.ci95Day[0]}, ${r.ci95Day[1]}]`.padEnd(70) + ` ${String(r.p).padEnd(7)} ${String(r.halves.first)}/${r.halves.second}`.padEnd(30) + ` ${pass ? 'YES' : 'no'}`);
 }
 
-const out = { generated: new Date().toISOString(), population: rows.length, scored: perTrade.length, excluded, noBars, parityMean, parityMAD, report };
-fs.writeFileSync(new URL('../scratch/exit_tightening_20261005.json', import.meta.url), JSON.stringify(out, null, 2));
-console.log('\nwrote scratch/exit_tightening_20261005.json');
+// Per-setup breakdown (the pooled grid above can hide opposite-signed setups).
+// N floor: a setup needs >=20 scored trades to get a verdict, else it is shown as THIN.
+const perSetup = [];
+for (const c of CANDIDATES) {
+  const key = `${c.k}|${c.m}`;
+  for (const tie of ['stop', 'target']) {
+    const deltaFn = r => {
+      const cand = r.cand[key][tie === 'stop' ? 'stop' : 'tgt'];
+      const base = tie === 'stop' ? r.baseStop : r.baseTgt;
+      if (!cand.filled) return null;
+      return cand.pnl - base;
+    };
+    const bySetup = new Map();
+    for (const r of perTrade) {
+      if (deltaFn(r) == null) continue;
+      if (!bySetup.has(r.setup)) bySetup.set(r.setup, []);
+      bySetup.get(r.setup).push(r);
+    }
+    for (const [setup, rowsS] of bySetup) {
+      const days = dayDeltas(rowsS, deltaFn);
+      const mean = rowsS.reduce((a, r) => a + deltaFn(r), 0) / rowsS.length;
+      const thin = rowsS.length < 20;
+      const ci = thin ? null : blockBootCI(days);
+      perSetup.push({
+        setup, stopMult: c.k, targetMult: c.m, tie,
+        trades: rowsS.length, distinctDays: days.length,
+        meanDeltaPerTrade: +mean.toFixed(2),
+        ci95Day: ci ? [+ci[0].toFixed(0), +ci[1].toFixed(0)] : null,
+        verdict: thin ? 'THIN_N' : (ci[0] > 0 ? 'POSITIVE' : ci[1] < 0 ? 'NEGATIVE' : 'FLAT'),
+      });
+    }
+  }
+}
+console.log('\nPer-setup (only setups with >=20 scored trades get a verdict; THIN_N otherwise)');
+console.log('setup'.padEnd(34) + 'stop  tgt   tie     trades days  meanΔ/trade  CI95(day,$)           verdict');
+for (const r of perSetup.filter(x => x.trades >= 20).sort((a, b) => b.meanDeltaPerTrade - a.meanDeltaPerTrade)) {
+  console.log(`${r.setup.padEnd(34)}${String(r.stopMult).padEnd(6)}${String(r.targetMult).padEnd(6)}${r.tie.padEnd(8)}${String(r.trades).padEnd(7)}${String(r.distinctDays).padEnd(5)}${String(r.meanDeltaPerTrade).padEnd(12)}[${r.ci95Day[0]}, ${r.ci95Day[1]}]`.padEnd(95) + r.verdict);
+}
+console.log(`thin setups (N<20, not verdicted): ${new Set(perSetup.filter(x => x.trades < 20).map(x => x.setup)).size}`);
+
+const out = { generated: new Date().toISOString(), population: rows.length, scored: perTrade.length, excluded, noBars, parityMean, parityMAD, report, perSetup };
+fs.writeFileSync(new URL(`../scratch/exit_tightening_20261005${OUT_TAG}.json`, import.meta.url), JSON.stringify(out, null, 2));
+console.log(`\nwrote scratch/exit_tightening_20261005${OUT_TAG}.json`);
 process.exit(0);

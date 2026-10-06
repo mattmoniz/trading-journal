@@ -120,6 +120,7 @@ async function run() {
       WHERE (setup_type LIKE '%FADE%' OR setup_type IN ('IB_BULLISH', 'IB_BEARISH',
         'GLOBEX_VWAP_MAGNET_LONG', 'GLOBEX_VWAP_MAGNET_SHORT', 'MOMENTUM_60m_60m_TREND', 'STOP_SWEEP_LONG'))
         AND status = 'RESOLVED'
+        AND bad_bars_basis IS NOT TRUE
     `),
     query(`
       SELECT a.setup_type, a.resolution, a.actual_pnl::float, a.origin_status, a.trade_date::text as trade_date, d.day_type
@@ -128,6 +129,7 @@ async function run() {
       WHERE (a.setup_type LIKE '%FADE%' OR a.setup_type IN ('IB_BULLISH', 'IB_BEARISH',
         'GLOBEX_VWAP_MAGNET_LONG', 'GLOBEX_VWAP_MAGNET_SHORT', 'MOMENTUM_60m_60m_TREND', 'STOP_SWEEP_LONG'))
         AND a.status = 'RESOLVED'
+        AND a.bad_bars_basis IS NOT TRUE
         AND d.day_type IS NOT NULL
       ORDER BY a.setup_type, d.day_type
     `),

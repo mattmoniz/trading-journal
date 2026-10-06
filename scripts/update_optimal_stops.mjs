@@ -939,6 +939,7 @@ async function main() {
     WHERE status = 'RESOLVED' AND entry_zone_low IS NOT NULL
       AND stop_level IS NOT NULL AND t1_level IS NOT NULL
       AND actual_pnl IS NOT NULL
+      AND bad_bars_basis IS NOT TRUE
     GROUP BY setup_type
   `);
   const dppByType = {};
@@ -957,6 +958,7 @@ async function main() {
       AND mae_points <= 300 AND mfe_points <= 300
       AND status = 'RESOLVED'
       AND replay_resolution IN ('TARGET_HIT', 'STOP_HIT')
+      AND bad_bars_basis IS NOT TRUE
   `);
   const rawByType = {};
   for (const t of rawRes.rows) {
