@@ -79,3 +79,43 @@ export function fillPriceSanity({ orderType, side, price1, fillPrice }) {
   }
   return { ok: true };
 }
+
+/**
+ * Parses the bid/ask the Sierra simulator writes into a fill's InfoText, e.g.
+ * "Trade simulation fill. Bid: 31564.75 Ask: 31565.00 Last: 31564.75". Returns { bid, ask } or null.
+ */
+export function parseBidAskFromInfo(infoText) {
+  if (typeof infoText !== 'string') return null;
+  const m = infoText.match(/Bid:\s*([\d.]+)\s+Ask:\s*([\d.]+)/);
+  if (!m) return null;
+  return { bid: Number(m[1]), ask: Number(m[2]) };
+}
+
+/**
+ * Classifies a converted fill (2026-10-06). Replaces the plain pass/refuse decision for cases where the
+ * fill breaks its order's limit/stop rule:
+ *   OK               -- fill obeys the order-type rule.
+ *   MARKET_EXECUTION -- breaks the rule, BUT equals the bid (sell) or ask (buy) the broker reported at the
+ *                       moment of the fill. Sierra's simulator fills resting orders at market this way, so the
+ *                       price is real and is kept, flagged.
+ *   REFUSED          -- breaks the rule and matches no reported bid/ask. Likely a conversion or attribution error.
+ * Uses only the broker's own quote, so there is no hand-set threshold.
+ */
+export function classifyFill({ orderType, side, price1, fillPrice, infoText }) {
+  const base = fillPriceSanity({ orderType, side, price1, fillPrice });
+  if (base.ok) return { status: 'OK', reason: null };
+  const quote = parseBidAskFromInfo(infoText);
+  const EPS = 1e-6;
+  const atQuote = quote && (side === 'SELL' ? Math.abs(fillPrice - quote.bid) < EPS : Math.abs(fillPrice - quote.ask) < EPS);
+  if (atQuote) return { status: 'MARKET_EXECUTION', reason: `${base.reason}; fill equals the broker's ${side === 'SELL' ? 'bid' : 'ask'} at fill time` };
+  return { status: 'REFUSED', reason: base.reason };
+}
+
+// MNQ's minimum price increment. Converted broker prices are rounded to it (2026-10-06): the broker's
+// DisplayPriceMultiplier (0.00999999776...) lands a fraction of a cent off the real tick (raw 3135700 -> 31356.993),
+// which matches Sierra's own quoted prices exactly once rounded to the tick. Source: MNQ contract tick size.
+export const MNQ_TICK = 0.25;
+export function toTickPrice(value) {
+  if (!Number.isFinite(value)) return null;
+  return Math.round(value / MNQ_TICK) * MNQ_TICK;
+}

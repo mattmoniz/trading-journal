@@ -144,3 +144,12 @@ column list — these are real point-in-time snapshots, not projections.
 - **Most of these backups use `DROP TABLE IF EXISTS ... ; CREATE TABLE ... AS`** inside their own repair script (check the script column above) — meaning if that exact script is ever re-run, it will silently **overwrite its own backup** with a fresh pre-state snapshot from whenever it's re-run, not preserve the original 2026-07-14 one. All of these scripts are one-off historical repairs not wired into any cron, so this is low risk in practice, but don't assume a backup table's contents are frozen forever just because it looks like a snapshot — check whether its source script could plausibly run again first.
 - **None of these are on any retention/cleanup schedule.** They sit in the live DB indefinitely until someone manually drops them. `trades_backup_20260716` alone is 71MB — not enormous, but worth knowing these aren't free. There's no current policy on when it's safe to drop one (e.g. "N days after the fix has been live with no regressions reported") — if that's wanted, it needs a deliberate decision, not an assumed default.
 - This catalog is a snapshot of what existed as of 2026-07-17. If you're reading this later and the live `information_schema.tables` list doesn't match, trust the live query over this file and update it.
+
+## order_placements_rawunit_repair_backup_20261006
+- What: the 10 order_placements rows (since 2026-09-28) whose avg_fill_price still held the broker's raw integer (e.g. 3043725 = 30437.25), copied before the 2026-10-06 repair.
+- Why: the repair converted them to real prices rounded to the MNQ tick (scripts/repair_raw_fill_units_20261006.mjs, user-approved).
+- Restore: the original raw values are in this table; copy avg_fill_price back by id if the conversion needs reverting.
+
+## active_setups_131237_tick_backup_20261006 and order_placements_131237_tick_backup_20261006
+- What: copies of trade 131237's active_setups row and its ENTRY order (id 25) before the 2026-10-06 tick rounding (entry avg 31356.9993 -> 31357.00).
+- Restore: copy avg_fill_price back to order_placements id 25 from the backup table.

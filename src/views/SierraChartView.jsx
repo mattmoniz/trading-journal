@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import { API_URL } from '../constants/api.js';
 import { useViewActive } from '../utils/useViewActive.js';
 
@@ -16,6 +16,49 @@ const STATE_COLOR = {
 function StatusDot({ state }) {
   const color = STATE_COLOR[state] || '#94a3b8';
   return <span style={{ display: 'inline-block', width: 10, height: 10, borderRadius: '50%', background: color, marginRight: 8 }} />;
+}
+
+const SOURCE_FILTERS = ['ALL', 'APP', 'MANUAL', 'OTHER'];
+const TYPE_FILTERS = ['ALL', 'ENTRY', 'STOP', 'EXIT', 'FILLED', 'CANCELED', 'REJECTED'];
+
+function ActivityLog() {
+  const [events, setEvents] = useState(null);
+  const [err, setErr] = useState(null);
+  const [srcF, setSrcF] = useState('ALL');
+  const [typeF, setTypeF] = useState('ALL');
+  useEffect(() => {
+    let alive = true;
+    const load = () => fetch(`${API_URL}/sierra-chart/activity?limit=200`, { cache: 'no-store' })
+      .then((r) => r.json())
+      .then((d) => { if (alive) { setEvents(d.events || []); setErr(null); } })
+      .catch(() => { if (alive) setErr('Could not load activity'); });
+    load();
+    const id = setInterval(load, 15000);
+    return () => { alive = false; clearInterval(id); };
+  }, []);
+  return (
+    <Card title={`Activity log (${events ? events.length : '…'})`}>
+      {err && <div style={{ color: '#fca5a5', fontSize: 13 }}>{err}</div>}
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
+        {SOURCE_FILTERS.map(f => (
+          <button key={'s' + f} onClick={() => setSrcF(f)} style={{ padding: '4px 8px', fontSize: 12, background: srcF === f ? '#334155' : 'transparent', color: '#e2e8f0', border: '1px solid #334155', borderRadius: 4 }}>source: {f}</button>
+        ))}
+        {TYPE_FILTERS.map(f => (
+          <button key={'t' + f} onClick={() => setTypeF(f)} style={{ padding: '4px 8px', fontSize: 12, background: typeF === f ? '#334155' : 'transparent', color: '#e2e8f0', border: '1px solid #334155', borderRadius: 4 }}>type: {f}</button>
+        ))}
+      </div>
+      <div style={{ maxHeight: 360, overflowY: 'auto', fontFamily: 'monospace', fontSize: 12 }}>
+        {(events || []).filter(e => (srcF === 'ALL' || e.source === srcF) && (typeF === 'ALL' || e.purpose === typeF || e.event === typeF)).map((e, i) => (
+          <div key={i} style={{ padding: '3px 0', borderBottom: '1px solid #1e293b', color: e.source === 'APP' ? '#93c5fd' : '#e2e8f0' }}>
+            <span style={{ color: '#64748b' }}>{e.at}</span> <span style={{ color: '#a5b4fc' }}>[{e.source}]</span>{' '}
+            {e.purpose ? `${e.purpose} ` : ''}{e.event}
+            {e.raw_fill ? ` @ ${(Number(e.raw_fill) * 0.00999999776482582).toFixed(2)}` : ''}
+            {e.qty ? ` x${e.qty}` : ''}{e.setup_id ? ` · setup ${e.setup_id}` : ''}{e.info ? ` · ${e.info}` : ''}
+          </div>
+        ))}
+      </div>
+    </Card>
+  );
 }
 
 function Card({ title, children }) {
@@ -148,6 +191,31 @@ export default function SierraChartView() {
           )}
         </Card>
       )}
+
+      <Card title="Proposed: broker-side target orders (not built)">
+        <div style={{ fontSize: 13, color: '#cbd5e1', lineHeight: 1.5 }}>
+          Today targets are watched by the app every 15 seconds and exited at market, so a
+          target can be missed or filled late if price passes it between checks. Stops already
+          sit at the broker. Proposal: also place each target as a resting limit order at the
+          broker, so targets are as reliable as stops. Status: proposal only, nothing built or
+          live. Needs your approval before any change to how trades are placed.
+        </div>
+      </Card>
+
+      {status.unconfirmedCloses !== null && status.unconfirmedCloses?.length > 0 && (
+        <Card title={`⚠ Closes Not Confirmed at Broker (${status.unconfirmedCloses.length})`}>
+          <div style={{ fontSize: 13, color: '#fca5a5', marginBottom: 8 }}>
+            The app shows these trades closed, but the broker has no filled exit or stop for them. Review them in Sierra Chart before trusting the record.
+          </div>
+          {status.unconfirmedCloses.map(c => (
+            <div key={c.setup_id} style={{ fontSize: 13, color: '#e2e8f0', padding: '4px 0' }}>
+              setup {c.setup_id} · {c.setup_type} · {c.resolution} · app P&L {c.pnl ?? 'n/a'} · resolved {c.resolved_at}
+            </div>
+          ))}
+        </Card>
+      )}
+
+      <ActivityLog />
 
       <Card title={`Recent Orders (${recentOrders.length})`}>
         {recentOrders.length === 0 ? (

@@ -170,6 +170,34 @@ ALTER SEQUENCE public.acd_daily_log_id_seq OWNED BY public.acd_daily_log.id;
 
 
 --
+-- Name: acd_daily_log_nqbad_backup_20261005; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.acd_daily_log_nqbad_backup_20261005 (
+    id integer,
+    trade_date date,
+    or_high numeric,
+    or_low numeric,
+    a_multiplier numeric,
+    a_up_level numeric,
+    a_down_level numeric,
+    a_up_fired boolean,
+    a_up_time time without time zone,
+    a_down_fired boolean,
+    a_down_time time without time zone,
+    c_up_confirmed boolean,
+    c_down_confirmed boolean,
+    daily_score integer,
+    session_close numeric,
+    notes text,
+    created_at timestamp without time zone,
+    close_position character varying(10),
+    day_type character varying(30),
+    profile_shape character varying(20)
+);
+
+
+--
 -- Name: acd_monthly_pivot; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -424,7 +452,126 @@ CREATE TABLE public.active_setups (
     breakeven_stop_live jsonb,
     t1_floor_runner_shadow jsonb,
     late_fill_past_expiry_basis boolean,
-    touch_orderflow_pressure_shadow jsonb
+    touch_orderflow_pressure_shadow jsonb,
+    bad_bars_basis boolean,
+    pnl_source character varying(10),
+    broker_pnl numeric
+);
+
+
+--
+-- Name: active_setups_131237_tick_backup_20261006; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.active_setups_131237_tick_backup_20261006 (
+    id integer,
+    trade_date date,
+    setup_type character varying(60),
+    fired_at timestamp without time zone,
+    expires_at timestamp without time zone,
+    resolved_at timestamp without time zone,
+    status character varying(10),
+    resolution character varying(20),
+    entry_zone_low numeric,
+    entry_zone_high numeric,
+    stop_level numeric,
+    t1_level numeric,
+    t1_label character varying(100),
+    structural_level_touched numeric,
+    structural_level_type character varying(60),
+    price_at_detection numeric,
+    price_at_resolution numeric,
+    historical_win_rate numeric,
+    historical_sessions integer,
+    historical_avg_pnl numeric,
+    historical_t1_hit_rate numeric,
+    historical_source character varying(20),
+    nl30_at_detection integer,
+    structural_state_at_detection character varying(60),
+    confluence_score_at_detection integer,
+    actual_outcome character varying(20),
+    actual_pnl numeric,
+    created_at timestamp without time zone,
+    updated_at timestamp without time zone,
+    invalidation_timing character varying(20),
+    resolution_method character varying(20),
+    overnight_bias character varying(20),
+    mae_points numeric,
+    mfe_points numeric,
+    bars_to_resolution integer,
+    resolution_bar_time timestamp without time zone,
+    replay_resolution character varying(20),
+    size_multiplier numeric(5,3),
+    suppression_reason text,
+    touch_quality character varying(20),
+    touch_quality_vol_z numeric,
+    origin_status character varying(12),
+    is_rth boolean,
+    runner_trail_width numeric,
+    breakeven_armed_at timestamp without time zone,
+    runner_peak_price numeric,
+    runner_trail_price numeric,
+    confluence_levels_at_detection text[],
+    exhaustion_signal_at_detection boolean,
+    bar6_checkpoint character varying(20),
+    bar6_exit_recommended boolean,
+    extend_target_level numeric,
+    extend_decision character varying(20),
+    delta_confirmation_state character varying(20),
+    cluster_attributed_setups text[],
+    hivol_lopace_at_detection boolean,
+    regime_pos_10d numeric(8,4),
+    regime_label_10d character varying(4),
+    regime_pos_20d numeric(8,4),
+    regime_label_20d character varying(4),
+    regime_pos_30d numeric(8,4),
+    regime_label_30d character varying(4),
+    regime_pos_45d numeric(8,4),
+    regime_label_45d character varying(4),
+    regime_pos_60d numeric(8,4),
+    regime_label_60d character varying(4),
+    regime_pos_90d numeric(8,4),
+    regime_label_90d character varying(4),
+    regime_pos_180d numeric(8,4),
+    regime_label_180d character varying(4),
+    va_width_pctile_60d numeric,
+    va_overlap_streak integer,
+    ib_range_pctile_60d numeric,
+    selected_over text[],
+    day_type_at_fire character varying(20),
+    vol_bucket_at_fire character varying(12),
+    session character varying(8),
+    minutes_from_open integer,
+    bet_class character varying(24),
+    wider_target_mult numeric,
+    ib_window_stale_basis boolean,
+    size_factors_at_detection text,
+    vol_building_signal jsonb,
+    or_range_at_detection numeric,
+    rvol_20d_at_detection numeric,
+    slow_deep_exit_speed character varying(10),
+    slow_deep_exit_recommended boolean,
+    post_entry_exit_signals jsonb,
+    step_trail_shadow jsonb,
+    pitch_catch_shadow jsonb,
+    direction_gate_shadow jsonb,
+    momentum_against_fade_shadow jsonb,
+    cluster_touch_id uuid,
+    is_cluster_primary boolean,
+    stale_entry_price_basis boolean,
+    breakeven_stop_shadow jsonb,
+    entry_orderflow_shadow jsonb,
+    ml_extended_label jsonb,
+    ml_pd_features jsonb,
+    ml_intraday_features jsonb,
+    ml_extended_label_5x jsonb,
+    ml_extended_label_10x jsonb,
+    breakeven_stop_eligible boolean,
+    breakeven_stop_live jsonb,
+    t1_floor_runner_shadow jsonb,
+    late_fill_past_expiry_basis boolean,
+    touch_orderflow_pressure_shadow jsonb,
+    bad_bars_basis boolean
 );
 
 
@@ -581,6 +728,17 @@ CREATE TABLE public.active_setups_backfill_resolution_bar_time_backup_20260820 (
     bet_class character varying(24),
     wider_target_mult numeric,
     ib_window_stale_basis boolean
+);
+
+
+--
+-- Name: active_setups_badbars_flag_backup_20261005; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.active_setups_badbars_flag_backup_20261005 (
+    id integer,
+    origin_status character varying(12),
+    fired_at timestamp without time zone
 );
 
 
@@ -4774,6 +4932,27 @@ ALTER SEQUENCE public.developing_value_log_id_seq OWNED BY public.developing_val
 
 
 --
+-- Name: developing_value_log_nqbad_backup_20261005; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.developing_value_log_nqbad_backup_20261005 (
+    id integer,
+    trade_date date,
+    poc numeric(10,2),
+    vah numeric(10,2),
+    val numeric(10,2),
+    session_high numeric(10,2),
+    session_low numeric(10,2),
+    session_close numeric(10,2),
+    poc_delta_vs_prior numeric(10,2),
+    va_overlap_pct_vs_prior numeric(6,4),
+    migration_dir_vs_prior text,
+    hold_or_reject_vs_prior text,
+    computed_at timestamp without time zone
+);
+
+
+--
 -- Name: dll_daily_events; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -5013,6 +5192,19 @@ CREATE TABLE public.level_prices_3m_va_lookahead_backup_20260719 (
 --
 
 CREATE TABLE public.level_prices_ib_backup_20260714 (
+    trade_date date,
+    level_name text,
+    price numeric(12,4),
+    category text,
+    computed_at timestamp with time zone
+);
+
+
+--
+-- Name: level_prices_nqbad_backup_20261005; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.level_prices_nqbad_backup_20261005 (
     trade_date date,
     level_name text,
     price numeric(12,4),
@@ -5569,6 +5761,38 @@ CREATE TABLE public.order_placements (
 
 
 --
+-- Name: order_placements_131237_tick_backup_20261006; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.order_placements_131237_tick_backup_20261006 (
+    id integer,
+    setup_id integer,
+    purpose character varying(10),
+    client_order_id character varying(40),
+    symbol character varying(20),
+    exchange character varying(20),
+    side character varying(4),
+    order_type character varying(10),
+    quantity integer,
+    price1 numeric,
+    price2 numeric,
+    trade_account character varying(60),
+    environment_service character varying(60),
+    status character varying(32),
+    filled_quantity integer,
+    avg_fill_price numeric,
+    reject_reason text,
+    submitted_at timestamp without time zone,
+    last_update_at timestamp without time zone,
+    raw_last_order_update jsonb,
+    created_at timestamp without time zone,
+    server_order_id character varying(64),
+    position_open boolean,
+    latest_transaction_time double precision
+);
+
+
+--
 -- Name: order_placements_id_seq; Type: SEQUENCE; Schema: public; Owner: -
 --
 
@@ -5618,6 +5842,38 @@ CREATE SEQUENCE public.order_placements_invariant_baseline_id_seq
 --
 
 ALTER SEQUENCE public.order_placements_invariant_baseline_id_seq OWNED BY public.order_placements_invariant_baseline.id;
+
+
+--
+-- Name: order_placements_rawunit_repair_backup_20261006; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.order_placements_rawunit_repair_backup_20261006 (
+    id integer,
+    setup_id integer,
+    purpose character varying(10),
+    client_order_id character varying(40),
+    symbol character varying(20),
+    exchange character varying(20),
+    side character varying(4),
+    order_type character varying(10),
+    quantity integer,
+    price1 numeric,
+    price2 numeric,
+    trade_account character varying(60),
+    environment_service character varying(60),
+    status character varying(32),
+    filled_quantity integer,
+    avg_fill_price numeric,
+    reject_reason text,
+    submitted_at timestamp without time zone,
+    last_update_at timestamp without time zone,
+    raw_last_order_update jsonb,
+    created_at timestamp without time zone,
+    server_order_id character varying(64),
+    position_open boolean,
+    latest_transaction_time double precision
+);
 
 
 --
@@ -7591,6 +7847,26 @@ CREATE MATERIALIZED VIEW public.price_bars_dedup_hist_v2 AS
      LEFT JOIN day_rank dr ON (((dr.symbol = a.symbol) AND (dr.d = (a.ts)::date) AND (dr.contract = a.contract))))
   ORDER BY a.symbol, a.ts, (a.contract = cc.contract) DESC NULLS LAST, COALESCE(dr.rn, (2147483647)::bigint), a.contract DESC
   WITH NO DATA;
+
+
+--
+-- Name: price_bars_nqh26_sep_nov2025_backup_20261005; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.price_bars_nqh26_sep_nov2025_backup_20261005 (
+    id bigint,
+    symbol text,
+    contract text,
+    ts timestamp without time zone,
+    open numeric(12,4),
+    high numeric(12,4),
+    low numeric(12,4),
+    close numeric(12,4),
+    volume integer,
+    num_trades integer,
+    bid_volume integer,
+    ask_volume integer
+);
 
 
 --
