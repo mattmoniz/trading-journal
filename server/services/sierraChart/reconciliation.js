@@ -49,6 +49,7 @@
 import { query, getClient } from '../../db.js';
 import { getPriceMultiplier, applyPriceMultiplier, classifyFill, toTickPrice } from './priceMultiplier.js';
 import { runSerializedByKey } from './orderUpdateQueue.js';
+import { recordBrokerPnlForSetup } from './brokerPnlWriter.js';
 
 export function entryClientOrderId(setupId) { return `E${setupId}`; }
 export function exitClientOrderId(setupId) { return `X${setupId}-${Date.now()}`; }
@@ -432,6 +433,8 @@ async function applyOrderUpdate(msg, dtcClient) {
   // stuck forever (blocking every future real entry) even though the position was
   // legitimately closed.
   if ((row.purpose === 'EXIT' || row.purpose === 'STOP') && applyStatus && newStatus === 'FILLED') {
+    // Broker-derived P&L on close (2026-10-06). Writes only when both fills are present; never guesses.
+    await recordBrokerPnlForSetup(row.setup_id).catch((err) => console.error(`[sierraChart.reconciliation] broker P&L write failed for setup_id=${row.setup_id}:`, err.message));
     const client = await getClient();
     try {
       await client.query('BEGIN');
