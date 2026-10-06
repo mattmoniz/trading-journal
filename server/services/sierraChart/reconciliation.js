@@ -47,7 +47,7 @@
 // at the DB level.
 
 import { query, getClient } from '../../db.js';
-import { getPriceMultiplier, applyPriceMultiplier } from './priceMultiplier.js';
+import { getPriceMultiplier, applyPriceMultiplier, fillPriceSanity } from './priceMultiplier.js';
 
 export function entryClientOrderId(setupId) { return `E${setupId}`; }
 export function exitClientOrderId(setupId) { return `X${setupId}-${Date.now()}`; }
@@ -326,7 +326,7 @@ export async function handleOrderUpdate(msg, dtcClient) {
 
   const existingQ = await query(
     `SELECT id, setup_id, purpose, symbol, exchange, side, status, filled_quantity, latest_transaction_time,
-       trade_account, environment_service
+       trade_account, environment_service, order_type, price1::float AS price1
      FROM order_placements WHERE client_order_id = $1`,
     [clientOrderId]
   );
@@ -352,7 +352,17 @@ export async function handleOrderUpdate(msg, dtcClient) {
   if (rawAvgFill != null) {
     const mult = await getPriceMultiplier(dtcClient, row.symbol).catch(() => null);
     if (mult != null) {
-      avgFillPrice = applyPriceMultiplier(rawAvgFill, mult);
+      const converted = applyPriceMultiplier(rawAvgFill, mult);
+      // Structural sanity (2026-10-05): refuse to store a fill that violates its own order
+      // type's price rule. The raw broker message is still in raw_last_order_update, so
+      // nothing is lost; only the converted number is withheld. Status is not changed here.
+      const check = fillPriceSanity({ orderType: row.order_type, side: row.side, price1: row.price1, fillPrice: converted });
+      if (check.ok) {
+        avgFillPrice = converted;
+        console.log(`[sierraChart.reconciliation] fill ${row.purpose} setup_id=${row.setup_id}: raw=${rawAvgFill} x multiplier=${mult} -> ${converted.toFixed(2)} (${row.order_type} ${row.side} px1=${row.price1})`);
+      } else {
+        console.error(`[sierraChart.reconciliation] REFUSED avg_fill_price for ${row.purpose} setup_id=${row.setup_id} (${clientOrderId}): ${check.reason}. raw=${rawAvgFill} multiplier=${mult} symbol=${row.symbol}. Stored NULL; raw message kept in raw_last_order_update.`);
+      }
     } else {
       console.error(`[sierraChart.reconciliation] no price multiplier known for ${row.symbol} -- avg_fill_price left unset for this update rather than storing a possibly-wrong raw value.`);
     }
