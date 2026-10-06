@@ -47,7 +47,9 @@
 // at the DB level.
 
 import { query, getClient } from '../../db.js';
-import { getPriceMultiplier, applyPriceMultiplier, fillPriceSanity } from './priceMultiplier.js';
+import { getPriceMultiplier, applyPriceMultiplier, classifyFill, toTickPrice } from './priceMultiplier.js';
+import { runSerializedByKey } from './orderUpdateQueue.js';
+import { recordBrokerPnlForSetup } from './brokerPnlWriter.js';
 
 export function entryClientOrderId(setupId) { return `E${setupId}`; }
 export function exitClientOrderId(setupId) { return `X${setupId}-${Date.now()}`; }
@@ -315,9 +317,25 @@ function isNewerOrEqual(currentTs, incomingTs) {
  * "Item 1"), separate from the periodic backstop. `false` for every other update
  * (working-state changes, or a message that didn't apply per the terminal-state lattice).
  */
-export async function handleOrderUpdate(msg, dtcClient) {
+export function handleOrderUpdate(msg, dtcClient) {
+  const key = msg.ClientOrderID;
+  if (!key) return Promise.resolve(false); // nothing to reconcile against
+  // One update at a time per order -- see orderUpdateQueue.js for the 2026-10-05 race.
+  return runSerializedByKey(key, () => applyOrderUpdate(msg, dtcClient));
+}
+
+async function applyOrderUpdate(msg, dtcClient) {
   const clientOrderId = msg.ClientOrderID;
-  if (!clientOrderId) return false; // nothing to reconcile against
+  if (!clientOrderId) {
+    // Not one of ours (a manual Sierra change, or a broker-side action with no client ID). Stored
+    // under an UNOWNED: label so the activity log can show it, filtered apart from our own orders
+    // (added 2026-10-06). Nothing else reads these rows, and no trading state changes.
+    await query(
+      `INSERT INTO order_placements_updates (client_order_id, raw_message) VALUES ($1, $2)`,
+      [`UNOWNED:${msg.ServerOrderID ?? 0}`, JSON.stringify(msg)]
+    ).catch((err) => console.error('[sierraChart.reconciliation] failed to log unowned order update:', err.message));
+    return false;
+  }
 
   await query(
     `INSERT INTO order_placements_updates (client_order_id, raw_message) VALUES ($1, $2)`,
@@ -352,13 +370,14 @@ export async function handleOrderUpdate(msg, dtcClient) {
   if (rawAvgFill != null) {
     const mult = await getPriceMultiplier(dtcClient, row.symbol).catch(() => null);
     if (mult != null) {
-      const converted = applyPriceMultiplier(rawAvgFill, mult);
+      const converted = toTickPrice(applyPriceMultiplier(rawAvgFill, mult));
       // Structural sanity (2026-10-05): refuse to store a fill that violates its own order
       // type's price rule. The raw broker message is still in raw_last_order_update, so
       // nothing is lost; only the converted number is withheld. Status is not changed here.
-      const check = fillPriceSanity({ orderType: row.order_type, side: row.side, price1: row.price1, fillPrice: converted });
-      if (check.ok) {
+      const check = classifyFill({ orderType: row.order_type, side: row.side, price1: row.price1, fillPrice: converted, infoText: msg.InfoText });
+      if (check.status !== 'REFUSED') {
         avgFillPrice = converted;
+        if (check.status === 'MARKET_EXECUTION') console.error(`[sierraChart.reconciliation] FLAG market execution for ${row.purpose} setup_id=${row.setup_id} (${clientOrderId}): ${check.reason}. Stored at the broker's quoted price.`);
         console.log(`[sierraChart.reconciliation] fill ${row.purpose} setup_id=${row.setup_id}: raw=${rawAvgFill} x multiplier=${mult} -> ${converted.toFixed(2)} (${row.order_type} ${row.side} px1=${row.price1})`);
       } else {
         console.error(`[sierraChart.reconciliation] REFUSED avg_fill_price for ${row.purpose} setup_id=${row.setup_id} (${clientOrderId}): ${check.reason}. raw=${rawAvgFill} multiplier=${mult} symbol=${row.symbol}. Stored NULL; raw message kept in raw_last_order_update.`);
@@ -391,6 +410,20 @@ export async function handleOrderUpdate(msg, dtcClient) {
     WHERE id = $1
   `, [row.id, newStatus, msg.ServerOrderID || null, roundedIncomingFilled, avgFillPrice, rejectReason, JSON.stringify(msg), newTs, clearRejectReason, releasesPositionSlot]);
 
+  // Fill verification (2026-10-06, flag-only: never halts). After a real FILLED, compare what we
+  // stored against what the broker's own message said, and log the result. A mismatch is logged
+  // loudly so it can be reviewed; it does not change trading state.
+  if (applyStatus && newStatus === 'FILLED') {
+    const verify = await query(`SELECT filled_quantity, avg_fill_price::float AS avg FROM order_placements WHERE id = $1`, [row.id]).catch(() => null);
+    const stored = verify?.rows?.[0];
+    const brokerQty = roundedIncomingFilled;
+    const qtyOk = stored && brokerQty != null && stored.filled_quantity === brokerQty;
+    const priceOk = stored && avgFillPrice != null && rawAvgFill != null;
+    const verdict = qtyOk && priceOk ? 'MATCH' : 'MISMATCH';
+    const line = `[sierraChart.fillVerify] ${verdict} ${row.purpose} setup_id=${row.setup_id} ${clientOrderId}: broker qty=${brokerQty} avg=${avgFillPrice ?? 'NULL(refused)'}; app qty=${stored?.filled_quantity ?? 'n/a'} avg=${stored?.avg ?? 'NULL'}`;
+    if (verdict === 'MATCH') console.log(line); else console.error(line);
+  }
+
   // EXIT *or* STOP reaching FILLED clears a DIFFERENT row's (the matching ENTRY's)
   // position_open -- a real cross-row write, wrapped in an explicit transaction
   // (DeepSeek review finding #3) so a crash between two separate queries can never leave
@@ -400,6 +433,8 @@ export async function handleOrderUpdate(msg, dtcClient) {
   // stuck forever (blocking every future real entry) even though the position was
   // legitimately closed.
   if ((row.purpose === 'EXIT' || row.purpose === 'STOP') && applyStatus && newStatus === 'FILLED') {
+    // Broker-derived P&L on close (2026-10-06). Writes only when both fills are present; never guesses.
+    await recordBrokerPnlForSetup(row.setup_id).catch((err) => console.error(`[sierraChart.reconciliation] broker P&L write failed for setup_id=${row.setup_id}:`, err.message));
     const client = await getClient();
     try {
       await client.query('BEGIN');

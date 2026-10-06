@@ -8,6 +8,7 @@ import { getClient, getStatus } from '../services/sierraChart/connectionManager.
 import { killSwitch, KILL_SWITCH_STATE_PATH } from '../services/sierraChart/orderEligibility.js';
 import { panicStopAppOrders, runReconciliation, cancelUnknownOrders } from '../services/sierraChart/reconciliation.js';
 import { resolveMnqFrontMonthSymbol } from '../services/sierraChart/contractSymbol.js';
+import { findUnconfirmedCloses } from '../services/sierraChart/closeCheck.js';
 
 const router = express.Router();
 
@@ -22,11 +23,15 @@ router.get('/sierra-chart/status', async (req, res) => {
         submitted_at::text as submitted_at, last_update_at::text as last_update_at
       FROM order_placements ORDER BY id DESC LIMIT 25
     `);
+    // Close verification (2026-10-06): trades the app shows closed with no broker exit/stop filled.
+    // Report-only; a failed check is reported as null, never hidden as "none".
+    const unconfirmedCloses = await findUnconfirmedCloses().catch(() => null);
     res.json({
       connection: getStatus(),
       contract,
       killSwitchStateFile: KILL_SWITCH_STATE_PATH,
       recentOrders: recentQ.rows,
+      unconfirmedCloses,
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -44,6 +49,40 @@ router.get('/sierra-chart/summary', (req, res) => {
   ];
   if (!armed && st.haltedReason) lines.push(`Reason: ${st.haltedReason}${st.haltedAt ? ' at ' + st.haltedAt : ''}`);
   res.type('text/plain').send(lines.join('\n') + '\n');
+});
+
+// GET /api/sierra-chart/activity -- one chronological log of everything that touched the broker
+// and every app-side state change, newest first. Read-only. Built from stored records only:
+// order_placements (app's own state) and order_placements_updates (every raw broker message).
+router.get('/sierra-chart/activity', async (req, res) => {
+  try {
+    const limit = Math.min(Number(req.query.limit) || 200, 500);
+    const r = await query(`
+      SELECT * FROM (
+        SELECT CASE WHEN u.client_order_id LIKE 'UNOWNED:%' THEN 'MANUAL' WHEN op.id IS NULL THEN 'OTHER' ELSE 'APP' END AS source,
+          u.received_at::text AS at, u.client_order_id AS ref,
+          op.setup_id, op.purpose,
+          CASE (u.raw_message::jsonb->>'OrderStatus')
+            WHEN '1' THEN 'ORDER_SENT' WHEN '2' THEN 'PENDING_OPEN' WHEN '4' THEN 'OPEN'
+            WHEN '7' THEN 'FILLED' WHEN '8' THEN 'CANCELED' WHEN '9' THEN 'REJECTED' ELSE 'STATUS_' || COALESCE(u.raw_message::jsonb->>'OrderStatus','?') END AS event,
+          u.raw_message::jsonb->>'AverageFillPrice' AS raw_fill, u.raw_message::jsonb->>'FilledQuantity' AS qty,
+          u.raw_message::jsonb->>'InfoText' AS info
+        FROM order_placements_updates u
+        LEFT JOIN order_placements op ON op.client_order_id = u.client_order_id
+        UNION ALL
+        SELECT 'APP', op.submitted_at::text, op.client_order_id, op.setup_id, op.purpose,
+          'SUBMITTED ' || op.order_type || ' ' || op.side || ' px ' || COALESCE(op.price1::text, 'mkt'), NULL, NULL, NULL
+        FROM order_placements op
+        UNION ALL
+        SELECT 'APP', s.resolved_at::text, NULL, s.id, NULL,
+          'APP CLOSED ' || COALESCE(s.resolution, '?') || ' pnl ' || COALESCE(s.actual_pnl::text, 'n/a'), NULL, NULL, NULL
+        FROM active_setups s WHERE s.origin_status = 'ACTIVE' AND s.resolved_at IS NOT NULL
+      ) ev
+      ORDER BY at DESC NULLS LAST LIMIT $1`, [limit]);
+    res.json({ events: r.rows, generatedAt: new Date().toISOString() });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // POST /api/sierra-chart/halt -- HALT ONLY. Stops new real entries; it deliberately does NOT

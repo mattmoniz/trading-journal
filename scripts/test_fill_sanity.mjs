@@ -1,7 +1,7 @@
 // Tests for fillPriceSanity (server/services/sierraChart/priceMultiplier.js).
 // Cases are the REAL fills from order_placements on 2026-09-28/29 and 2026-10-05, plus
 // the rule edges. Run: node scratch/test_fill_sanity_20261005.mjs
-import { fillPriceSanity, applyPriceMultiplier } from '../server/services/sierraChart/priceMultiplier.js';
+import { fillPriceSanity, applyPriceMultiplier, classifyFill, parseBidAskFromInfo } from '../server/services/sierraChart/priceMultiplier.js';
 
 let pass = 0, fail = 0;
 function expect(name, got, want) {
@@ -36,6 +36,22 @@ expect('limit with no price1 -> accepted (nothing to compare against)', ok({ ord
 const conv = applyPriceMultiplier(3135700, 0.00999999776482582);
 expect('broker 3135700 x MNQZ6 multiplier ~ 31357.00', Math.abs(conv - 31357.0) < 0.01, true);
 expect('same fill passes sanity after conversion (SELL LIMIT 31352.75)', ok({ orderType: 'LIMIT', side: 'SELL', price1: 31352.75, fillPrice: conv }), true);
+
+// --- classifyFill: broker's own quote decides market execution (2026-10-06) ---
+const cls = (o) => classifyFill(o).status;
+expect('parse bid/ask from Sierra fill text', parseBidAskFromInfo('Trade simulation fill. Bid: 31564.75 Ask: 31565.00 Last: 31564.75')?.bid, 31564.75);
+expect('SELL limit 31567 filled at bid 31564.75 -> MARKET_EXECUTION (kept, flagged)', cls({ orderType: 'LIMIT', side: 'SELL', price1: 31567, fillPrice: 31564.75, infoText: 'Trade simulation fill. Bid: 31564.75 Ask: 31565.00 Last: 31564.75' }), 'MARKET_EXECUTION');
+expect('SELL limit 31567 filled at bid 31559.00 -> MARKET_EXECUTION', cls({ orderType: 'LIMIT', side: 'SELL', price1: 31567, fillPrice: 31559.00, infoText: 'Trade simulation fill. Bid: 31559.00 Ask: 31559.50 Last: 31559.25' }), 'MARKET_EXECUTION');
+expect('multiplier error 313.57 matches no quote -> REFUSED', cls({ orderType: 'LIMIT', side: 'SELL', price1: 31352.75, fillPrice: 313.57, infoText: 'Trade simulation fill. Bid: 31357.00 Ask: 31357.75 Last: 31357.50' }), 'REFUSED');
+expect('valid limit fill -> OK', cls({ orderType: 'LIMIT', side: 'SELL', price1: 31432.25, fillPrice: 31437.25, infoText: null }), 'OK');
+expect('no quote in text, violates rule -> REFUSED', cls({ orderType: 'LIMIT', side: 'SELL', price1: 31567, fillPrice: 31560, infoText: null }), 'REFUSED');
+
+import { toTickPrice } from '../server/services/sierraChart/priceMultiplier.js';
+const M = 0.00999999776482582;
+expect('raw 3135700 converts and rounds to quoted 31357.00', toTickPrice(3135700 * M), 31357.00);
+expect('raw 3156475 converts and rounds to quoted 31564.75', toTickPrice(3156475 * M), 31564.75);
+expect('raw 3155900 converts and rounds to quoted 31559.00', toTickPrice(3155900 * M), 31559.00);
+expect('non-finite stays null', toTickPrice(NaN), null);
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

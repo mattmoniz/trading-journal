@@ -43,9 +43,15 @@ export async function sweepRealOrders(dtcClient) {
   await sweepExits(dtcClient).catch((err) => console.error('[sierraChart.orderSweep] exit sweep failed:', err));
 }
 
+// RTH orders stay on the RTH account; Globex orders go to a separate account so the two sessions keep
+// separate P&L (2026-10-06). The stop and exit reuse the account stored on their entry row.
+export function selectTradeAccount({ isRth, rthAccount, globexAccount }) {
+  return isRth === false ? globexAccount : rthAccount;
+}
+
 async function sweepEntries(dtcClient) {
   const rows = await query(`
-    SELECT id, setup_type, entry_zone_low, stop_level, t1_level, trade_date
+    SELECT id, setup_type, entry_zone_low, stop_level, t1_level, trade_date, is_rth
     FROM active_setups
     WHERE origin_status = 'ACTIVE' AND status = 'ACTIVE'
       AND fired_at > NOW() - make_interval(mins => $1)
@@ -70,7 +76,7 @@ async function sweepEntries(dtcClient) {
         exchange: '', // exchange is embedded in the symbol string -- see contractSymbol.js's doc comment
         side: DIRECTION_TO_SIDE[direction],
         quantity: 1, // this app trades exactly 1 MNQ contract, never more -- see CLAUDE.md's contract_size memory
-        tradeAccount: dtcClient.tradeAccount,
+        tradeAccount: selectTradeAccount({ isRth: row.is_rth, rthAccount: dtcClient.tradeAccount, globexAccount: process.env.DTC_GLOBEX_TRADE_ACCOUNT || 'Sim2' }),
         environmentService: dtcClient.lastKnownService ?? null,
       });
       if (result) console.log(`[sierraChart.orderSweep] placed ENTRY for setup_id=${row.id} (${row.setup_type}): ${JSON.stringify(result)}`);

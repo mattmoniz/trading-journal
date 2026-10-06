@@ -389,7 +389,7 @@ export class DtcClient extends EventEmitter {
    * by design -- see the portability header comment), so the caller must own uniqueness
    * whenever restart-survival matters.
    */
-  submitOrder({ symbol, exchange, side, orderType, quantity, price1 = 0, price2 = 0, timeInForce = 'DAY', clientOrderId }) {
+  submitOrder({ symbol, exchange, side, orderType, quantity, price1 = 0, price2 = 0, timeInForce = 'DAY', clientOrderId, tradeAccount }) {
     if (!this._loggedOn) throw new Error('DtcClient.submitOrder(): not logged on.');
     if (!BUY_SELL[side]) throw new Error(`DtcClient.submitOrder(): invalid side "${side}"`);
     if (!ORDER_TYPE[orderType]) throw new Error(`DtcClient.submitOrder(): invalid orderType "${orderType}"`);
@@ -406,7 +406,7 @@ export class DtcClient extends EventEmitter {
       Price2: price2,
       TimeInForce: TIME_IN_FORCE[timeInForce],
       Quantity: quantity,
-      TradeAccount: this._tradeAccount,
+      TradeAccount: tradeAccount || this._tradeAccount,
       IsAutomatedOrder: true,
     });
     return clientOrderId;
