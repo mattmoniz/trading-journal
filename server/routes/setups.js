@@ -10,6 +10,7 @@ import { getDeltaConfirmationCategory } from '../services/deltaConfirmation.js';
 import { REAL_TRADE_FILTER } from '../../scripts/backtest_setup_status.mjs';
 import { MECHANISMS, MIN_REAL_N, evalBucket, modeOf } from '../../scripts/backtest_flush_post_entry_exit_signals_promotion.mjs';
 import { SUPPRESS_ALL_DISABLED, ALL_LEVELS_LIVE } from '../services/setupEligibility.js';
+import { killSwitch } from '../services/sierraChart/orderEligibility.js';
 import { gateSignalConfirmation } from '../services/rigorDiagnostics.js';
 
 const router = express.Router();
@@ -24,6 +25,10 @@ router.get('/setups/live-flags', (req, res) => {
     suppressAllDisabled: !!SUPPRESS_ALL_DISABLED.enabled,
     suppressAllDisabledSince: SUPPRESS_ALL_DISABLED.enabled ? SUPPRESS_ALL_DISABLED.addedDate : null,
     allLevelsLive: !!ALL_LEVELS_LIVE.enabled,
+    // Sierra Chart real-order kill switch (2026-10-05). Disarmed = no real orders can be
+    // placed; it's fail-closed on every server restart, so it's surfaced here as a banner.
+    sierraArmed: !!killSwitch.isArmed(),
+    sierraHaltedReason: killSwitch.isArmed() ? null : (killSwitch.getState().haltedReason || null),
   });
 });
 

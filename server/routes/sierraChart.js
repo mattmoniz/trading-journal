@@ -33,6 +33,28 @@ router.get('/sierra-chart/status', async (req, res) => {
   }
 });
 
+// GET /api/sierra-chart/summary -- plain-text block for Home Assistant's markdown card
+// (same convention as /api/setups/today-summary: HA's REST sensor can't iterate JSON).
+// Exposed through the Cloudflare tunnel via an exact-path rule; keep it text-only.
+router.get('/sierra-chart/summary', (req, res) => {
+  const armed = killSwitch.isArmed();
+  const st = killSwitch.getState();
+  const lines = [
+    armed ? '🟢 ARMED — placing real orders on Sim1' : '🔴 DISARMED — no real orders will be placed',
+  ];
+  if (!armed && st.haltedReason) lines.push(`Reason: ${st.haltedReason}${st.haltedAt ? ' at ' + st.haltedAt : ''}`);
+  res.type('text/plain').send(lines.join('\n') + '\n');
+});
+
+// POST /api/sierra-chart/halt -- HALT ONLY. Stops new real entries; it deliberately does NOT
+// cancel orders, flatten positions, or touch the broker (that is /stop, which is far more
+// than a halt). Exit orders never go through the kill switch, so open trades can still
+// close normally. Safe to expose remotely (Home Assistant button) since it only de-risks.
+router.post('/sierra-chart/halt', (req, res) => {
+  killSwitch.halt('manual halt (remote button)', req.body?.by || 'remote-halt-button');
+  res.json({ ok: true, state: killSwitch.getState() });
+});
+
 // POST /api/sierra-chart/start -- arm the kill switch. Nothing retroactive needed: the
 // next poll's order sweep (orderSweep.js) already checks isOrderEligible() fresh every
 // time, so the very next real setup to fire is picked up automatically.

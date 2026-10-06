@@ -53,3 +53,29 @@ export function applyPriceMultiplier(rawValue, multiplier) {
   if (!Number.isFinite(rawValue) || !Number.isFinite(multiplier)) return null;
   return rawValue * multiplier;
 }
+
+/**
+ * Structural sanity check on a converted broker fill price (added 2026-10-05). Returns
+ * { ok: true } or { ok: false, reason }. Checks only what must hold by order-type rules,
+ * never a price threshold:
+ *   LIMIT BUY  fills at or below its limit;   LIMIT SELL fills at or above its limit.
+ *   STOP  BUY  fills at or above its trigger; STOP  SELL fills at or below its trigger.
+ *   MARKET     no price constraint.
+ * A violation means the conversion or the attribution is wrong, not that the market moved.
+ * Caught live 2026-10-05: a SELL limit at 31352.75 "filled" at 313.57 (wrong multiplier),
+ * and a BUY stop at 31389.75 "filled" at 31357.50 (below its trigger).
+ */
+export function fillPriceSanity({ orderType, side, price1, fillPrice }) {
+  if (!Number.isFinite(fillPrice)) return { ok: false, reason: 'fill price is not a finite number' };
+  if (orderType === 'MARKET' || !Number.isFinite(price1)) return { ok: true };
+  const EPS = 1e-6;
+  const isBuy = side === 'BUY';
+  if (orderType === 'LIMIT') {
+    if (isBuy && fillPrice > price1 + EPS) return { ok: false, reason: `BUY limit ${price1} filled above its limit at ${fillPrice}` };
+    if (!isBuy && fillPrice < price1 - EPS) return { ok: false, reason: `SELL limit ${price1} filled below its limit at ${fillPrice}` };
+  } else if (orderType === 'STOP') {
+    if (isBuy && fillPrice < price1 - EPS) return { ok: false, reason: `BUY stop ${price1} filled below its trigger at ${fillPrice}` };
+    if (!isBuy && fillPrice > price1 + EPS) return { ok: false, reason: `SELL stop ${price1} filled above its trigger at ${fillPrice}` };
+  }
+  return { ok: true };
+}

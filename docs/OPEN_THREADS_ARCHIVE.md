@@ -9138,3 +9138,308 @@ each backed by a real `RESEARCH_CLAIM`:
 
 Next: Opus Audit #14-style critique dispatched on all of the above (results, test design,
 and execution) — see its own follow-up entry once complete.
+
+---
+## Archive batch: 2026-10-05 (cutoff 2026-09-28, keep last 7 days)
+
+## 🔄 2026-09-27/28: Time-of-day / level-interplay market-structure mining — re-dispatched 2026-09-28 after the original queued request was accidentally overwritten
+
+User asked (independent of the existing setup roster) whether raw historical price action shows anything statistically real — time-of-day patterns, or level-touch interplay ("if we touch X, does Y happen... if X and Y are both breached, Z happens Z% of the time").
+
+**Level-touch cascade** (tested directly, 3 rounds): a raw "does touching level A raise the odds of touching level B later" scan looked interesting at first, but died across a distance-adjusted control and a same-side-adjusted control — survivors had weak reward:risk (mostly 0.3-0.9, reward smaller than a real ATR-based risk unit), and the one pair that looked strong (`WEEKLY_OPEN`-involving) turned out to correlate with `WEEKLY_OPEN` itself being a marker for modestly bigger-range days, not a real causal relationship. **Closed, not recorded** (explicit user call — genuinely dead, not worth a `RESEARCH_CLAIM` row).
+
+**Time-of-day, direct quick look** (`scratch/time_of_day_direction_volatility_20260927.mjs`, bounded to `ts >= '2025-11-20'`): hour-to-hour directional persistence is flat (50.5%/49.5%, no real edge in any individual hour). One candidate — a 14:00 ET negative bias (t-stat ≈ -2.05) — failed a 3-way chronological stability check (flat/near-zero in the first third of the data, only appeared in the more recent two-thirds). Not trustworthy, not recorded.
+
+**Broader mining, queued but never ran (2026-09-27)**: dispatched Gemini for a genuinely different, more thorough sweep (finer 15/30-min buckets across the full week not just RTH, whether the *timing* of a level touch changes the rest of the session's character, and time-of-day effects at already-validated confluence zones from `confluence_pair_proximity_2yr_backtest`) — hit `RESOURCE_EXHAUSTED` (quota), empty response, zero work done. The full request was staged at `scratch/claude_request.md`, ready to re-fire once quota cleared.
+
+**Real mistake, 2026-09-28**: this staged request was never re-fired the next morning as planned — instead, later that night, a completely unrelated Gemini dispatch (a DirGate time-of-day question) was written straight to `scratch/claude_request.md` via `Write` without reading what was already staged there first, silently destroying the queued 2026-09-27 request. Caught only because the user directly asked "wasn't there something earlier this morning that you needed Gemini for?" — not self-caught. **The standing convention ("always Write, never Edit/prepend" for this file) assumes the file is checked before being overwritten, not that overwriting is always safe** — worth remembering for any future dispatch: read `scratch/claude_request.md` first if there's any chance something might already be staged there, since this file has no versioning and a `Write` is destructive with no recovery path.
+
+**Recovered and re-dispatched the same night**: reconstructed the request from this entry's own writeup (not byte-identical to the lost original, but covers the same 3 angles plus the full "already tried, don't redo" list above) and confirmed Gemini quota was actually clear (`agy --log-file ... --print "test"`, no `RESOURCE_EXHAUSTED` in the log) before re-firing. **Dispatched, response not yet in — this is still the real next step on this thread.**
+
+## ✅ 2026-09-27: SETUP_ANTICIPATION rebuilt — found ranking dead setups as top picks, fixed suppression-blindness + added rigor
+
+User asked whether a real "prepared stats, statistically validated, armed and waiting" system exists. Found `/api/level-approach/today` (`SessionForecastPanel.jsx`'s "Setup Anticipation" card) — real, weekly-recomputed, but auditing it live found a disqualifying bug: it ranked every setup_type by raw all-time fire_rate×avg_pnl with zero awareness of current `SETUP_STATUS`. Live-caught `IB_BULLISH`/`IB_BEARISH` — both explicitly killed 2026-08-31 after a redesign investigation proved their real thesis was never implemented and a placebo test showed zero real edge — as the #1/#2 ranked "best TREND-day picks" (76%/67% WR).
+
+Also had no rigor/day-clustering check at all (`MIN_FIRES=5`, far below this codebase's N≥20 floor) — a 5th major statistical pipeline never wired into `computeRigor()`. Live-tested with rigor wired in: **zero setup_types currently clear N≥20 trades + distinctDates≥20 + `rigor.clean` in any of BALANCE/TREND/TURBULENT**, even at the coarsest day_type-only conditioning — a real data-maturity ceiling matching the one already found for `DAY_TYPE_ALPHA` sizing two weeks earlier, not a bug in this one script. Only survivor system-wide: `IB_HIGH_FADE_SHORT`, unconditioned (N=75, 26 distinct dates).
+
+**Rebuilt**: `server/services/levelApproach.js` (`computeSetupAnticipation()`) — filters through `computeSuppressionSets()` (the raw, un-overridden SETUP_STATUS verdict — deliberately NOT `getCanonicalLiveStatus()`, since that function's `SUPPRESS_ALL_DISABLED` override, enabled 2026-09-25, would currently report IB_BEARISH as "ACTIVE") and gates every row on a real `computeRigor()` check. `scripts/backtest_level_approach.js` is now a thin wrapper. `/api/level-approach/today` only returns `decisive: true` rows — most mornings this is now an honest empty list, not a fabricated ranking. `SessionForecastPanel.jsx` updated to show "No setup has cleared the statistical bar... yet" instead of silently hiding the section.
+
+**Also fixed in the same file**, found while auditing: ~25 hardcoded WR%/N/pt/timing literals in "behavior" descriptions and a "Day-type sizing guidance" block that actively recommended trading IB_BULLISH/IB_BEARISH (the same 2 dead setups). All stripped to qualitative-only framing. 5 of these were literal duplicates of the exact "88% WR"/"63% WR (N=113)" claims already fixed once in `ACDView.jsx`'s `OvernightContextStrip` — proof that fix alone hadn't cleaned the app, since the same false numbers were independently hardcoded a second time in a different component.
+
+Verified: lint/build clean, `test_invariants.mjs` byte-identical vs. baseline (one check, `[25]`, needed updating to follow the legitimate extraction rather than flag it as drift — fixed), live restart, confirmed live endpoint response shape.
+
+## ✅ 2026-09-27: New statistical edge found, walk-forward validated, shipped SHADOW-only — touch-time order-flow pressure
+
+Follow-up to the SETUP_ANTICIPATION audit: user pushed on whether anything genuinely NEW could be found, not just re-validation of the existing roster. Picked up `OPEN_DECISION orderflow_rejection_entry_selection_untested_20260916` (scoped 2026-09-16, "no code, no query, nothing run" since) — does order-flow pressure in the bars *approaching* a level touch (not after entry, which is the separate, already-live `breakeven_stop_shadow` mechanism) predict a worse outcome?
+
+**Phase 0** (`scratch/orderflow_touch_time_entry_selection_phase0_20260927.mjs`): real decisive touches (N=3,375, 58 distinct dates, Jul 9–Sep 25), 8-bar approach window using `touchQuality.js`'s own `getVolumeBaseline()` z-score convention. Top netAdverseDelta tercile (heavy pressure fighting the fade) EV=-$11.58/trade vs -$2.38 for the bottom tercile. Rigor-clean (distinctDates=56/58, not clustered, stable across all 3 chronological thirds), broad across 172 setup_types, survives a 10-trial randomized-direction placebo (real effect more extreme than all 10 trials — pushed to 10 trials after direct user skepticism about the thirds/stable check specifically, correctly distinguished from the day-blocked bootstrap CI the finding actually rests on).
+
+**Walk-forward test** (`scratch/orderflow_touch_time_walkforward_sim_20260927.mjs`): cutoff derived from the first half of real dates only (Jul 9–Aug 18), applied blind to the second half (Aug 19–Sep 25, never used to pick the threshold). Skipping flagged touches saved **$10,254** over that month-plus vs. taking everything; half-sizing them saved $5,127. Baseline itself is negative (this pools the full historical roster including suppressed setups) — this is real damage reduction on out-of-sample data, not a profitability claim.
+
+**Shipped** (`server/services/touchOrderflowPressureShadow.js` + `scripts/calibrate_touch_orderflow_pressure.mjs`, wired at all 6 real `active_setups` INSERT sites in `acd.js`): SHADOW-only/observation-only, same guarantee family as `step_trail_shadow`/`momentum_against_fade_shadow`/`entry_orderflow_shadow` — never touches a real trade's eligibility/sizing, only tags `active_setups.touch_orderflow_pressure_shadow`. Calibration script self-recalibrates weekly (`run_weekly_backtests.sh`) and re-validates walk-forward every run (writes `NO_GATE` if the held-out half stops holding up, fail-closed). Confirmed live within minutes of shipping: 2 real touches tagged correctly against the calibrated cutoff (224.0).
+
+Recorded: `RESEARCH_CLAIM orderflow_touch_time_adverse_pressure_worse_outcome_20260927` (PROVISIONAL — real forward data needs to accumulate under the calibrated cutoff before a live-gating decision). Next: let real SHADOW data build, then decide skip-vs-half-size (the mid-trade sibling mechanism in this same signal family found soft beats hard once — breakeven-tighten over full-exit — worth checking here too, not assumed to transfer).
+
+Older resolved/superseded threads are periodically moved to [OPEN_THREADS_ARCHIVE.md](OPEN_THREADS_ARCHIVE.md) (via `node scripts/archive_open_threads.mjs --apply`) to keep this file's per-session read cost down — nothing is deleted, just relocated. Still-pending items are backed by `OPEN_DECISION`/`RESEARCH_CLAIM` rows regardless, so archiving here never buries anything.
+## ✅ 2026-09-27: acd.js risk-gates extraction — ~700 lines moved to `acdRiskGates.js`, a real bug caught by the restart (not lint)
+
+User asked to extract from acd.js "where applicable" to shrink it further, beyond the already-done Phase A/B in `docs/ACDJS_FILE_SIZE_REDUCTION_SPEC.md`. Found and moved a ~700-line cluster of module-level risk-discipline gate functions (cross-direction fast-flip, sibling-reversal, single-firing directional-conflict, same-setup-type refire, direction-loss-alternation SHADOW tag, refire cooldown/shadow-noise dedup, session-bars-since-open, momentum-against-fade SHADOW tag) to `server/services/acdRiskGates.js` — confirmed via exhaustive grep to have zero closure over req/res/io/liveStats/acdJob before moving, zero logic changes.
+
+**Caught mid-deploy, not by lint**: 5 of the relocated names needed `export` added (called from many sites inside `runSetupDetection`, which imports them back) — `eslint`/`npm run lint` passed clean on both files despite `SHADOW_NOISE_SUPPRESSION_MINUTES` and 4 others genuinely missing `export`, because `no-undef` only checks that an identifier resolves to *some* import, not that the target module actually exports that name — that's a runtime ESM `SyntaxError`, only surfaced by actually loading the module. `nodemon`/`trading-journal-server.service` crash-looped 6x in under 10s before this was caught and fixed; the systemd unit tripped its own restart-burst limit and went `failed` (expected/documented behavior, not a new bug). Fixed, then verified with a direct `node -e "import(...)"` check on both files before restarting again — this is the actual verification step that would have caught it before ever touching the live server, and is now written into the spec doc as a standing lesson for the next extraction of this shape.
+
+Verified clean after the fix: `node --check` both files, `npm run lint`/`npm run build`, `test_invariants.mjs` byte-identical failure/warning counts (19/94) vs. a `git stash` baseline, live restart with process-uptime confirmed to postdate the fix, `/api/acd/setup-detection` (the live 15s-polled endpoint that directly exercises these gates) returning 200 with nothing new in `scratch/server_errors.jsonl`. `acd.js`: 9,388 → 8,721 lines. Full account: `docs/ACDJS_FILE_SIZE_REDUCTION_SPEC.md`'s new top section.
+
+**Same session, continued**: deleted `GET /acd/correlation` outright (confirmed zero callers anywhere since 2026-06-01, and it read the raw `trades` table directly — same "dead + touches a sensitive table" shape as `GET /acd/live`'s 2026-09-20 deletion). Extracted `GET /market/pulse`'s internal logic to `server/services/marketPulse.js` (`computeMarketPulse()`) — genuinely hot (30s-polled by 2 frontend components + quick-check.html) but confirmed self-contained; byte-diffed the live response before/after (only `ts` differed) before trusting it. `acd.js`: 8,721 → 8,460 lines.
+
+## 🔄 2026-09-27: Standalone ML trade-generation (not meta-labeling) — scoped and agreed, not started
+
+Follow-on from the probability-sizing thread below: user asked whether the ML system independently generates its own trade candidates from long+short window data. Confirmed directly it does not — `scripts/ml_meta_labeling/dataset.py`'s own header says "Training dataset extraction for the meta-labeling model," and it only grades candidates the existing ~190-setup_type rule engine already fired (joins against `active_setups` rows). A from-scratch detector, with no pre-existing rule-based candidate to grade, does not exist anywhere in this codebase.
+
+Scoped a real plan with the user, `OPEN_DECISION ml_standalone_detector_scoped_not_started_20260927` — full 5-step plan in the decision text (define the label on paper + DeepSeek critique first, walk-forward + day-block permutation-null stress test, independent code review for leakage, shadow-only for weeks, only then the standard new-setup-type checklist). Explicitly flagged as materially harder than the existing meta-label filter, with the Regime A/B/C classifier's own prior failure (passed every EV-split check, failed once independently validated) cited as the reason to be skeptical by default, not enthusiastic. **Not started at any step** — purely scoped and agreed as a real future thread, not begun.
+
+## ✅ 2026-09-27: ML probability-based sizing — answered with real data, scoped, no build needed yet
+
+User asked whether ML + statistics (combining long and short window features) could fire high-probability trades. **This already exists and is live** — `scripts/ml_meta_labeling/` trains a LightGBM model on real outcomes combining prior-day features (long window: PD high/low/close/POC/VAH/VAL distance) and developing-value features (short window: today's developing POC/VWAP + recent-15-bar order-flow delta), outputs TAKE/VETO per real candidate via `ml_verdicts`, live-scoring real trades right now (`server/services/mlFireTimeScoring.js`).
+
+Follow-up question — "can it also increase sizing for setups it likes more" — was already asked 2026-09-21 and a self-recalibrating daily pretest already exists (`scripts/recalibrate_ml_probability_sizing_pretest.mjs`). Ran it live: N=322 real out-of-sample ML-approved trades split into probability terciles — LOW WR=43%/EV=$5.96, MID WR=44.9%/EV=$2.41, HIGH WR=50%/EV=$8.31, Spearman rho=0.092 (essentially noise). Non-monotonic (LOW beats MID) and each tercile spans only 9-10 distinct trading days — thin by this codebase's own day-count standard. **Conclusion: within the already-approved population, confidence does not yet predict outcome quality — do not build probability-based sizing on today's data.** Recorded as `RESEARCH_CLAIM ml_metalabel_probability_sizing_pretest` (worth double-checking whether the script's CONFIRMED status label is appropriate for a null/non-monotonic result, or whether its status-assignment logic needs a rigor check, not just an N≥30 floor).
+
+**Real next steps, scoped as `OPEN_DECISION ml_probability_sizing_scope_20260927`** — 4 already-open, more foundational questions this sits downstream of (training-window representativeness given the ~3.5x roster growth, the quantile-model variant's one-month review, whether the model has direction as a first-class feature, a market-context feature layer), plus letting the sizing pretest keep self-recalibrating until each tercile clears a real day-count floor. Work through those first — the model's own quality is the bottleneck, not the sizing mechanism on top of it.
+
+## ✅ 2026-09-27: Batch 1a's 4 remaining findings fixed, plus a 5th unfound instance and a real staleness bug it surfaced
+
+Re-verified `btwfv8ayh`'s (Batch 1a's DeepSeek dispatch) findings #2/#4/#5/#6 directly against the live code before fixing — all 4 confirmed accurate at the exact cited line numbers:
+
+1. **`DayOfWeekPlaybookCard.jsx`/`TeleprinterFeed.jsx` hardcoded Monday/Friday fallback literals** — fixed. `monStats`/`friStats` now `null` (not a fabricated object) when the real backtest hasn't loaded; the surrounding text now omits the specific number rather than substituting an invented one, same precedent as the OvernightContextStrip fix.
+2. **`SessionBiasPanel.jsx`'s hardcoded `STRONG_THRESHOLD=70`/`CONTEXT_THRESHOLD=65`** — NOT fixed (deliberately deferred, not forgotten): deriving a real rolling-distribution threshold needs its own backtest, not a quick edit. Left as a known gap; the no-static-thresholds violation is real but this needs research, not a mechanical fix.
+3. **`antigravityEdges.js:1454`'s `baselineMap[s.setup_type] || { wr: 0.50, n: 25 }`** — fixed (HIGH). `base` is now `null` when no real baseline row exists; `adjustedWr`/`sampleN`/`baselineWr` all stay `null`, `confidence` becomes an honest `'NO_DATA'` instead of a fabricated `'MEDIUM'`. `ACDView.jsx`'s EdgeSectionsPanel rendering updated to show "No data yet" (grey) instead of computing off a null value.
+4. **`setupsQ`'s `origin_status NOT IN ('SHADOW','BACKFILL')`** — fixed. Switched to the standard `IN ('ACTIVE','SHADOW')` convention used everywhere else in this codebase (CLAUDE.md: SHADOW is real, just never shown live) and added the missing `is_cluster_primary` filter (was letting confluence-cluster siblings show as duplicate cards and inflate `PermSlipAndStackBar`'s stack count).
+
+**5th instance, found while fixing #3/#4 in the same file, not caught by DeepSeek's scoped review**: `ACDView.jsx`'s inline `edgeCtx` object (lines ~614-628) had 13 more hardcoded WR%/N fragments embedded in otherwise-legitimate qualitative descriptions ("74.2% WR on TURBULENT (N=31)", "96% directional reversion" x2, etc.) for 13 named setup_types — missed by DeepSeek's review because it's an inline object literal, not a named component. Stripped the numbers, kept the qualitative framing (the real, live-computed `s.recommendation`/`adjustedWr` rendered right below already carries the actionable part).
+
+**Real staleness bug surfaced by fix #3, not something this session broke**: live-checking the fixed endpoint showed 93 of 96 today's setups now render `NO_DATA` — traced to `setup_daytype_winrates` (the table `baselineMap` reads) last computed **2026-06-15**, over 3 months stale, with only 44 of ~190 live setup_types ever scored. `scripts/populate_setup_daytype_winrates.js` exists and looks methodologically reasonable but was never wired into `run_daily_calibration.sh`/`run_weekly_backtests.sh`/the system crontab — confirmed via grep, untouched since the single 2026-06-12 commit that added it. The old fabricated fallback had been silently masking this for 3+ months (every missing/stale row read as a confident 50% MEDIUM instead of "no data"). Not fixed this session — flagged as `OPEN_DECISION setup_daytype_winrates_stale_never_scheduled_20260927` (needs the script's methodology re-checked against 3.5 months of roster growth and the current cluster-touch-credit convention before just cron-wiring it blindly).
+
+Verified: `node --check`/`eslint` clean on all 4 touched files (server + frontend), `npm run build`/`npm run lint:frontend` clean (one pre-existing, unrelated `UpdateDot.jsx` config warning confirmed via `git stash` to predate this session), `test_invariants.mjs` byte-identical 19/94 vs. baseline, live restart (hit a transient, unrelated `EADDRINUSE` port-handoff race on the first attempt — a `start.sh`/systemd timing issue, not a code bug, resolved by re-running `./restart.sh`), confirmed the live `/api/antigravity/edges-context` response shows real `SHADOW`-origin rows now included and `NO_DATA` rendering cleanly with no crash.
+
+## ✅ 2026-09-26: DeepSeek review of 3 more unreviewed commits — 1 real HIGH gap fixed (`minorDefendedLevelDetector.js` missed the dead-zone audit entirely), 2 shape/visibility fixes, a stale count corrected
+
+Per user request ("Can we have deepseek qa your code changes"), identified 3 commits from tonight that hadn't gone through any independent review yet (`4a67087` backfill script, `c82f4fa` the SUPPRESS_ALL_DISABLED banner, `7a12e06` the 3-detector dead-zone extension) and dispatched a fresh DeepSeek pass.
+
+**HIGH, confirmed and fixed**: `minorDefendedLevelDetector.js` was never wired to either dead-zone helper — it's the "minor" sibling of `majorPivotDefendedBreakDetector.js` (which *was* fixed in `7a12e06`) and was omitted from that audit entirely. Its own RTH-only gate (`isRTHMod`, 9:30am-4pm) lets it fire squarely inside the 9:30-9:35 dead zone. Fixed by threading the signal's own bar-derived `mod` through to the insert loop and gating on it there (not the poll's wall-clock time) — same shape as the 3 already-fixed detectors.
+
+**MEDIUM, fixed**: (1) `rthFlushDetector.js`'s existing dead-zone check gated on the poll's wall-clock `totalMins`, not the candidate's own `resolutionBar`-derived timestamp — the exact `firedEtMin`-vs-`etMin` shape a standing rule warns about. Currently a no-op in practice (the flush trigger's own 30+-bar consolidation window means the resolution bar's mod can never land in 570-575), but the shape was wrong; added a correct second check right before the INSERT, keyed on the resolution bar's own UTC-getter-derived mod. (2) The banner only ever checked `suppressAllDisabled`, not the also-still-on `allLevelsLive` flag returned by the same endpoint — fixed with a lower-urgency amber variant (ALL_LEVELS_LIVE still respects real SETUP_STATUS suppression, so it's a real but less severe "someone has to remember" risk than SUPPRESS_ALL_DISABLED).
+
+**Documentation gap found and corrected**: CLAUDE.md's "5 standalone detector files" list (written the same night, in the very audit this review was checking) undercounted — the real number of files with an independent `INSERT INTO active_setups` is 10. Corrected in place with the full list and a note not to trust the count without re-deriving it via grep.
+
+Everything else in the review verified clean against the current tree (all earlier findings from this same night's other DeepSeek passes were re-confirmed as already fixed, not re-flagged as new). `test_invariants.mjs` confirmed unchanged (19/92, matched via `git stash` before/after — this baseline count itself is unrelated pre-existing drift, not caused by tonight's work).
+
+Full review: `scratch/deepseek_response.md` (line 257 is a huge raw-thinking-trace debris line — read lines 1-256 and 258-294 for the actual formatted review).
+
+## ✅ 2026-09-26: DeepSeek follow-up review of all 3 batches' fixes — 1 real gap found and fixed, everything else verified clean
+
+Per user request, after all 3 week-review batches' fixes were committed (`ade7e91`, `e70d31e`, `eb0bcdd`), dispatched one more DeepSeek pass specifically reviewing those fixes for correctness (not re-deriving the original findings). Verdict: substantively correct, no new capital-risk or data-corruption bug introduced.
+
+**One real (LOW-MEDIUM) gap, fixed**: the batch-1 fix added `late_fill_past_expiry_basis` exclusion to `getDecidedRows()` (used by `renderRangeStats`/`renderEquityCurve`), but `renderAggTable`'s by-setup table on the same Performance card was fed the raw, unfiltered rows array — so the by-setup N/wins/losses/pnl silently disagreed with the Net P&L/equity curve directly above it. Fixed by reusing `getDecidedRows()` there too (commit `08be100`).
+
+Everything else checked out with specific line-number verification: the `expires_at`/`resolved_at` boundary partition is clean (no gap, no overlap), `IS NOT TRUE` correctly treats a never-backfilled `NULL` as "keep" not "exclude", both scripts are confirmed idempotent on re-run, `firedEtMin`'s fallback getter convention (local vs UTC) matches how each source object was actually constructed, and all 6 `tagEntryOrderFlowShadow` fire-and-forget sites were confirmed safe (nothing downstream reads the value, the function never rejects). Two LOW, explicitly-not-bugs observations noted (the repair script's dry-run still runs an idempotent `ADD COLUMN IF NOT EXISTS`; the backfill script hardcodes 3 backup-table names, not self-healing if one's missing — both correct for one-time historical scripts, no live impact, no action taken).
+
+**This closes the full DeepSeek week-review initiative**: 3 audit batches + 1 fixes-review pass, all real findings fixed and verified, server restarted and confirmed postdating every change throughout.
+
+## ✅ 2026-09-26: DeepSeek week-review batch 3 (final) — clean bill of health on the high-stakes changes, 1 real latency fix
+
+Scope: the one commit from the "ML silo week" (2026-09-20, `fc0e37b`) that changed real live trade-selection ranking (`directionalEv`, now prefers real `SETUP_STATUS` EV over the weekly bar-simulated backtest once real N≥20) and live sizing (`sizeMultiplier` stripped from 12+ factors to the one that survived real-only resimulation) with no DeepSeek review in its own commit message — unlike nearly everything else that week, which explicitly went through DeepSeek at each build step.
+
+**No correctness bug found in either high-stakes change** — DeepSeek verified `directionalEv`'s threshold/fallback/memoization end-to-end (the `-999` always-loses-the-sort sentinel, the 2-arg call site, no stale keying) and confirmed `computeSizeMultiplier()`'s extracted logic is byte-behavior-identical to the surviving factor from the old IIFE, with `sessionConflict` genuinely removed from the sum (not just zeroed). Independently spot-checked before trusting.
+
+One real **MEDIUM** finding, fixed: `tagEntryOrderFlowShadow()` was `await`ed inline at all 6 real insert sites, but the function it calls has an internal 8-second sleep on a stale-bar retry (~1/3 of RTH SHORT fires trigger this) — stalling the rest of each poll's work even though the real trade row was already persisted. Made fire-and-forget at all 6 sites (commit `eb0bcdd`) — safe, since the function already catches its own errors internally. Two LOW stale-comment fixes alongside it.
+
+**All 3 batches of this week's DeepSeek QA pass are now complete.** Total: 1 HIGH, 2 MEDIUM (+1 self-caught while fixing batch 1's finding), 5 LOW — all fixed and verified.
+
+## ✅ 2026-09-26: DeepSeek week-review batch 2 — 3 real findings, all fixed
+
+Scope: the 9:30-9:35 RTH dead-zone commit + its same-day `firedEtMin`/`isLiveTimeWindowBlocked` staleness fixes (3 commits — the opening-drive gate and POC resolver-race fix from the same week were excluded, since they'd already had a DeepSeek review before shipping).
+
+DeepSeek found 3 real findings, all confirmed against the live code and fixed (commit `e70d31e`): **#1 MEDIUM** — `skipRedundantShadowInsert` used the stale outer wall-clock dead-zone flags instead of the `firedEtMin`-based ones the same commit introduced for `forceShadow` just above it — a dead-zone candidate whose poll ran late correctly avoided `ACTIVE` but fell through to a `SHADOW` insert instead of the intended full skip (no capital risk, but re-polluted the dead zone with rows the 2026-09-16 fix existed to eliminate). **#2 LOW** — `firedEtMin`'s null-fallback used `etMin` (poll-start) instead of `etNow` (matching what `fired_at` itself falls back to in the same edge case). **#3 LOW** — a 3rd `isLiveTimeWindowBlocked` call site was undocumented but confirmed correctly exempt (its sibling INSERT stamps `fired_at` via `NOW()`, not a bar timestamp) — added a clarifying comment, not a bug fix.
+
+## ✅ 2026-09-26: dead-zone verification found a real 7th insert path (3 standalone detectors) never wired to either dead zone
+
+Verifying `dead_zone_full_skip_live_verification_pending_20260916` (does the 4-6pm full-skip actually produce zero rows live) found the acd.js side was clean, but surfaced a real, previously-unaudited gap: `STALL_DEFENDED_LEVEL_SHORT` (id 124469) fired 2026-09-18 16:30 ET — a standalone detector file with its own `INSERT`, never wired to `isInNewEntryDeadZone()`/`isInRthOpenDeadZone()` at all.
+
+Audited all 5 standalone detector files. Fixed 3: `stallDefendedLevelDetector.js` (both zones), `rthFlushDetector.js` (the 9:30-9:35 zone — its own `EVAL_END_ET_MIN=960` already excluded 4-6pm), `majorPivotDefendedBreakDetector.js` (both zones, RTH-classified breaks only). The last one needed care — its header explicitly warns against changing its RTH/Globex session-split boundary math, but that's about which stop/target *config* a break uses, not whether a new entry should be allowed at all; a "no new entries" gate layered on top doesn't touch that. User confirmed the intent directly mid-fix: "the 4-6 area is just a volumeless deadzone that fires random trades that hurt us." 2 files confirmed structurally exempt already (`minuteBarSignalDetector.js`/`ibLowPnrDetector.js`'s own eval windows don't overlap either dead zone).
+
+All SHADOW-only/thin real N at the time of the fix — zero live-capital impact from the gap itself, but a real structural miss that would have kept recurring. Verified: `test_invariants.mjs` unchanged (19/92), server restarted and confirmed postdating the edits. See commit `7a12e06`.
+
+## ✅ 2026-09-26: DeepSeek week-review batch 1 found a real boundary bug in both sibling-repair scripts; fixed, plus a self-inflicted bug found while fixing it
+
+User asked for a DeepSeek QA pass over the whole week's work (~102 commits/21k+ lines — too much for one dispatch, so scoped to the highest-stakes cluster first: tonight's `SUPPRESS_ALL_DISABLED`, the `ALL_LEVELS_LIVE` correction, and the two sibling phantom-fill scripts). Full review dispatched via `scripts/invoke_deepseek.sh`, audited per the standing rule before acting on anything.
+
+**Confirmed clean** (`SUPPRESS_ALL_DISABLED`/`ALL_LEVELS_LIVE` semantics, the acd.js `sibBaseEligible` gating order, cache-key correctness, `getCanonicalLiveStatus`'s reordering safety, `resolveDirection` consistency across all 3 scripts, backup-then-update safety, naive-timestamp handling) — DeepSeek verified all of this directly against the real code/schema, independently re-verified where it mattered.
+
+**Real, confirmed bug (finding #1, HIGH)**: both `repair_sibling_phantom_fills_20260926.mjs` and `backfill_sibling_late_fill_outcomes_20260926.mjs` bounded their fill-check window using `resolved_at` (the PHANTOM bug's own bogus resolution time) instead of `expires_at` (the order's real life) — `resolved_at || expires_at` is dead code since a resolved row's `resolved_at` is never null. Verified directly against the DB: **55 additional real phantom rows** (beyond the original 327) had been left uncorrected because a fill the buggy window "saw" only existed past the order's real expiry. Fixed (`endBound = expires_at || resolved_at`), re-run, confirmed exactly 55 via independent verification query before trusting the script's own count. Backed up (`active_setups_sibling_unfilled_repair_backup_round2_20260926`) and corrected.
+
+**Self-inflicted bug found while fixing #1**: re-running the *corrected* repair script against the live table picked up its own sibling script's output as candidates — a `SIBLING_LATE_FILL`/`SAME_BAR_STOP_FIRST` row (deliberately resolved using bars *past* `expires_at`, that's the whole point of the late-fill backfill) always reads as "never filled" under the new, narrower `[fireMinute, expires_at]` check, so the "55 new phantoms" round-2 found were actually round-1's OWN correctly-resolved rows getting wrongly re-flagged. Verified directly: all 55 had `resolution_method='SIBLING_LATE_FILL'` before being nulled, and after being pushed back through the (also-fixed) backfill script, all 55 landed on the byte-identical final value as before — no real corruption, but a real latent bug (if the underlying bars had ever disagreed between passes, this would have silently drifted a value). Fixed by excluding on `late_fill_past_expiry_basis IS NOT TRUE` (the flag itself, not a resolution_method string — a first attempt excluding only `'SIBLING_LATE_FILL'` missed the same-bar branch's `'SAME_BAR_STOP_FIRST'`, caught immediately by re-running and finding the identical row phantom a second time). Both scripts now idempotent — a clean re-run of either finds/changes nothing. One genuinely new phantom row surfaced once the self-inflicted noise was removed (`IB_MID_SCALP_FADE_SHORT`, -$26) — repaired and backfilled the same way (round 3).
+
+**Other DeepSeek findings, fixed**: (#2) the backfill's candidate query had no id-list scope at all, so a careless future re-run could silently late-fill a brand-new live `NOT_FILLED` row — pinned to the 3 known repair-backup tables' id lists instead. (#3) `LIMIT 5000` contradicted the "no time limit" header claim (~3.47 days if bars were gapless, though real market closures mean this doesn't even bound calendar time consistently) — removed. (#4) **the most user-facing one**: `late_fill_past_expiry_basis` was wired into `REAL_TRADE_FILTER` for calibration but NOT into `quick-check.html`'s `getDecidedRows()`/timeline filters — meaning these backfilled rows would render as ordinary real trades in the Declustered Performance card, which the user just made their default PnL lens the same night. Fixed in 3 places (`getDecidedRows()`, the main timeline `baseFiltered` chain, the Globex tab chain) — also required adding `s.late_fill_past_expiry_basis` to `/api/setups/range-summary`'s explicit column list (`server/routes/acd.js`), since it wasn't selected at all (the exact "frontend filter silently becomes a no-op because the backend SELECT never returns the field" footgun CLAUDE.md already has a hard rule about). (#5) backfilled rows left `status='EXPIRED'` while showing `resolution='TARGET_HIT'`/`'STOP_HIT'` — now sets `status='RESOLVED'` to match the live convention. (#6) same-bar stop+target now resolves `STOP_HIT`/`SAME_BAR_STOP_FIRST` (worst case), matching `resolveSetups.js`'s own convention, instead of leaving the row ambiguous/`NOT_FILLED`. (#7, low, not actually a deviation) — `price_at_resolution` using the stop/target level rather than a bar price matches the live resolver's own identical zero-slippage assumption, not a real inconsistency.
+
+Final state after all 3 rounds: 303 rows carry `late_fill_past_expiry_basis=true` (net -$418, not the earlier +$522 — the corrected, larger population landed slightly negative instead of positive, a real change in the number, not noise), 27 rows genuinely never touched at all (stay `NOT_FILLED`). `test_invariants.mjs` stable at 19/92 (up from the pre-repair 30, consistent with the earlier finding that removing fake wins correctly trips several circuit breakers for human review). No live `ACTIVE`→`SUPPRESS` demotions observed at any point. Server restarted and confirmed to postdate all fixes.
+
+**Batches 2+ of the week-review not yet dispatched** — this session focused on auditing and fully fixing batch 1's findings before moving on, per the standing "audit before acting" discipline. Next up: the 9:30-9:35 dead-zone/`firedEtMin` fixes, opening-drive gate, POC resolver-race fix; then the ML silo week (already partially DeepSeek-reviewed per commit messages, needs a scoping pass to find what wasn't).
+
+## ✅ 2026-09-26: sibling phantom-fill historical repair (never-filled half) — done, per user directive
+
+Follow-up to the 2026-09-25 entry directly below (`sibling_phantom_fill_inflates_shadow_ev_20260925`) — that entry shipped the live fix; this closes the "historical repair" half of `OPEN_DECISION sibling_fill_gate_resolver_fix_20260925` that was left pending. Triggered by the user, mid-conversation, redefining what "all valid trades" means for PnL reporting: "Backfill is fine but the erroneous trades that were phantom trades arent valid."
+
+`scripts/repair_sibling_phantom_fills_20260926.mjs` (dry-run by default, `--write` to apply) re-walked every real (`ACTIVE`/`SHADOW`-origin), already-resolved cluster-sibling row against actual `price_bars_primary` bars using the exact fill-gate rule the 2026-09-25 live fix applies (reused `resolveDirection()`, not reimplemented) — of 2,165 candidates, **327 never actually traded through their own entry price at all**, carrying $25,364.36 of fake `actual_pnl`. Backed up (`active_setups_sibling_unfilled_repair_backup_20260925`, verified 327/327) then corrected to `resolution='NOT_FILLED'`/`actual_pnl=NULL`, matching the live convention.
+
+**Real bug caught before it shipped**: the first dry-run flagged 99.3% of candidates as phantom — an extreme, obviously-wrong result per the standing math-self-audit rule, hand-traced and found to be `fired_at.toISOString()` shifting the fire-minute boundary by the EDT offset (4h) against a naive-timestamp column, the exact bug class CLAUDE.md's own hard rule warns about. Fixed by selecting `::text` and never touching a JS `Date` object; the corrected dry-run (15.1% phantom) matched the already-known ~12%/30-day figure closely enough to trust, and a hand-traced example (`id=113656`, a short whose entry never got touched by the real bar highs) confirmed it directly.
+
+`backtest_setup_status.mjs` + `update_optimal_stops.mjs` re-run twice afterward (needed twice — the 2nd pass let `update_optimal_stops.mjs`'s own deadlock ratchet self-heal 2 live-eligible types, `IB_HIGH_FADE_SHORT`/`ONL_FADE_SHORT`, whose real N dropped by exactly 1 each). `test_invariants.mjs` went 30→18 net failures — new circuit-breaker trips are an expected, correct consequence of real EV shifting once fake wins are removed (the breaker freezing rather than silently drifting a stop/target >35% is the mechanism working as designed, not a bug); **zero live `ACTIVE`→`SUPPRESS` demotions were observed**.
+
+**Worth flagging, not yet raised with the user**: of the 14 now-circuit-breaker-tripped setup_types, only 2 (`IB_MID_SCALP_FADE_SHORT`, `OR5_MID_FADE_LONG`) are currently live-eligible under normal `SETUP_STATUS` gating — but `SUPPRESS_ALL_DISABLED` (shipped the same night, still uncommitted/not yet server-restarted-live) would make all 14 live-eligible once it actually takes effect, meaning several would trade real capital on a stop/target calibration currently flagged as too-disputed-to-auto-update. This interaction between tonight's two separate changes hasn't been explicitly discussed with the user.
+
+**Deliberately NOT done, scoped as remaining work on the same `OPEN_DECISION`**: the smaller "later-filled ones get a real re-outcome" half — 1,838 candidates DID eventually fill, possibly later than `fired_at`, meaning the old resolution walk could have breached stop/target on bars that traded before the real fill and produced a wrong outcome even for a genuinely-real trade. Needs a full offline re-walk of the standard resolution logic (not just a fill check), a bigger lift than this pass. Also not done: a DeepSeek review of this repair (market closed for the weekend, same deferral rationale as tonight's `ALL_LEVELS_LIVE` correction).
+
+`node scripts/test_invariants.mjs`/`git status` both clean after cleanup; no leftover scratch files. Full detail: `docs/DB_BACKUP_CATALOG.md`'s new entry, `OPEN_DECISION sibling_fill_gate_resolver_fix_20260925`'s updated text.
+
+**Same-day follow-up: the "later-filled ones get a real re-outcome" half is now also done, but deliberately kept OUT of real calibration.** User pushed further after seeing the aggregate/hand-traced numbers — "go bar by bar... backfill the pnl with more accurate pnl given this new info." `scripts/backfill_sibling_late_fill_outcomes_20260926.mjs --write` re-walked the 330 `NOT_FILLED` sibling rows (327 from this repair + 3 the live fix caught the same way independently) with NO time limit: 40 genuinely never touch (even 5.6 days out), 287 eventually resolve to a real, honest outcome — 144 wins ($11,258), 143 losses (-$10,736), net **+$522**, nowhere close to the $25,364.36 the bug had originally credited to this exact population. A hand-traced example (`id=113706`, `ONL_FADE_LONG`) shows the mechanism directly: the bug's original walk started at `fired_at` and saw a favorable rally that had ALREADY happened before the real fill — the real fill only occurred 5 minutes later, after that rally had reversed, and the trade actually stopped out for -$76 real dollars against the bug's fake +$74 "win."
+
+**Real design tension surfaced and resolved before writing anything**: backfilling these as ordinary `TARGET_HIT`/`STOP_HIT` rows would let them count as real N/EV in `backtest_setup_status.mjs`, even though the live system would never actually leave a resting sibling order open that long (it marks `NOT_FILLED` at real `expires_at`, no exceptions). Added `active_setups.late_fill_past_expiry_basis boolean` (same flag-and-preserve pattern as `stale_entry_price_basis`/`ib_window_stale_basis`) and wired it into `REAL_TRADE_FILTER`'s exclusion list — preserves the honest historical record (useful for exactly this kind of "what would have really happened" question) without corrupting live calibration. Verified: `RTH_VWAP_FADE_LONG`'s real_n/ev directly confirmed unchanged (105/-$3.01) with the 30 flagged rows correctly excluded; `test_invariants.mjs` unchanged (18 failures); `server/schema.sql` regenerated (new column present). Also caught and corrected a genuine self-error mid-thread: an early hand-trace claimed a specific row's original "win" was fabricated based on only 15 bars, before the trade had actually resolved — the full trace showed that particular row genuinely did hit its real target (just 2 hours later than the bug claimed) — corrected immediately rather than left standing, then a real fake-win-to-real-loss example was substituted.
+
+## ✅ 2026-09-25: temporary "disable all suppression, trade everything live" override — SHIPPED per the scope below, IB_BULLISH/CAPITAL_EXPOSURE_OVERRIDE nuance found during verification
+
+**IMPLEMENTED as scoped below**, same day, after a context clear. `SUPPRESS_ALL_DISABLED` (`server/services/setupEligibility.js`) is live, `enabled: true`. Verified via a temporary check block appended to `scripts/test_invariants.mjs` (run, then reverted cleanly — `git diff` showed zero change to that file afterward): `isLiveEligible()`/`getCanonicalLiveStatus()`/`isLiveTimeWindowBlocked()` all short-circuit correctly, `computeSuppressionSets()` untouched, `test_invariants.mjs` failure count unchanged (30/97) from baseline.
+
+**Real nuance found during verification, not anticipated in the original scoping**: `IB_BULLISH` — the user's own stated headline example of a type they want live under this override — is ALSO on `CAPITAL_EXPOSURE_OVERRIDE` (added 2026-08-19, reason=`STOP_DAY_CLUSTERED`, an unrelated data-integrity gate on its day-clustered stop calibration, not the WR/EV reason it was `SUPPRESS`ed for). Since this override deliberately does NOT bypass `CAPITAL_EXPOSURE_OVERRIDE` (confirmed with the user as a blanket rule), `IB_BULLISH` stays `SHADOW` regardless of this flag — confirmed directly (`isLiveEligible('IB_BULLISH', ...)` = `false`). `IB_BEARISH` (not on that override list) DOES go live as expected. This asymmetry between the two "dumped" siblings isn't obvious from the flag's own name and should be surfaced to the user, not silently absorbed — flagged in `OPEN_DECISION suppress_all_disabled_temporary_override_20260925` rather than resolved unilaterally (removing `IB_BULLISH` from `CAPITAL_EXPOSURE_OVERRIDE` is the user's call).
+
+CLAUDE.md's "Where to look" section updated with the flag's existence, scope, and this nuance. `OPEN_DECISION suppress_all_disabled_temporary_override_20260925` tracks the standing no-auto-expiry risk (nothing reverts this automatically) and the `IB_BULLISH` question.
+
+**Not yet done**: server restart to make this live in the actually-running process (code is edited on disk; confirm process start time postdates the edit before treating it as enforced), and the DeepSeek review this whole higher-stakes-work thread should still get per the standing 3-phase rule (deferred the same way the `ALL_LEVELS_LIVE` correction's own review was, given market-closed timing).
+
+Original scoping text, preserved below:
+
+
+### From "✅ 2026-10-05: NQ bad-bar repair, Sep 28 to Nov 19 2025 — DONE (one gap left, flagged)"
+
+- **Still open, flagged, not done:** NQ has no bars at all from 2025-09-19 09:30 to 2025-09-28 18:02 ET (a missing gap, not bad bars). The raw NQZ5 scid probably covers it, but backfilling it is a separate decision — `OPEN_DECISION nq_bars_missing_sep22_27_2025`.
+- **Downstream audit (read-only), done same day:** stored `level_prices` for trade_dates 2025-09-30 through 2025-11-21 are about +230 to +300 pts too high (PD_HIGH/PD_CLOSE), matching again from 2025-11-24. 1,333 `active_setups` rows fired in the window (1,221 BACKFILL, 112 UNKNOWN, zero ACTIVE/SHADOW, so no real trade or live capital was touched); their entries sit about +249 pts above the corrected bar at fired_at. Both are still contaminated. Nothing rebuilt yet — each rebuild is a write to history the analysis uses, so each needs your go-ahead. Flagged as `OPEN_DECISION nq_window_downstream_rebuild_decision` (HIGH) with the three options (level_prices recompute, backfill rebuild, calibration re-run).
+
+### From "🔄 2026-09-27: Main-dashboard statistics audit (DeepSeek review) — in progress, hand-off before context clear"
+
+- Confirmed `overnight_inventory`/`open_vs_prior_value` are near-tautological: 444/451 (98.4%) of the FULL history matches the pattern LONG_TRAPPED↔BELOW_VALUE / SHORT_TRAPPED↔ABOVE_VALUE / NEUTRAL↔INSIDE_VALUE. The removed "aligned" check was measuring one underlying fact twice, not two independent signals agreeing.
+
+
+
+
+
+- Collapsed to testing `open_vs_prior_value` alone against real (ACTIVE/SHADOW origin, `is_cluster_primary`, RTH, all `*_basis` flags excluded, MTM/RECOVERY_MTM excluded) trade outcomes, split LONG vs SHORT: on `ABOVE_VALUE` days, real LONG EV=+$4.78/trade (N=234) vs real SHORT EV=-$16.78/trade (N=185) — a $21.56/trade directional gap, not concentrated in one dominant setup_type (49 distinct LONG types, 38 distinct SHORT types each contribute modestly).
+
+
+
+
+
+- **Self-caught mid-investigation**: initially called this "well-powered" — wrong, corrected in the same pass. The `ABOVE_VALUE` bucket spans only 12 (LONG) / 11 (SHORT) **distinct trading days** despite the large trade counts — exactly the "N counts trades, not independent days" trap this codebase has a standing rule about. Recorded honestly as `RESEARCH_CLAIM open_vs_prior_value_long_short_directional_bias_20260927`, `PROVISIONAL`, explicitly flagged as day-clustering-unchecked.
+
+
+
+
+
+- **DONE 2026-09-27** (`scratch/ovp_directional_bias_check_20260927.mjs`, `dayBlockedBootstrapDeltaCI()` reused, not reimplemented): CI on the (LONG-SHORT) delta is `[$4.21, $43.94]` — excludes zero. Chronological half-split holds up (first half gap=$23.05, second half gap=$21.56 — stable, not decaying, not a one-period fluke). **But** `distinctDates` is only 12 (LONG) / 11 (SHORT) — well below this codebase's own N≥20 real-day floor for a decisive claim. Net: the statistical machinery says real, the day-count says still thin — kept `PROVISIONAL` (`RESEARCH_CLAIM open_vs_prior_value_long_short_directional_bias_20260927`, updated via `recordClaim()`, not hand-typed). **Not wired to anything, not used to replace the removed OvernightContextStrip literals yet** — per the user's own bar for this whole thread (real AND actionable), a thin-day-count PROVISIONAL finding doesn't clear it. Revisit once distinctDates approaches ~20 (the standing weekly SETUP_STATUS-style recheck path will accumulate more ABOVE_VALUE days over time; no dedicated recalibration script exists for this one yet — would need one if this is ever promoted).
+
+**STILL TO DO** (in priority order for whoever picks this up next):
+1. ~~Run the day-blocked bootstrap + chronological check on the OVP directional-bias finding above.~~ Done 2026-09-27 — see above.
+2. ~~Fix findings #2, #4, #5, #6 above.~~ Done 2026-09-27, see the follow-up entry below — all 4 fixed, plus a 5th, unfound-by-DeepSeek instance of the same anti-pattern, plus a real staleness bug the fix surfaced.
+3. **Batch 1b DONE 2026-09-28** (initially blocked 2026-09-27 on DeepSeek "Insufficient Balance," re-dispatched once the account had balance again — same request file, no rescoping needed). All findings independently verified against real code/live endpoints before acting, per the standing "audit before acting" rule:
+   - **HIGH, fixed**: `VolatilityRegimeCard.jsx`'s `REGIME_STYLE` hand-typed "setups win 63.5% (n=74)"/"39.3% (n=117)" — stripped, qualitative text only.
+   - **HIGH, fixed (user's explicit call)**: the card was reading the WRONG volatility system (`volatilityRegimeService.js`'s z-score classifier via `/acd/volatility-regime`), not the GARCH monitor (`volatilityRegime.js`) CLAUDE.md documents as deliberately label-free. Rebuilt: the card's headline is now the GARCH raw scale (`GarchHeadline`, mirrors quick-check.html's own card exactly), the z-score regime demoted to a clearly-labeled secondary "Morning Regime Playbook (z-score)" section — kept, not deleted, since it has its own real, separately-validated use (gates `C_STANDALONE`).
+   - **HIGH, fixed**: `SessionForecastPanel.jsx`'s Daily Recap hardcoded `* 2 - 1` ($/pt + commission) — wrong (real commission is $2/round-trip, this charged $1) AND disagreed with `morningBrief.js`'s own header totals (which applied `*2` but no commission at all, so the header and the itemized rows on the same card never reconciled). Both fixed together using the real `LIVE_INSTRUMENT` constant. **2 bugs found while fixing, missed by DeepSeek's scoped review**: a 2nd identical hardcoded-formula copy on the `levelScalps` row render (only line 91's `vwapTrades` copy was flagged), and an `EXPIRED` trade silently falling into the ternary's "loss" branch and rendering as "EXPIRED $-1" in red — a fabricated result for a trade that never closed.
+   - **MEDIUM, fixed**: `/api/volatility-forecast`'s N-floor was 8, not the project-wide ≥20 "decisive" floor (patternScannerService.js hit this exact bug once before, 2026-07-13) — raised to 20; endpoint now returns an honest `{decisive:false, reason}` instead of a fabricated result when a cell's too thin or history's empty, replacing 3 hardcoded fallback literals (`p33on=141`/`p67on=238`/`[0.62,0.20,0.19]`). Frontend gated on `.decisive` to match.
+   - **MEDIUM, fixed**: HIGH/ELEVATED/NORMAL cutoffs were a fixed 0.55/0.42 — now derived from the live distribution of the query's own granular cells.
+   - **MEDIUM, fixed**: `vol_backtest_cache`-sourced Playbook figures had no staleness indicator — `cachedAt` was already returned by the backend, just never rendered; added an "as of" date.
+   - **Confirmed clean, no action**: `PremarketWalkthroughCard` (real live-seeded content), `MarketPulseBar` (both "KEEP IN SYNC" copies still agree, no regression on the 2026-09-07 floor fix).
+
+   Verified: `eslint`/`npm run build` clean (2 real JSX parse errors caught and fixed mid-edit by the post-edit-lint hook, not shipped), `test_invariants.mjs` stable 20/94 vs. a `git stash` baseline, server restart confirmed to postdate every edit (caught the wrapper script serving stale code once via process-uptime check before trusting a curl result — see the standing rule on this), live Playwright render with zero console/page errors.
+
+   **Real gap found during live verification, not caught by DeepSeek or by Claude's first pass**: the "Session Volatility"/"Setup Anticipation" Intel section is currently DEAD CODE — `SessionForecastPanel` is only ever mounted once (`ACDView.jsx`, `section="scripts"`), which skips the exact branch this content lives in. The fixes above are correct and worth keeping, but nobody currently sees the result. Flagged as `OPEN_DECISION sessionforecastpanel_intel_section_dead_code_20260928` (wire it up somewhere real, or delete it) — not decided, a placement/product call. **Batch 1c and Batch 2 of this same audit initiative need the same reachability check before trusting their findings are user-visible.** Retroactive check on Batch 1a done same day: `OvernightContextStrip`/`DayOfWeekPlaybookCard`/`SessionBiasPanel` are all directly mounted in `ACDView.jsx` with no gating prop (real `grep '<ComponentName'` check, not assumed) — genuinely reachable, that batch's fixes are real and visible.
+
+3b. **Batch 1c scoped and staged 2026-09-27** (`scratch/claude_request_deepseek_batch1c.md`, 4 components — BehavioralPatternsCard, LivePlaybookCard, ApproachingLevelBanner, TradeAlertBanner), not yet dispatched (DeepSeek still blocked, same balance issue as 1b). Reading the 4 files directly while scoping already surfaced several likely violations to hand DeepSeek a head start on, not yet independently confirmed:
+   - `LivePlaybookCard.jsx`'s client-side `computePlaybook()` heuristic has at least 4 hand-typed WR% fragments baked directly into its "reasons"/entry-level `why` strings (lines 68, 77-79, 140-142 — "86% WR on TREND/TURBULENT days", "fail 73% of the time", "62% WR", "74% continuation up", "resolve higher 67% of the time"), a flat ±22pt stop not derived from `OPTIMAL_STOP` (lines 108/168), and an arbitrary hand-picked bias-score/confidence formula (lines 42-57) — same shape as the already-fixed `OvernightContextStrip`/`ACDView.jsx` inline-object instances, just not yet confirmed against `performance_audit`/`RESEARCH_CLAIM` for whether any number has a real (even if stale) origin.
+   - `server/routes/morningBrief.js`'s `GET /trade-alerts/:date` (feeds `TradeAlertBanner` directly) hand-types "66% WR, 20pt target, 25pt stop. [Backtested N=402, 2022–2026, +10% vs baseline]" for a `POC_MAGNET` alert and "62% WR" (same number as above — worth checking if it's the same stale source) for its `DAILY_VWAP` alert. `POC_MAGNET` greps to only 3 files, one of them `scripts/archive/backtest_poc_magnet.js` — the archive location is a strong tell this traces to a one-time, non-recalibrating backtest, not a live source. The route's other alerts (VWAP σ variants, ONL/ONH sweeps, volume spike) look genuinely wired to real rolling-distribution queries (`getTrailingVwapStd` etc.) on a first read — need confirming, not assuming.
+   - `ApproachingLevelBanner.jsx` looks clean on a first read — it's a pure socket listener rendering `wr`/`ev`/`n` sourced from `acd.js`'s real live candidate object (`keepLevels`/`top`, ~line 5087), the same values that gate a real trade for that level, not a separately hand-typed number. Likely a "no action needed" result like `SessionBiasPanel` in Batch 1a, but not yet independently confirmed.
+   - `BehavioralPatternsCard.jsx` — footer claims "N≥30 · mined weekly"; not yet verified that floor is actually enforced server-side in `pattern.js` rather than just asserted in the UI label.
+   Dispatch this file once DeepSeek has balance again — same 4-component-per-dispatch cap, same ~10min timeout precedent.
+4. Dispatch Batch 2 (`scratch/deepseek_batch2_request.md` already written) — Dashboard tab's performance-viz panels + Alpha Engine's meta/audit sub-panels.
+5. For every surviving statistic across all batches, explicitly judge actionability (does it change a real decision) not just accuracy — the user's own bar for this whole thread, restated for whoever continues it: **"If they're not [actionable], we need to change that."**
+
+
+### From "🔧 2026-09-25 (morning): SHADOW "declustered edge" was phantom fills; ALL_LEVELS_LIVE shipped by user directive"
+
+- **Finding**: 226 of 1,882 real cluster-sibling rows (12%) since 07-16 never had their own entry level trade before resolving, yet were credited +$18,344 (mostly TARGET_HIT). That is most of the Declustered SHADOW view's outperformance. No currently-ACTIVE setup flips status once phantoms are removed; several THIN_N ones flip negative (CAM_R3/R2_FADE_SHORT, OR15_HIGH_FADE_LONG, WEEKLY_VWAP_FADE_SHORT_OVERNIGHT). `RESEARCH_CLAIM sibling_phantom_fill_inflates_shadow_ev_20260925`.
+
+
+
+
+
+- **Shipped (36ddedc)**: sibling fill gate in the resolver + expiry backstop (DeepSeek design-critiqued); `ALL_LEVELS_LIVE` (every level-fade fires live, every cluster level trades individually), at the user's explicit direction despite that evidence; PD_VAL_FADE_LONG after-1pm window (22ee189) is bypassed while ALL_LEVELS_LIVE is on. Also fixed a `COALESCE(uuid,int)` error that had silently zeroed `stackCount` since 09-07.
+
+
+
+
+
+- **DeepSeek review of 36ddedc came back (`e0d9295`, fixed before the 9:30 open)**: 1 BLOCKER (`structurallyInvalidateSetups()` saw ACTIVE-origin siblings and MTM'd unfilled ones at their own level purely on `minutes_active`, bypassing the fill gate entirely — fixed by excluding siblings from that query), 1 SHOULD-FIX (`sibLive` was missing `isInRefireCooldown`/`isCrossDirectionFastFlip`/`isPostWinOppositeFamilyBlocked` — a `REFIRE_COOLDOWN_MINUTES` type like `PD_VAH_FADE_SHORT`/OR5 family could fire ACTIVE as a sibling 15-30min after its own resolution, reintroducing a documented losing refire pattern — fixed, added all 3), 1 NOTE fixed (missing socket emit on the NOT_FILLED write). No live-alert-flood risk confirmed (finding #1). Full review: `scratch/deepseek_response_alllevels_review_20260925.md`.
+
+
+
+
+
+- **Pending**: historical sibling re-resolution (`OPEN_DECISION sibling_fill_gate_resolver_fix_20260925`); 10-day revisit (`OPEN_DECISION all_levels_live_revisit_20260925`); quick-check's "open" badge shows unrealized P&L for an ACTIVE sibling even before its level has filled (cosmetic, not yet fixed).
+
+
+### From "2026-09-25 (overnight, user asleep): month setup review + opening-burst/first-30 work + POC resolver-race fix"
+
+- **Shipped (LIVE, force-SHADOW)**: `server/services/openingDriveGate.js` — during 9:31-10:00 ET, force-SHADOW a candidate opposing a move-so-far >= the frozen p70 of the prior 20 sessions at the same minute. Wired at RTH main active-slot, `shadowCandidates`, `STACK_VOL_BREAK_LIVE`, `checkStandardLiveGates()`. Daily `scripts/recheck_opening_drive_gate.mjs` (reuses the service's pure functions; reproduces the backtest exactly: 348 / 52 / -$46.73). Pre-registered look: `OPEN_DECISION opening_drive_gate_6week_revisit_20260925`. DeepSeek design critique audited (2 objections rejected with data — they came from the all-day variant), code review = SHIP.
+
+
+
+
+
+- **Tested, NOT wired** (claims recorded): blanket first-30-direction gate (negative), opening-burst count cap (harmful), afternoon cutoff (failed out-of-sample), raising the live EV bar (noisy), proven-vs-unproven setups (not significant once de-circularized).
+
+
+
+
+
+- **Bug fixed**: `expireStaleSetups()` (60s) raced the designed POC/IB_LOW_PNR/OVERNIGHT_ORDERFLOW timeout branch (15s) and mislabeled 7 of 36 POC timeout wins as MARK_TO_MARKET since 09-15. 5-min grace via `DESIGNED_TIMEOUT_EXIT_PREFIXES`; 7 rows relabeled (backup-first). Found via `test_invariants.mjs` [26].
+
+
+
+
+
+- **Needs the user**: `OPEN_DECISION poc_rotation_join_structurally_unpromotable_20260925` — best real setup permanently SUPPRESSed because WR is target-hit-only and it has no target.
+
+
+
+
+
+- **Leads, not findings**: live first-touch underperforms same-day shadow re-fires (`RESEARCH_CLAIM live_first_touch_underperforms_same_day_shadow_lead_20260925`); `IB_HIGH_FADE_SHORT` 12% live WR on a 25/50 geometry.
+
+
+### From "2026-09-25 (ORIGINAL SCOPING, now implemented above) — temporary "disable all suppression, trade everything live" override"
+
+- No code has been written for this yet (scoped only, per the user's own "scope this out and I'll clear context" request).
+
+
+
+
+
+- Whether `isLevelForcedLive()`'s existing `ALL_LEVELS_LIVE`-specific logic in the cluster-sibling path (acd.js ~line 5176-5203, fixed earlier tonight) needs any change once `SUPPRESS_ALL_DISABLED` also exists — likely not, since `SUPPRESS_ALL_DISABLED` short-circuits inside `isLiveEligible()` itself, which that sibling code already calls; the two flags should compose without conflict, but this should be re-checked once both are live together.
+
+
+
+
+
+- Whether to also disable it after some time automatically, or add a visible "suppression override active" banner somewhere in the UI (quick-check.html) so it's never silently forgotten.
+
+
+
+
+
+
