@@ -317,7 +317,7 @@
      suppress_all_disabled_temporary_override_20260925's own "someone has to remember to
      flip this back" risk with a visible indicator instead of relying on memory. Hidden by
      default, shown by checkFlagsBanner() below if the live flag is currently on. -->
-<div id="flags-banner" style="display:none; position:sticky; top:0; z-index:1000; background:var(--red); color:#fff; font-size:12px; font-weight:700; text-align:center; padding:6px 10px; letter-spacing:0.02em;"></div>
+
 
 <div id="hamburger-btn" onclick="toggleNavMenu()">☰</div>
 <div id="nav-menu">
@@ -1219,7 +1219,7 @@ function renderPulseBar(pulse, setupData, ctx, build, rotBadge, volPile) {
   // usage there, NOT this file's own --muted/--dim naming intuition -- verify against
   // MarketPulseBar.jsx directly before changing either.
   const fromOpenClr = pulse.ptsFromOpen == null ? 'var(--muted)' : pulse.ptsFromOpen > 0 ? 'var(--green)' : pulse.ptsFromOpen < 0 ? 'var(--red)' : 'var(--muted)';
-  col1.push(chip('NQ', pulse.currentPrice ? pulse.currentPrice.toFixed(2) : '—', fromOpenStr, fromOpenClr, 'var(--text)'));
+  col1.push(chip('NQ', (pulse.currentPrice ? pulse.currentPrice.toFixed(2) : '—') + '<span id="sierra-dot-slot">' + sierraDotHtml() + '</span>', fromOpenStr, fromOpenClr, 'var(--text)'));
 
   const moveColor = pulse.rangeClass === 'EXTENDED' ? 'var(--red)' : pulse.rangeClass === 'QUIET' ? 'var(--muted)' : 'var(--amber)';
   const rangeLabel = pulse.rangeClass === 'EXTENDED' ? 'BIG' : pulse.rangeClass === 'QUIET' ? 'QUIET' : 'NORMAL';
@@ -3493,27 +3493,41 @@ renderSharedFilters();
 // own comment above. Slow-changing (a manual code flip, not live data) but polled at the same
 // 5min cadence as loadVolRegime/loadModelsTab so a flip mid-session is still caught without
 // needing a page reload.
+// Status dot next to the NQ price (2026-10-05). Replaces the full-width banner, which blocked
+// the hamburger. Red = Sierra Chart DISARMED (no real orders); yellow = a status check failed
+// or a temporary override is on; green = armed and no overrides. Hover/tap title lists details.
+let sierraStatus = { color: null, title: 'Checking Sierra Chart status…' };
+function sierraDotHtml() {
+  if (!sierraStatus.color) return '';
+  return `<span title="${sierraStatus.title.replace(/"/g, '&quot;')}" style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${sierraStatus.color};margin-left:6px;vertical-align:middle;"></span>`;
+}
 async function checkFlagsBanner() {
   try {
     const d = await fetch('/api/setups/live-flags', { cache: 'no-store' }).then(r => r.json());
-    const el = $('flags-banner');
-    if (d.suppressAllDisabled) {
-      el.style.display = 'block';
-      el.style.background = 'var(--red)';
-      el.textContent = `⚠ SUPPRESS_ALL_DISABLED is ON (since ${d.suppressAllDisabledSince || 'unknown'}) — every setup fires live regardless of real track record`;
-    } else if (d.allLevelsLive) {
-      // Found via DeepSeek review 2026-09-26 -- the endpoint always returned this field but the
-      // banner only ever checked suppressAllDisabled, so ALL_LEVELS_LIVE (a separate, still-on
-      // override) carried the same "someone has to remember to flip it back" risk with zero
-      // visible indicator. Less severe than SUPPRESS_ALL_DISABLED (it still respects real
-      // SETUP_STATUS suppression), so a lower-urgency amber banner rather than red.
-      el.style.display = 'block';
-      el.style.background = 'var(--amber)';
-      el.textContent = `⚠ ALL_LEVELS_LIVE is ON — every level-fade type fires live, cluster siblings trade individually`;
+    const lines = [];
+    let color = '#4ade80';
+    if (d.sierraArmed === false) {
+      color = '#f87171';
+      lines.push('SIERRA CHART DISARMED — no real orders' + (d.sierraHaltedReason ? ' (' + d.sierraHaltedReason + ')' : ''));
     } else {
-      el.style.display = 'none';
+      lines.push('Sierra Chart ARMED');
     }
-  } catch (e) { /* fail quiet -- a banner check failing shouldn't break the rest of the page */ }
+    if (d.suppressAllDisabled) {
+      color = color === '#f87171' ? color : '#facc15';
+      lines.push(`SUPPRESS_ALL_DISABLED ON since ${d.suppressAllDisabledSince || 'unknown'} — every setup fires live`);
+    } else if (d.allLevelsLive) {
+      // Found via DeepSeek review 2026-09-26 -- the endpoint always returned this field but nothing
+      // showed it. Less severe than SUPPRESS_ALL_DISABLED (still respects real SETUP_STATUS).
+      color = color === '#f87171' ? color : '#facc15';
+      lines.push('ALL_LEVELS_LIVE ON — every level-fade type fires live');
+    }
+    sierraStatus = { color, title: lines.join(' | ') };
+  } catch (e) {
+    // Visible, not silent (2026-10-05): a failed check shows as a yellow "unknown" dot.
+    sierraStatus = { color: '#facc15', title: 'Could not check Sierra Chart armed state — unknown' };
+  }
+  const nqSlot = document.getElementById('sierra-dot-slot');
+  if (nqSlot) nqSlot.innerHTML = sierraDotHtml();
 }
 
 // ---- Boot ----
