@@ -14,7 +14,7 @@
 import { DtcClient } from './dtcClient.js';
 import { killSwitch } from './orderEligibility.js';
 import { handleOrderUpdate, runReconciliation } from './reconciliation.js';
-import { resolveMnqFrontMonthSymbol } from './contractSymbol.js';
+import { resolveMnqFrontMonthSymbolFromEnv } from './contractSymbol.js';
 import { query } from '../../db.js';
 
 let client = null;
@@ -68,7 +68,7 @@ async function triggerReconciliation(trigger) {
   if (!client || !client.isLive()) return; // nothing to check against without a live connection
   try {
     const todayQ = await query(`SELECT CURRENT_DATE::text as today`);
-    const contract = resolveMnqFrontMonthSymbol(todayQ.rows[0].today);
+    const contract = resolveMnqFrontMonthSymbolFromEnv(todayQ.rows[0].today);
     const result = await runReconciliation(client, killSwitch, contract.orderSymbol, trigger);
     lastReconciliationReport = result.reconciliationReport;
     lastInvariantCheck = result.invariantCheck;

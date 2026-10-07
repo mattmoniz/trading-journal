@@ -26,7 +26,7 @@ import { query } from '../../db.js';
 import { isOrderEligible } from './orderEligibility.js';
 import { evaluateDailyLossLimit } from './dllGate.js';
 import { placeEntryOrder, placeBracketEntryOrder, placeExitOrder, isAnotherPositionOpen } from './reconciliation.js';
-import { resolveMnqFrontMonthSymbol } from './contractSymbol.js';
+import { resolveMnqFrontMonthSymbolFromEnv } from './contractSymbol.js';
 import { resolveDirection } from '../../config/setupTypes.js';
 
 const ENTRY_LOOKBACK_MINUTES = 3; // don't backfill an entry for an old row a deploy/restart happens to see fresh
@@ -90,7 +90,7 @@ async function sweepEntries(dtcClient) {
       // just a fast path; the real guarantee is idx_order_placements_one_open_position.
       if (await isAnotherPositionOpen(row.id)) { console.log(`[sierraChart.orderSweep] setup_id=${row.id} (${row.setup_type}): another real position is already open -- skipping entry (one position at a time).`); await recordEntrySkip(row, 'another real position already open'); continue; }
       if (row.entry_zone_low == null) { console.error(`[sierraChart.orderSweep] setup_id=${row.id}: no entry_zone_low, cannot place LIMIT entry -- skipping.`); await recordEntrySkip(row, 'no entry_zone_low'); continue; }
-      const contract = resolveMnqFrontMonthSymbol(row.trade_date);
+      const contract = resolveMnqFrontMonthSymbolFromEnv(row.trade_date);
       const side = DIRECTION_TO_SIDE[direction];
       // Native-OCO bracket (2026-10-07 build): off by default (SIERRA_USE_OCO_BRACKET unset).
       // The stop+target link has not round-tripped a fill against a venue that actually rests
@@ -149,7 +149,7 @@ async function sweepExits(dtcClient) {
   `);
   for (const row of rows.rows) {
     try {
-      const contract = resolveMnqFrontMonthSymbol(row.trade_date);
+      const contract = resolveMnqFrontMonthSymbolFromEnv(row.trade_date);
       const result = await placeExitOrder(dtcClient, {
         setupId: row.id,
         symbol: contract.orderSymbol,

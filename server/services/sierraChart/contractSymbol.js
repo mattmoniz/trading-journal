@@ -45,6 +45,13 @@ function* quarterlyContractsFrom(startYear) {
  * responsibility to pass the real ET "today," matching this codebase's own
  * CURRENT_DATE-not-toISOString convention).
  *
+ * `yearDigits` (1 or 2, default 1) selects how many digits of the contract year to embed in
+ * `contractCode`/`orderSymbol` -- this is a real, confirmed-live venue difference, not a
+ * cosmetic choice: Rithmic/Sim1 wants 1 digit ("MNQZ6"), the Trading Evaluator / Simulated
+ * Futures Trading Service backend wants 2 ("MNQZ26") and rejects the 1-digit form outright.
+ * Callers should read this from `DTC_SYMBOL_YEAR_DIGITS` (set per-account in
+ * config/dtc-accounts/*.env, applied via switch_dtc_account.mjs), never hardcode it.
+ *
  * Rule: the nearest quarterly contract not yet past its own CME expiration (3rd Friday
  * of the contract month) -- EXCEPT once inside that contract's own roll week
  * (isInsideNqRollWeek(): 2nd Thursday through the Monday before 3rd Friday), where real
@@ -72,9 +79,12 @@ function* quarterlyContractsFrom(startYear) {
  * sending -- callers keep passing `{ symbol: contract.orderSymbol, exchange: '' }` exactly
  * as before; nothing above the wire-serialization layer needs to change.
  */
-export function resolveMnqFrontMonthSymbol(dateStr) {
+export function resolveMnqFrontMonthSymbol(dateStr, yearDigits = 1) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
     throw new Error(`resolveMnqFrontMonthSymbol: dateStr must be YYYY-MM-DD, got "${dateStr}"`);
+  }
+  if (yearDigits !== 1 && yearDigits !== 2) {
+    throw new Error(`resolveMnqFrontMonthSymbol: yearDigits must be 1 or 2, got ${yearDigits}`);
   }
   const [y, m, d] = dateStr.split('-').map(Number);
   const today = new Date(y, m - 1, d);
@@ -86,7 +96,14 @@ export function resolveMnqFrontMonthSymbol(dateStr) {
     throw new Error(`resolveMnqFrontMonthSymbol: no unexpired quarterly contract found for ${dateStr} -- should be impossible within the 2-year lookahead window`);
   }
   const chosen = rollingEarly ? contracts[idx + 1] : contracts[idx];
-  const yearDigit = String(chosen.year).slice(-1);
+  // Confirmed live 2026-10-07: the Trading Evaluator / Simulated Futures Trading Service backend
+  // (SierraChart-DTC instance, port 11199) rejects the 1-digit year code Rithmic/Sim1 accepts
+  // ("MNQZ6" -> "Order is not allowed based on the symbol") and requires 2 digits ("MNQZ26")
+  // instead -- confirmed by a controlled test, same account, same price, only the digit count
+  // changed. This is a genuinely different venue convention, not a bug in either direction.
+  // yearDigits is driven by DTC_SYMBOL_YEAR_DIGITS in whichever config/dtc-accounts/*.env
+  // profile is active -- see switch_dtc_account.mjs.
+  const yearDigit = String(chosen.year).slice(yearDigits === 2 ? -2 : -1);
   const contractCode = `${chosen.letter}${yearDigit}`;
   return {
     letter: chosen.letter,
@@ -95,4 +112,19 @@ export function resolveMnqFrontMonthSymbol(dateStr) {
     contractCode,
     orderSymbol: `MNQ${contractCode}.CME`,
   };
+}
+
+/**
+ * Same as resolveMnqFrontMonthSymbol(), but reads yearDigits from DTC_SYMBOL_YEAR_DIGITS
+ * (set per-account by config/dtc-accounts/*.env via switch_dtc_account.mjs) instead of taking
+ * it as an explicit argument -- the one, shared place every real call site should read this
+ * from, so the env-var name and its 1/1-is-the-safe-default behavior aren't duplicated at each
+ * call site. Unset or malformed -> defaults to 1 (Rithmic/Sim1's convention), never throws on
+ * a bad env value -- a bad/missing value should fail the way the OLD, pre-fix code always
+ * behaved (1 digit), not in some new, undiscovered way.
+ */
+export function resolveMnqFrontMonthSymbolFromEnv(dateStr) {
+  const raw = Number(process.env.DTC_SYMBOL_YEAR_DIGITS);
+  const yearDigits = raw === 2 ? 2 : 1;
+  return resolveMnqFrontMonthSymbol(dateStr, yearDigits);
 }
