@@ -422,3 +422,45 @@ verification, same lesson, now caught in a test rather than a comment).
 
 `OPEN_DECISION oco_bracket_fix_needs_rithmic_test_review_20261007` tracks both before
 `SIERRA_USE_OCO_BRACKET` is ever set true against the production connection.
+
+## 2026-10-07: Symbol/exchange wire-format fix shipped, isolated to dtcClient.js alone
+
+Resolves item 1 of the decision above (the Rithmic-vs-Evaluator discrepancy) by making the fix
+venue-agnostic rather than venue-specific. Real root cause, confirmed by a controlled A/B test on
+one unchanged account earlier the same day: this app has always sent the order symbol to Sierra
+Chart as one combined string (`"MNQZ6.CME"`) with `Exchange` left empty, matching an assumption in
+`contractSymbol.js`'s own header comment that turned out to be wrong -- the real DTC wire protocol
+wants `Symbol`/`Exchange` as two separate fields, and sending them combined produces two different
+failure modes depending on account/server: Sim1 silently fills at market instantly regardless of
+price (why every real stop today filled far from its calibrated `stop_level`); the Trading
+Evaluator rejects the order outright ("not allowed based on the symbol").
+
+**Fix is isolated to exactly one file.** `dtcClient.js` gained a small module-level helper,
+`_splitSymbolForWire(symbol, exchange)`, called inside `submitOrder()`/`submitOcoOrder()` right
+before the wire message is built -- it splits a combined `"SYMBOL.EXCHANGE"` string on its last
+`.` into the two real fields, or passes through unchanged if the caller already supplied a split
+`exchange`. **Deliberately does NOT touch `orderSweep.js`, `reconciliation.js`, or
+`connectionManager.js`** -- all three keep passing/storing the combined form exactly as before,
+which is correct for them: `order_placements.symbol` (the DB identity column),
+`extractPositionForSymbol()` (matches broker-reported `positionMessages[].Symbol`, which the broker
+always reports in combined form), and `checkPositionInvariant()`'s `WHERE symbol = $1` lookup all
+depend on the combined string staying the single identity key used consistently throughout the
+app. Splitting anywhere upstream of the wire-serialization layer would have silently broken
+position-invariant matching (the DB column would stop matching what the broker reports) -- this
+was checked and specifically avoided, not just an oversight that happened not to bite.
+`contractSymbol.js`'s header comment, which had incorrectly asserted the venue "embeds the
+exchange directly into the Symbol field" as a convention, is corrected to describe the real
+mechanism and explicitly flag which call sites need the combined form.
+
+Also fixed in the same edit: `IsParentOrder` is now always sent explicitly as `0` or `1`, never
+omitted when false (previously conditionally added to the message only when true).
+
+Verified before committing: `scripts/test_oco_submission.mjs` updated (checks the split actually
+happens for a combined-form caller, checks an already-split caller and a bare no-dot symbol both
+pass through unchanged, checks `IsParentOrder` is explicit 0) and passing; `npx eslint` clean on
+all 3 touched files; both edited modules confirmed to import cleanly under real ESM (not just
+`no-undef`); `test_invariants.mjs` byte-identical failure/warning count (129/170) before and after
+via `git stash`. Not yet done: a live round-trip test of this exact diff, and independent review --
+tracked at `OPEN_DECISION oco_bracket_wire_split_fix_needs_review_20261007`, which also carries
+forward that the account switch (new DTC-Live-Globex account on the Evaluator instance), `.env`
+change, restart, and re-arm are all still explicitly deferred pending your separate go-ahead.

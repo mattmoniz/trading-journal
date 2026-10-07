@@ -100,6 +100,24 @@ const NUL = '\0';
  * themselves (exported above) -- this client does not interpret fills/rejects, since
  * that's a decision for the trading-journal-specific consumer, not this generic client.
  */
+
+// Split a combined "SYMBOL.EXCHANGE" string into the two separate wire fields the real DTC
+// protocol wants for order submission (2026-10-07 fix). This app's own symbol identity (DB
+// storage, broker position/fill matching -- see contractSymbol.js's header) uses one combined
+// string throughout, and callers keep passing that unchanged with exchange=''; this is the one
+// place it gets split, right before the bytes go out, so no other layer has to know about it.
+// Confirmed live: passing the combined string as Symbol with Exchange='' does NOT behave as
+// "exchange embedded in symbol" on every account/server -- Sim1 silently filled at market
+// instantly regardless of price, and the Trading Evaluator rejected it outright ("not allowed
+// based on the symbol"). Deliberately generic (no app-specific import) -- this file is meant to
+// stay a portable DTC client, not coupled to this app's MNQ-specific contract resolution.
+function _splitSymbolForWire(symbol, exchange) {
+  if (exchange) return { symbol, exchange }; // caller already split it -- respect that as-is
+  const dot = typeof symbol === 'string' ? symbol.lastIndexOf('.') : -1;
+  if (dot === -1) return { symbol, exchange: exchange || '' }; // nothing embedded -- send as-is
+  return { symbol: symbol.slice(0, dot), exchange: symbol.slice(dot + 1) };
+}
+
 export class DtcClient extends EventEmitter {
   constructor({ host, port, username, password, clientName = 'dtc-client', tradeAccount, heartbeatIntervalSec = 20 }) {
     super();
@@ -404,10 +422,11 @@ export class DtcClient extends EventEmitter {
     if (!ORDER_TYPE[orderType]) throw new Error(`DtcClient.submitOrder(): invalid orderType "${orderType}"`);
     if (!TIME_IN_FORCE[timeInForce]) throw new Error(`DtcClient.submitOrder(): invalid timeInForce "${timeInForce}"`);
     if (clientOrderId == null) clientOrderId = String(this._nextClientOrderId++);
+    const sym = _splitSymbolForWire(symbol, exchange);
     const msg = {
       Type: MSG_TYPE.SUBMIT_NEW_SINGLE_ORDER,
-      Symbol: symbol,
-      Exchange: exchange,
+      Symbol: sym.symbol,
+      Exchange: sym.exchange,
       ClientOrderID: clientOrderId,
       OrderType: ORDER_TYPE[orderType],
       BuySell: BUY_SELL[side],
@@ -423,8 +442,10 @@ export class DtcClient extends EventEmitter {
       // "There is no parent order for child OCO order," because the server never actually saw
       // IsParentOrder as set. Switching to the integer form fixed it immediately, no other change.
       IsAutomatedOrder: 1,
+      // Always sent explicitly (0 or 1), never omitted -- a plain order and a bracket parent
+      // should look structurally different on the wire, not just "field present vs absent."
+      IsParentOrder: isParentOrder ? 1 : 0,
     };
-    if (isParentOrder) msg.IsParentOrder = 1;
     this._send(msg);
     return clientOrderId;
   }
@@ -454,10 +475,11 @@ export class DtcClient extends EventEmitter {
     }
     if (!TIME_IN_FORCE[timeInForce]) throw new Error(`DtcClient.submitOcoOrder(): invalid timeInForce "${timeInForce}"`);
     if (!(partialFillHandling in PARTIAL_FILL_HANDLING)) throw new Error(`DtcClient.submitOcoOrder(): invalid partialFillHandling "${partialFillHandling}"`);
+    const sym = _splitSymbolForWire(symbol, exchange);
     this._send({
       Type: MSG_TYPE.SUBMIT_NEW_OCO_ORDER,
-      Symbol: symbol,
-      Exchange: exchange,
+      Symbol: sym.symbol,
+      Exchange: sym.exchange,
       TradeAccount: tradeAccount || this._tradeAccount,
       ParentTriggerClientOrderID: parentTriggerClientOrderId,
       ClientOrderID_1: leg1.clientOrderId,

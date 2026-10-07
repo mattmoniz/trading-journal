@@ -53,12 +53,24 @@ function* quarterlyContractsFrom(startYear) {
  * date, never guesses/defaults on ambiguity (throws on a malformed dateStr instead).
  *
  * Returns { letter, year, yearDigit, contractCode, orderSymbol } where `orderSymbol` is
- * the exact string this codebase's real, live-confirmed order-symbol convention expects
- * (e.g. "MNQZ6.CME") -- confirmed 2026-09-28 against real resting orders returned by a
- * live OPEN_ORDERS_REQUEST: Sierra Chart's DTC server embeds the exchange directly into
- * the Symbol field ("MNQU5.CME", "MNQH6.CME") with `Exchange` left as an EMPTY STRING,
- * not the separate `Exchange` field the generic DTC spec defines -- submitOrder() callers
- * should pass `exchange: ''` alongside this symbol, not `exchange: 'CME'`.
+ * this codebase's one canonical symbol string (e.g. "MNQZ6.CME") -- confirmed 2026-09-28
+ * against real resting orders returned by a live OPEN_ORDERS_REQUEST, and used everywhere
+ * EXCEPT the actual DTC wire submission: `order_placements.symbol`, broker position/fill
+ * matching (extractPositionForSymbol(), checkPositionInvariant()), and all logging/display
+ * depend on this exact combined string being the single identity key throughout the app --
+ * do not split it before passing it to any of those.
+ *
+ * CORRECTED 2026-10-07 (previously claimed Sierra Chart's DTC server "embeds the exchange
+ * directly into the Symbol field" as a venue convention -- false, confirmed by a live A/B
+ * test on one unchanged account: sending this combined string as `Symbol` with `Exchange:
+ * ''` does NOT mean "exchange embedded in symbol" -- it means the server fell back to some
+ * default/guessed exchange resolution, which silently filled every order at market
+ * instantly regardless of price on Sim1, and was rejected outright ("not allowed based on
+ * the symbol") on the Trading Evaluator). The real DTC wire protocol wants `Symbol` and
+ * `Exchange` as two genuinely separate fields. dtcClient.js's submitOrder()/submitOcoOrder()
+ * now split this combined string into the two wire fields automatically, right before
+ * sending -- callers keep passing `{ symbol: contract.orderSymbol, exchange: '' }` exactly
+ * as before; nothing above the wire-serialization layer needs to change.
  */
 export function resolveMnqFrontMonthSymbol(dateStr) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {

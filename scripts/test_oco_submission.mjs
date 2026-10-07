@@ -19,11 +19,31 @@ assert.equal(sent[0].IsParentOrder, 1);
 assert.notEqual(sent[0].IsParentOrder, true); // must be the integer, not a boolean -- this is the real bug
 assert.equal(sent[0].IsAutomatedOrder, 1);
 assert.equal(sent[0].ClientOrderID, 'E1');
+// Combined "SYMBOL.EXCHANGE" form must be split into the two real wire fields (2026-10-07 fix --
+// sending Exchange:'' with the exchange smashed into Symbol is what silently filled at market on
+// Sim1 and was rejected outright on the Trading Evaluator; same root cause, two symptoms).
+assert.equal(sent[0].Symbol, 'MNQZ6');
+assert.equal(sent[0].Exchange, 'CME');
 
-// A normal (non-bracket) entry must NOT carry the field at all -- existing callers unaffected.
+// A normal (non-bracket) entry must carry IsParentOrder explicitly as 0, never omitted or true.
 sent.length = 0;
 c.submitOrder({ symbol: 'MNQZ6.CME', exchange: '', side: 'SELL', orderType: 'LIMIT', quantity: 1, price1: 31567, clientOrderId: 'E2', tradeAccount: 'Sim1' });
-assert.equal('IsParentOrder' in sent[0], false);
+assert.equal(sent[0].IsParentOrder, 0);
+assert.notEqual(sent[0].IsParentOrder, false);
+
+// A caller that already passes a split symbol/exchange (no embedded dot) must be left alone --
+// the split only kicks in when exchange is empty and a dot is actually present.
+sent.length = 0;
+c.submitOrder({ symbol: 'MNQZ6', exchange: 'CME', side: 'SELL', orderType: 'LIMIT', quantity: 1, price1: 31567, clientOrderId: 'E3', tradeAccount: 'Sim1' });
+assert.equal(sent[0].Symbol, 'MNQZ6');
+assert.equal(sent[0].Exchange, 'CME');
+
+// A bare symbol with no embedded exchange and none passed separately is sent as-is (no crash,
+// no invented exchange) -- covers any future non-dotted symbol.
+sent.length = 0;
+c.submitOrder({ symbol: 'MNQZ6', exchange: '', side: 'SELL', orderType: 'LIMIT', quantity: 1, price1: 31567, clientOrderId: 'E4', tradeAccount: 'Sim1' });
+assert.equal(sent[0].Symbol, 'MNQZ6');
+assert.equal(sent[0].Exchange, '');
 
 // OCO children: field names, positions and enum values must match s_SubmitNewOCOOrder exactly.
 sent.length = 0;
@@ -34,6 +54,8 @@ c.submitOcoOrder({
 });
 const oco = sent[0];
 assert.equal(oco.Type, 201); // SUBMIT_NEW_OCO_ORDER
+assert.equal(oco.Symbol, 'MNQZ6');
+assert.equal(oco.Exchange, 'CME');
 assert.equal(oco.ParentTriggerClientOrderID, 'E1');
 assert.equal(oco.ClientOrderID_1, 'S1'); assert.equal(oco.OrderType_1, 3); assert.equal(oco.BuySell_1, 1); assert.equal(oco.Price1_1, 31608); assert.equal(oco.Quantity_1, 1);
 assert.equal(oco.ClientOrderID_2, 'T1'); assert.equal(oco.OrderType_2, 2); assert.equal(oco.BuySell_2, 1); assert.equal(oco.Price1_2, 31525); assert.equal(oco.Quantity_2, 1);
