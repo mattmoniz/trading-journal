@@ -343,3 +343,49 @@ venue. The message ordering is correct per the protocol doc; the failure is in h
 the parent, not in this app's own submission logic. `OPEN_DECISION oco_bracket_sim1_structurally_broken_20261007`
 tracks the follow-up: find a venue that genuinely rests a LIMIT order before testing bracket linking again,
 or confirm this fails the same way there too.
+
+## 2026-10-07: Sierra Chart depth-data recurring cleanup -- PRIORITY, not yet built
+
+One-off cleanup done (746 files/214.58 GB deleted, everything over 90 days, all symbols) during the
+OCO investigation. Still needed: a recurring job (Windows Task Scheduler, daily) running the PowerShell
+delete-older-than-N-days command against `C:\SierraChart\Data\MarketDepthData\*.depth`, matched on the
+real filename date (`SYMBOL.YYYY-MM-DD.depth`, UTC), not file mtime. Also still open: check which other
+symbols (ES confirmed) have "Record Market Depth"=yes in Global Symbol Settings and decide whether that's
+intentional before deciding the recurring window (30 vs 90 days). This is Windows/Sierra-Chart-side
+infrastructure, not app code -- nothing in this repo depends on it, flagged here only so it isn't lost
+across sessions.
+
+## 2026-10-07: Resting-order investigation RESOLVED -- real cause was symbol/exchange format, not the venue
+
+Confirmed via a real round-trip test against the new Trading Evaluator instance (SierraChart-DTC,
+account DTC-Live-Simulator, port 11199): a SELL LIMIT far from market (40000) submitted with Symbol and
+Exchange as separate fields ("MNQZ26"/"CME") rested for the full 15-second test window with no fill, and
+canceled cleanly ("Simulated order canceled") -- the first clean resting-order result all session.
+
+**Root cause of every earlier failure (Sim1 AND the first several Trading Evaluator attempts): the order
+symbol was sent as one combined string ("MNQZ26.CME"/"MNQZ6.CME") with Exchange left empty -- matching
+this app's existing Rithmic convention (contractSymbol.js/dtcClient.js). The Trading Evaluator service
+rejects that format outright ("Order is not allowed based on the symbol"), before ever reaching real
+order-matching logic.** This is NOT the same bug as Sim1's instant-fill-at-market behavior -- it's a
+separate, earlier-stage rejection that looked superficially similar (both prevented an order from
+resting) but has a completely different cause and fix.
+
+Two other real blockers found and fixed along the way, both specific to the new simulated account, not
+the symbol-format bug: (1) Symbol/Product Limits on the account defaulted to Trade Position Limit=0 /
+Order Quantity Limit=0 for ALL_SYMBOLS -- raised to 10, matching the app's own existing position-limit
+convention; (2) the account had $0.00 funded balance with margin required, confirmed via a real manual-UI
+rejection message ("Insufficient Account Value (NLV)... Account Value: 0.00") -- funded to $1,000,000 to
+unblock testing, NOT yet reconciled against MNQ's real margin requirement (the $4,361 margin figure cited
+in that rejection looks like NQ-sized margin, not MNQ -- MNQ is 1/10th NQ's size by design --
+`OPEN_DECISION mnq_margin_config_may_be_using_nq_values_20261007` tracks checking the MNQ symbol's own
+margin setting for a literal NQ-value copy-paste before trusting any further margin-gated test here).
+
+**What this means for the OCO bracket build:** the earlier `oco_bracket_sim1_structurally_broken_20261007`
+finding is correct for Sim1 specifically (it fills everything at submission, confirmed via its own
+"Simulated order accepted" -> immediate fill signature, a real and different behavior from this symbol
+rejection) but does NOT mean native OCO brackets can't work at all. The actual bracket (parent + OCO
+children, not just a single resting order) has STILL NOT been tested on this corrected venue/format --
+`placeBracketEntryOrder()`'s current code sends the combined Symbol.Exchange format everywhere, which
+would hit this same rejection on this venue. Before retrying the bracket test here, either add a
+per-connection symbol-format mode to contractSymbol.js/orderSweep.js, or construct the split-field
+request manually for this one-off test, matching what test_evaluator_resting5.mjs did.
