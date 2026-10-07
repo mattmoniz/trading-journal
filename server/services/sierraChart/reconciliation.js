@@ -619,25 +619,16 @@ export async function checkPositionInvariant(dtcClient, killSwitch, symbol, snap
   // Item 2) -- a filled STOP closes a position exactly like a filled EXIT, no query
   // change needed since this sums by filled_quantity*side with no purpose filter at all.
   //
-  // FIXED 2026-10-07 (audit finding 3): the filter used to be per ROW (id > baseline), which
-  // counted an exit placed after the baseline while excluding the pre-baseline entry it closes
-  // -- 127681/127693's exits (+2) counted with no matching entries. The scope is now per SETUP:
-  // every order of a setup counts if any of its orders is after the baseline, so a position's
-  // whole round trip is counted together or not at all.
+  // Per-row scope, post-baseline (2026-10-07). An earlier attempt scoped this per SETUP so that
+  // pre-baseline entries counted with their post-baseline exits. That was wrong: the pre-baseline
+  // shorts for setups 127681/127693 had already closed on the broker before 20:36, so counting them
+  // cancels real fills the broker holds. Every order placed after the baseline counts on its own.
+  // Manual, non-setup fills (setup_id NULL) count the same way.
   const expectedQ = await query(`
     SELECT COALESCE(SUM(filled_quantity * (CASE WHEN side = 'BUY' THEN 1 ELSE -1 END)), 0) AS expected_net
     FROM order_placements
     WHERE symbol = $1
-      AND (
-        setup_id IN (
-          SELECT setup_id FROM order_placements
-          WHERE symbol = $1
-            AND id > (SELECT COALESCE(MAX(baseline_order_id), 0) FROM order_placements_invariant_baseline)
-        )
-        -- Manual, non-setup fills (no owning setup, e.g. a hand-placed flatten recorded via
-        -- scripts/record_manual_flatten_20261007.mjs) count after the baseline, same as any order.
-        OR (setup_id IS NULL AND id > (SELECT COALESCE(MAX(baseline_order_id), 0) FROM order_placements_invariant_baseline))
-      )
+      AND id > (SELECT COALESCE(MAX(baseline_order_id), 0) FROM order_placements_invariant_baseline)
   `, [symbol]);
   const expectedNet = Number(expectedQ.rows[0].expected_net);
 
