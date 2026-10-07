@@ -464,3 +464,20 @@ via `git stash`. Not yet done: a live round-trip test of this exact diff, and in
 tracked at `OPEN_DECISION oco_bracket_wire_split_fix_needs_review_20261007`, which also carries
 forward that the account switch (new DTC-Live-Globex account on the Evaluator instance), `.env`
 change, restart, and re-arm are all still explicitly deferred pending your separate go-ahead.
+
+## 2026-10-07: `requestSecurityDefinition()` checked, deliberately left unsplit
+
+Per DeepSeek's Q3/S6 ask to grep every Symbol/Exchange construction site, not just order
+submission: `requestSecurityDefinition(symbol, exchange)` (dtcClient.js, called by
+`priceMultiplier.js` with the combined form, no exchange) builds the wire message the same
+unsplit way `submitOrder()` used to. **Deliberately not changed.** This call site is confirmed
+*working* today with the combined format (`priceMultiplier.js`'s own header: a live
+`SECURITY_DEFINITION_FOR_SYMBOL_REQUEST` for `"MNQZ6.CME"` correctly returned
+`DisplayPriceMultiplier`, verified 2026-09-29), and `getPriceMultiplier()`'s response matching
+(`msg.Symbol !== symbol`) depends on the response echoing back the exact combined string sent in
+the request. Splitting the request side without being able to verify from here whether the
+response's `Symbol` field would still come back combined or split risks silently breaking a
+correctness-critical, already-working mechanism (fill-price interpretation) for no demonstrated
+bug -- unlike order submission, which was confirmed broken two separate ways. If this is ever
+revisited, it needs a live A/B on the response format first, not a blind copy of the order-path
+fix.
