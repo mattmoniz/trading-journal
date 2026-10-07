@@ -7,7 +7,7 @@ import { query } from '../db.js';
 import { getClient, getStatus } from '../services/sierraChart/connectionManager.js';
 import { killSwitch, KILL_SWITCH_STATE_PATH } from '../services/sierraChart/orderEligibility.js';
 import { panicStopAppOrders, runReconciliation, cancelUnknownOrders } from '../services/sierraChart/reconciliation.js';
-import { resolveMnqFrontMonthSymbol } from '../services/sierraChart/contractSymbol.js';
+import { resolveMnqFrontMonthSymbolFromEnv } from '../services/sierraChart/contractSymbol.js';
 import { findUnconfirmedCloses } from '../services/sierraChart/closeCheck.js';
 
 const router = express.Router();
@@ -16,7 +16,7 @@ const router = express.Router();
 router.get('/sierra-chart/status', async (req, res) => {
   try {
     const todayQ = await query(`SELECT CURRENT_DATE::text as today`);
-    const contract = resolveMnqFrontMonthSymbol(todayQ.rows[0].today);
+    const contract = resolveMnqFrontMonthSymbolFromEnv(todayQ.rows[0].today);
     const recentQ = await query(`
       SELECT id, setup_id, purpose, client_order_id, server_order_id, symbol, exchange, side,
         order_type, quantity, price1, status, filled_quantity, avg_fill_price, reject_reason,
@@ -133,7 +133,7 @@ router.get('/sierra-chart/reconcile', async (req, res) => {
   if (!client || !client.isLive()) return res.status(503).json({ error: 'DTC connection not live.' });
   try {
     const todayQ = await query(`SELECT CURRENT_DATE::text as today`);
-    const contract = resolveMnqFrontMonthSymbol(todayQ.rows[0].today);
+    const contract = resolveMnqFrontMonthSymbolFromEnv(todayQ.rows[0].today);
     const result = await runReconciliation(client, killSwitch, contract.orderSymbol, 'MANUAL');
     res.json(result.reconciliationReport);
   } catch (err) {

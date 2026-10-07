@@ -5,8 +5,9 @@
 // Proves the thing DeepSeek's review said the earlier OCO/linkage test did NOT prove: that a
 // resting LIMIT order now actually RESTS AT ITS REAL PRICE instead of instant-filling at market
 // regardless of price (the exact Sim1 failure mode this fix targets). Exercises the REAL calling
-// convention production code uses -- combined symbol ("MNQZ6.CME"), exchange: '' -- via
-// resolveMnqFrontMonthSymbol(), not a hand-adjusted split form, so this proves the fix as callers
+// convention production code uses -- combined symbol, exchange: '', via
+// resolveMnqFrontMonthSymbolFromEnv() (reads DTC_SYMBOL_YEAR_DIGITS, same as every real
+// production call site) -- not a hand-adjusted split form, so this proves the fix as callers
 // will actually use it, not just as the offline test constructs it.
 //
 // Submits a SELL LIMIT far above market (unfillable), watches for 10s, confirms it's still
