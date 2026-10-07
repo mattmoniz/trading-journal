@@ -50,6 +50,7 @@ const MSG_TYPE = {
   CANCEL_REPLACE_ORDER: 204,
   OPEN_ORDERS_REQUEST: 300,
   SUBMIT_NEW_SINGLE_ORDER: 208,
+  SUBMIT_NEW_OCO_ORDER: 201,
   ORDER_UPDATE: 301,
   CURRENT_POSITIONS_REQUEST: 305,
   POSITION_UPDATE: 306,
@@ -64,6 +65,9 @@ const ENCODING = { BINARY: 0, BINARY_VLS: 1, JSON: 2, JSON_COMPACT: 3, PROTOCOL_
 const BUY_SELL = { BUY: 1, SELL: 2 };
 const ORDER_TYPE = { MARKET: 1, LIMIT: 2, STOP: 3, STOP_LIMIT: 4 };
 const TIME_IN_FORCE = { DAY: 1, GTC: 2, GOOD_TILL_DATE_TIME: 3, IOC: 4, ALL_OR_NONE: 5, FOK: 6 };
+// REDUCE_QUANTITY: if one leg partially fills, the other leg's remaining quantity is reduced to match --
+// the right default for a stop+target pair of equal size (DTCProtocol.h PartialFillHandlingEnum).
+const PARTIAL_FILL_HANDLING = { UNSET: 0, REDUCE_QUANTITY: 1, IMMEDIATE_CANCEL: 2 };
 export const ORDER_STATUS = {
   UNSPECIFIED: 0, ORDER_SENT: 1, PENDING_OPEN: 2, PENDING_CHILD: 3, OPEN: 4,
   PENDING_CANCEL_REPLACE: 5, PENDING_CANCEL: 6, FILLED: 7, CANCELED: 8,
@@ -389,13 +393,18 @@ export class DtcClient extends EventEmitter {
    * by design -- see the portability header comment), so the caller must own uniqueness
    * whenever restart-survival matters.
    */
-  submitOrder({ symbol, exchange, side, orderType, quantity, price1 = 0, price2 = 0, timeInForce = 'DAY', clientOrderId, tradeAccount }) {
+  // isParentOrder (2026-10-07, OCO build): per Sierra's own bracket-order procedure (DTC
+  // Messages and Procedures doc, confirmed against DTCProtocol.h's s_SubmitNewSingleOrder
+  // IsParentOrder field), this order must be followed IMMEDIATELY by a SUBMIT_NEW_OCO_ORDER
+  // for its two children -- if the next message isn't that, the server rejects this parent.
+  // Existing callers are unaffected: the field defaults off.
+  submitOrder({ symbol, exchange, side, orderType, quantity, price1 = 0, price2 = 0, timeInForce = 'DAY', clientOrderId, tradeAccount, isParentOrder = false }) {
     if (!this._loggedOn) throw new Error('DtcClient.submitOrder(): not logged on.');
     if (!BUY_SELL[side]) throw new Error(`DtcClient.submitOrder(): invalid side "${side}"`);
     if (!ORDER_TYPE[orderType]) throw new Error(`DtcClient.submitOrder(): invalid orderType "${orderType}"`);
     if (!TIME_IN_FORCE[timeInForce]) throw new Error(`DtcClient.submitOrder(): invalid timeInForce "${timeInForce}"`);
     if (clientOrderId == null) clientOrderId = String(this._nextClientOrderId++);
-    this._send({
+    const msg = {
       Type: MSG_TYPE.SUBMIT_NEW_SINGLE_ORDER,
       Symbol: symbol,
       Exchange: exchange,
@@ -408,8 +417,60 @@ export class DtcClient extends EventEmitter {
       Quantity: quantity,
       TradeAccount: tradeAccount || this._tradeAccount,
       IsAutomatedOrder: true,
-    });
+    };
+    if (isParentOrder) msg.IsParentOrder = true;
+    this._send(msg);
     return clientOrderId;
+  }
+
+  /**
+   * Submit the two OCO child legs for a bracket (2026-10-07, OCO build). Must be sent
+   * immediately after a submitOrder({ isParentOrder: true }) call for the SAME symbol/
+   * account -- parentTriggerClientOrderId must equal that parent's ClientOrderID. Per
+   * Sierra's procedure, the server holds the parent pending this message and rejects it
+   * if this isn't the very next message received. Both legs stay PENDING_CHILD until the
+   * parent fills (or partially fills), at which point the server links and activates them
+   * as a real OCO pair -- when one fills, the server cancels the other. This is why native
+   * OCO removes the app-side race the stop+target link (siblingLegToCancel) has: the
+   * server does the canceling, not this app watching for a fill after the fact.
+   *
+   * leg1/leg2: { clientOrderId, orderType, side, quantity, price1=0, price2=0 }
+   * Returns { clientOrderId1, clientOrderId2 }.
+   */
+  submitOcoOrder({ symbol, exchange, tradeAccount, parentTriggerClientOrderId, leg1, leg2, timeInForce = 'GTC', partialFillHandling = 'REDUCE_QUANTITY' }) {
+    if (!this._loggedOn) throw new Error('DtcClient.submitOcoOrder(): not logged on.');
+    if (!parentTriggerClientOrderId) throw new Error('DtcClient.submitOcoOrder(): parentTriggerClientOrderId is required -- this must follow a submitOrder({ isParentOrder: true }) for the same order.');
+    for (const [name, leg] of [['leg1', leg1], ['leg2', leg2]]) {
+      if (!leg) throw new Error(`DtcClient.submitOcoOrder(): ${name} is required.`);
+      if (!BUY_SELL[leg.side]) throw new Error(`DtcClient.submitOcoOrder(): ${name} invalid side "${leg.side}"`);
+      if (!ORDER_TYPE[leg.orderType]) throw new Error(`DtcClient.submitOcoOrder(): ${name} invalid orderType "${leg.orderType}"`);
+      if (leg.clientOrderId == null) throw new Error(`DtcClient.submitOcoOrder(): ${name}.clientOrderId is required.`);
+    }
+    if (!TIME_IN_FORCE[timeInForce]) throw new Error(`DtcClient.submitOcoOrder(): invalid timeInForce "${timeInForce}"`);
+    if (!(partialFillHandling in PARTIAL_FILL_HANDLING)) throw new Error(`DtcClient.submitOcoOrder(): invalid partialFillHandling "${partialFillHandling}"`);
+    this._send({
+      Type: MSG_TYPE.SUBMIT_NEW_OCO_ORDER,
+      Symbol: symbol,
+      Exchange: exchange,
+      TradeAccount: tradeAccount || this._tradeAccount,
+      ParentTriggerClientOrderID: parentTriggerClientOrderId,
+      ClientOrderID_1: leg1.clientOrderId,
+      OrderType_1: ORDER_TYPE[leg1.orderType],
+      BuySell_1: BUY_SELL[leg1.side],
+      Price1_1: leg1.price1 ?? 0,
+      Price2_1: leg1.price2 ?? 0,
+      Quantity_1: leg1.quantity,
+      ClientOrderID_2: leg2.clientOrderId,
+      OrderType_2: ORDER_TYPE[leg2.orderType],
+      BuySell_2: BUY_SELL[leg2.side],
+      Price1_2: leg2.price1 ?? 0,
+      Price2_2: leg2.price2 ?? 0,
+      Quantity_2: leg2.quantity,
+      TimeInForce: TIME_IN_FORCE[timeInForce],
+      PartialFillHandling: PARTIAL_FILL_HANDLING[partialFillHandling],
+      IsAutomatedOrder: true,
+    });
+    return { clientOrderId1: leg1.clientOrderId, clientOrderId2: leg2.clientOrderId };
   }
 
   /**

@@ -19,7 +19,7 @@ export async function findUnconfirmedCloses() {
     SELECT s.id AS setup_id, s.setup_type, s.resolution, s.resolution_method, s.actual_pnl::float AS pnl,
       s.resolved_at::text AS resolved_at, s.trade_date::text AS trade_date,
       EXISTS (SELECT 1 FROM order_placements e WHERE e.setup_id = s.id AND e.purpose = 'ENTRY' AND e.status = 'FILLED') AS entry_filled,
-      EXISTS (SELECT 1 FROM order_placements c WHERE c.setup_id = s.id AND c.purpose IN ('EXIT','STOP') AND c.status = 'FILLED') AS broker_close_filled
+      EXISTS (SELECT 1 FROM order_placements c WHERE c.setup_id = s.id AND c.purpose IN ('EXIT','STOP','TARGET') AND c.status = 'FILLED') AS broker_close_filled
     FROM active_setups s
     WHERE s.origin_status = 'ACTIVE' AND s.status = 'RESOLVED'
       AND s.resolved_at >= NOW() - INTERVAL '2 days'

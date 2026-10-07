@@ -1,6 +1,7 @@
 // Writes a trade's broker-derived P&L (added 2026-10-06, NOT yet wired into the live close path).
-// Only writes when BOTH the entry fill and the exit (stop or market exit) fill are present in the broker
-// record. Otherwise it writes nothing, so a gap is never turned into a number. Sets pnl_source = 'BROKER'.
+// Only writes when BOTH the entry fill and the exit (stop, target, or market exit) fill are present in
+// the broker record. Otherwise it writes nothing, so a gap is never turned into a number. Sets
+// pnl_source = 'BROKER'. TARGET added 2026-10-07 (OCO build) alongside the existing STOP/EXIT purposes.
 import { query } from '../../db.js';
 import { brokerPnlFromFills } from './brokerPnl.js';
 
@@ -8,7 +9,7 @@ export async function recordBrokerPnlForSetup(setupId, db = { query }) {
   const r = await db.query(`
     SELECT e.side AS entry_side, e.avg_fill_price::float AS entry_avg,
       (SELECT x.avg_fill_price::float FROM order_placements x
-        WHERE x.setup_id = $1 AND x.purpose IN ('STOP','EXIT') AND x.status = 'FILLED'
+        WHERE x.setup_id = $1 AND x.purpose IN ('STOP','EXIT','TARGET') AND x.status = 'FILLED'
         ORDER BY x.id DESC LIMIT 1) AS exit_avg
     FROM order_placements e
     WHERE e.setup_id = $1 AND e.purpose = 'ENTRY' AND e.status = 'FILLED'

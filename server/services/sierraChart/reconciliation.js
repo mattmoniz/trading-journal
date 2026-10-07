@@ -54,6 +54,7 @@ import { recordBrokerPnlForSetup } from './brokerPnlWriter.js';
 export function entryClientOrderId(setupId) { return `E${setupId}`; }
 export function exitClientOrderId(setupId) { return `X${setupId}-${Date.now()}`; }
 export function stopClientOrderId(setupId) { return `S${setupId}`; }
+export function targetClientOrderId(setupId) { return `T${setupId}`; }
 
 // DTC's binary struct uses DBL_MAX as the "field not set" sentinel for double fields.
 // JSON encoding is not documented to guarantee omitting these outright (verified via
@@ -152,31 +153,103 @@ export async function placeStopOrder(dtcClient, { setupId, stopPrice, entrySide,
   return { id, clientOrderId };
 }
 
-/** The setup's own most recent STOP row, or null if none exists. Used by placeExitOrder
- * (recognize an already-closed-by-stop setup, and cancel a still-resting stop ahead of a
- * flatten) and cancelUnfilledEntry (defense in depth -- see that function's own comment). */
-async function getStopStatus(setupId) {
+/**
+ * Place a real native-OCO bracket entry (2026-10-07, OCO build): one parent LIMIT entry plus a
+ * stop and a target as a true SUBMIT_NEW_OCO_ORDER pair, linked by the broker itself rather than
+ * by this app watching for a fill after the fact -- the broker's own server-side OCO link does the
+ * canceling; placeExitOrder's getLegStatus/cancelRestingLeg checks still apply for the case where
+ * the app's OWN simulated exit logic closes the position before either native leg fills. Per
+ * Sierra's documented bracket procedure (DTC Messages and Procedures doc, verified
+ * against DTCProtocol.h): the OCO submission must be the VERY NEXT message after the parent, or
+ * the server rejects the parent -- the two dtcClient calls below are made back to back with no
+ * `await` between them (submitOrder/submitOcoOrder are synchronous socket writes; only the
+ * surrounding DB inserts are async) specifically to guarantee that ordering.
+ *
+ * UNTESTED against a real fill/cancel round-trip as of this build -- Sim1 fills resting orders at
+ * market, so it can confirm the broker ACCEPTS and LINKS the three orders, but not that the
+ * server-side cancel-the-sibling-on-fill behavior actually engages. Gated behind
+ * SIERRA_USE_OCO_BRACKET (orderSweep.js) -- not the default entry path until that's been proven
+ * on a venue that rests orders.
+ *
+ * Returns { entryId, entryClientOrderId, stopClientOrderId, targetClientOrderId } on success, or
+ * null if an ENTRY for this setupId already exists (the idempotency short-circuit -- NOT an error).
+ */
+export async function placeBracketEntryOrder(dtcClient, { entryPrice, stopPrice, targetPrice, side, quantity, setupId, symbol, exchange, tradeAccount, environmentService }) {
+  if (!Number.isFinite(entryPrice)) throw new Error('placeBracketEntryOrder(): entryPrice is required.');
+  if (!Number.isFinite(stopPrice)) throw new Error('placeBracketEntryOrder(): stopPrice is required.');
+  if (!Number.isFinite(targetPrice)) throw new Error('placeBracketEntryOrder(): targetPrice is required.');
+  if (!OPPOSITE_SIDE[side]) throw new Error(`placeBracketEntryOrder(): invalid side "${side}"`);
+
+  const eId = entryClientOrderId(setupId);
+  const sId = stopClientOrderId(setupId);
+  const tId = targetClientOrderId(setupId);
+  const common = { setupId, symbol, exchange, tradeAccount, environmentService };
+
+  const entryInsert = await insertPendingOrder({ ...common, purpose: 'ENTRY', clientOrderId: eId, side, orderType: 'LIMIT', quantity, price1: entryPrice }, true);
+  if (entryInsert.rows.length === 0) return null; // idx_order_placements_one_entry_per_setup -- already placed
+  const entryId = entryInsert.rows[0].id;
+
+  const childSide = OPPOSITE_SIDE[side];
+  const stopInsert = await insertPendingOrder({ ...common, purpose: 'STOP', clientOrderId: sId, side: childSide, orderType: 'STOP', quantity, price1: stopPrice }, true);
+  const targetInsert = await insertPendingOrder({ ...common, purpose: 'TARGET', clientOrderId: tId, side: childSide, orderType: 'LIMIT', quantity, price1: targetPrice }, true);
+  if (stopInsert.rows.length === 0 || targetInsert.rows.length === 0) {
+    // Should be unreachable -- the entry row didn't exist a moment ago, so neither should its
+    // children, per idx_order_placements_one_stop_per_setup/idx_order_placements_one_target_per_setup.
+    // Fail loud rather than submit a bracket with a missing leg.
+    await query(`UPDATE order_placements SET status='ERROR', reject_reason='bracket child row conflict', position_open=FALSE WHERE id=$1`, [entryId]);
+    throw new Error(`placeBracketEntryOrder(): setup_id=${setupId}: STOP/TARGET row already existed for a brand-new ENTRY -- refusing to submit a partial bracket.`);
+  }
+
+  try {
+    dtcClient.submitOrder({ symbol, exchange, side, orderType: 'LIMIT', quantity, price1: entryPrice, timeInForce: 'DAY', clientOrderId: eId, tradeAccount, isParentOrder: true });
+    dtcClient.submitOcoOrder({
+      symbol, exchange, tradeAccount, parentTriggerClientOrderId: eId, timeInForce: 'GTC',
+      leg1: { clientOrderId: sId, orderType: 'STOP', side: childSide, price1: stopPrice, quantity },
+      leg2: { clientOrderId: tId, orderType: 'LIMIT', side: childSide, price1: targetPrice, quantity },
+    });
+  } catch (err) {
+    await query(`UPDATE order_placements SET status='ERROR', reject_reason=$2, last_update_at=now() WHERE id = ANY($1)`, [[entryId, stopInsert.rows[0].id, targetInsert.rows[0].id], err.message]);
+    await query(`UPDATE order_placements SET position_open=FALSE WHERE id=$1`, [entryId]);
+    console.error(`[sierraChart.reconciliation] setup_id=${setupId}: bracket submission failed -- per Sierra's own documented procedure the server should reject the dangling parent since the OCO message never followed, but this has not been verified live. Check Sierra Chart directly:`, err);
+    throw err;
+  }
+  await query(`UPDATE order_placements SET status='SUBMITTED', last_update_at=now() WHERE id = ANY($1)`, [[entryId, stopInsert.rows[0].id, targetInsert.rows[0].id]]);
+  return { entryId, entryClientOrderId: eId, stopClientOrderId: sId, targetClientOrderId: tId };
+}
+
+/** The setup's own most recent row of one protective-leg purpose ('STOP' or 'TARGET'), or null if
+ * none exists. Used by placeExitOrder (recognize an already-closed-by-STOP-or-TARGET setup, and
+ * cancel a still-resting leg ahead of a flatten) and cancelUnfilledEntry (defense in depth -- see
+ * that function's own comment). Generalized 2026-10-07 (OCO build) from the STOP-only original --
+ * callers pass purpose explicitly, no behavior change for existing STOP call sites. */
+async function getLegStatus(setupId, purpose) {
   const r = await query(
-    `SELECT status, server_order_id, client_order_id FROM order_placements WHERE setup_id = $1 AND purpose = 'STOP' ORDER BY id DESC LIMIT 1`,
-    [setupId]
+    `SELECT status, server_order_id, client_order_id FROM order_placements WHERE setup_id = $1 AND purpose = $2 ORDER BY id DESC LIMIT 1`,
+    [setupId, purpose]
   );
   return r.rows[0] || null;
 }
+async function getStopStatus(setupId) { return getLegStatus(setupId, 'STOP'); }
 
-/** Best-effort cancel of a still-resting (non-terminal) STOP -- a stop that outlives the
- * position it protected is a naked order waiting to fire later (see file header). Never
- * throws -- a failed cancel is loud-logged, not fatal to the caller's own action. */
-async function cancelRestingStop(dtcClient, setupId, stopStatus, context) {
-  if (!stopStatus || TERMINAL_STATUSES.has(stopStatus.status) || !stopStatus.server_order_id) return false;
+/** Best-effort cancel of a still-resting (non-terminal) protective leg (STOP or TARGET) -- a leg
+ * that outlives the position it protected is a naked order waiting to fire later (see file
+ * header). Never throws -- a failed cancel is loud-logged, not fatal to the caller's own action.
+ * For a native-OCO bracket (submitOcoOrder), the server cancels the sibling leg itself on a fill
+ * -- this function's own role there is only the "ahead of a flatten" case below, where the app's
+ * OWN simulated resolution logic decided to close a position the broker's bracket hasn't settled
+ * yet (e.g. the app's price-walk hit a wider/trailing exit before either native leg filled). */
+async function cancelRestingLeg(dtcClient, setupId, legStatus, context) {
+  if (!legStatus || TERMINAL_STATUSES.has(legStatus.status) || !legStatus.server_order_id) return false;
   try {
-    dtcClient.cancelOrder({ serverOrderId: stopStatus.server_order_id, clientOrderId: stopStatus.client_order_id });
-    console.log(`[sierraChart.reconciliation] setup_id=${setupId}: canceled resting STOP (${context}).`);
+    dtcClient.cancelOrder({ serverOrderId: legStatus.server_order_id, clientOrderId: legStatus.client_order_id });
+    console.log(`[sierraChart.reconciliation] setup_id=${setupId}: canceled resting leg ${legStatus.client_order_id} (${context}).`);
     return true;
   } catch (err) {
-    console.error(`[sierraChart.reconciliation] setup_id=${setupId}: failed to cancel resting STOP (${context}) -- it may still be live, investigate directly in Sierra Chart:`, err);
+    console.error(`[sierraChart.reconciliation] setup_id=${setupId}: failed to cancel resting leg ${legStatus.client_order_id} (${context}) -- it may still be live, investigate directly in Sierra Chart:`, err);
     return false;
   }
 }
+async function cancelRestingStop(dtcClient, setupId, stopStatus, context) { return cancelRestingLeg(dtcClient, setupId, stopStatus, context); }
 
 // A working/pending EXIT order already exists (idempotency guard against a double-flatten
 // under two overlapping polls).
@@ -195,6 +268,7 @@ const EXIT_LIVE_STATUSES = ['PENDING_SUBMIT', 'SUBMITTED', 'ORDER_SENT', 'PENDIN
  * Returns one of:
  *   { action: 'FLATTENED', id, clientOrderId, quantity }
  *   { action: 'ALREADY_CLOSED_BY_STOP' }
+ *   { action: 'ALREADY_CLOSED_BY_TARGET' }
  *   { action: 'CANCELED_UNFILLED_ENTRY' }
  *   { action: 'ALREADY_EXITING' }
  *   { action: 'NOTHING_TO_DO' }
@@ -208,6 +282,10 @@ export async function placeExitOrder(dtcClient, params) {
   // stop that outlives the position it protected is a naked order waiting to fire later.
   const stopStatus = await getStopStatus(params.setupId);
   if (stopStatus?.status === 'FILLED') return { action: 'ALREADY_CLOSED_BY_STOP' };
+  // Same check for a native-OCO TARGET leg (2026-10-07, OCO build) -- a position can now
+  // close for real via either protective leg, not just the stop.
+  const targetStatus = await getLegStatus(params.setupId, 'TARGET');
+  if (targetStatus?.status === 'FILLED') return { action: 'ALREADY_CLOSED_BY_TARGET' };
 
   const existingExit = await query(
     `SELECT 1 FROM order_placements WHERE setup_id = $1 AND purpose = 'EXIT' AND status = ANY($2) LIMIT 1`,
@@ -216,6 +294,7 @@ export async function placeExitOrder(dtcClient, params) {
   if (existingExit.rows.length > 0) return { action: 'ALREADY_EXITING' };
 
   await cancelRestingStop(dtcClient, params.setupId, stopStatus, 'ahead of a flatten');
+  await cancelRestingLeg(dtcClient, params.setupId, targetStatus, 'ahead of a flatten');
 
   const { filledQuantity, side } = await getRealFilledQuantity(params.setupId);
   if (!filledQuantity || filledQuantity <= 0) {
@@ -444,8 +523,9 @@ async function applyOrderUpdate(msg, dtcClient) {
   // condition 2026-09-29 (Item 2) -- a filled broker-side stop closes the position just
   // as surely as a filled EXIT does, and without this the singleton slot would stay
   // stuck forever (blocking every future real entry) even though the position was
-  // legitimately closed.
-  if ((row.purpose === 'EXIT' || row.purpose === 'STOP') && applyStatus && newStatus === 'FILLED') {
+  // legitimately closed. TARGET added 2026-10-07 (OCO build) for the same reason -- a
+  // filled native-OCO target closes the position just as surely as a filled stop does.
+  if ((row.purpose === 'EXIT' || row.purpose === 'STOP' || row.purpose === 'TARGET') && applyStatus && newStatus === 'FILLED') {
     // Broker-derived P&L on close (2026-10-06). Writes only when both fills are present; never guesses.
     await recordBrokerPnlForSetup(row.setup_id).catch((err) => console.error(`[sierraChart.reconciliation] broker P&L write failed for setup_id=${row.setup_id}:`, err.message));
     const client = await getClient();
@@ -471,17 +551,26 @@ async function applyOrderUpdate(msg, dtcClient) {
   if (row.purpose === 'ENTRY' && applyStatus && newStatus === 'FILLED') {
     const effectiveFilledQuantity = Math.max(row.filled_quantity || 0, roundedIncomingFilled || 0);
     try {
-      const stopQ = await query(`SELECT stop_level FROM active_setups WHERE id = $1`, [row.setup_id]);
-      const stopLevel = stopQ.rows[0]?.stop_level != null ? Number(stopQ.rows[0].stop_level) : null;
-      if (stopLevel == null) {
-        console.error(`[sierraChart.reconciliation] setup_id=${row.setup_id}: ENTRY filled but active_setups.stop_level is null -- NO real broker-side stop placed. Position is UNPROTECTED at the broker; this app's own internal exit logic is the only remaining protection. Investigate directly.`);
+      // Skip if this ENTRY was submitted as a native-OCO bracket parent (placeBracketEntryOrder,
+      // 2026-10-07 OCO build) -- its STOP/TARGET children were already submitted alongside the
+      // parent and are sitting PENDING_CHILD on the broker; the server activates them itself on
+      // this fill. Placing a second, standalone STOP here would be a real duplicate order.
+      const existingStop = await getStopStatus(row.setup_id);
+      if (existingStop) {
+        console.log(`[sierraChart.reconciliation] setup_id=${row.setup_id}: ENTRY filled, STOP row already exists (bracket child) -- skipping standalone STOP placement.`);
       } else {
-        const stopResult = await placeStopOrder(dtcClient, {
-          setupId: row.setup_id, stopPrice: stopLevel, entrySide: row.side,
-          filledQuantity: effectiveFilledQuantity, symbol: row.symbol, exchange: row.exchange,
-          tradeAccount: row.trade_account, environmentService: row.environment_service,
-        });
-        if (stopResult) console.log(`[sierraChart.reconciliation] placed real STOP for setup_id=${row.setup_id} at ${stopLevel}: ${JSON.stringify(stopResult)}`);
+        const stopQ = await query(`SELECT stop_level FROM active_setups WHERE id = $1`, [row.setup_id]);
+        const stopLevel = stopQ.rows[0]?.stop_level != null ? Number(stopQ.rows[0].stop_level) : null;
+        if (stopLevel == null) {
+          console.error(`[sierraChart.reconciliation] setup_id=${row.setup_id}: ENTRY filled but active_setups.stop_level is null -- NO real broker-side stop placed. Position is UNPROTECTED at the broker; this app's own internal exit logic is the only remaining protection. Investigate directly.`);
+        } else {
+          const stopResult = await placeStopOrder(dtcClient, {
+            setupId: row.setup_id, stopPrice: stopLevel, entrySide: row.side,
+            filledQuantity: effectiveFilledQuantity, symbol: row.symbol, exchange: row.exchange,
+            tradeAccount: row.trade_account, environmentService: row.environment_service,
+          });
+          if (stopResult) console.log(`[sierraChart.reconciliation] placed real STOP for setup_id=${row.setup_id} at ${stopLevel}: ${JSON.stringify(stopResult)}`);
+        }
       }
     } catch (err) {
       console.error(`[sierraChart.reconciliation] setup_id=${row.setup_id}: failed to place real broker-side stop after ENTRY fill -- position may be UNPROTECTED at the broker, investigate directly:`, err);
@@ -794,15 +883,16 @@ async function persistReconciliationFinding(trigger, reconciliationReport, invar
 export async function panicStopAppOrders(dtcClient, killSwitch) {
   killSwitch.halt('manual stop (dashboard)', 'user');
 
-  // purpose IN ('EXIT','STOP') below (2026-09-29, Item 2) -- a position can now also be
-  // legitimately closed by a real, filled broker-side STOP, not just an EXIT; excluding
-  // only EXIT here would target a setup whose real position is already flat.
+  // purpose IN ('EXIT','STOP','TARGET') below (2026-09-29, Item 2; TARGET added 2026-10-07 OCO
+  // build) -- a position can now also be legitimately closed by a real, filled broker-side STOP
+  // or TARGET, not just an EXIT; excluding only EXIT here would target a setup whose real
+  // position is already flat.
   const liveSetups = await query(`
     SELECT DISTINCT a.id, a.setup_type, e.symbol, e.exchange, e.trade_account, e.environment_service
     FROM active_setups a
     JOIN order_placements e ON e.setup_id = a.id AND e.purpose = 'ENTRY'
     WHERE a.origin_status = 'ACTIVE'
-      AND NOT EXISTS (SELECT 1 FROM order_placements x WHERE x.setup_id = a.id AND x.purpose IN ('EXIT','STOP') AND x.status = 'FILLED')
+      AND NOT EXISTS (SELECT 1 FROM order_placements x WHERE x.setup_id = a.id AND x.purpose IN ('EXIT','STOP','TARGET') AND x.status = 'FILLED')
   `);
 
   const actions = [];
@@ -822,7 +912,7 @@ export async function panicStopAppOrders(dtcClient, killSwitch) {
 
   const verifyQ = await query(`
     SELECT a.id, a.setup_type, e.status as entry_status, e.filled_quantity as entry_filled,
-      EXISTS (SELECT 1 FROM order_placements x WHERE x.setup_id = a.id AND x.purpose IN ('EXIT','STOP') AND x.status = 'FILLED') as closed_for_real
+      EXISTS (SELECT 1 FROM order_placements x WHERE x.setup_id = a.id AND x.purpose IN ('EXIT','STOP','TARGET') AND x.status = 'FILLED') as closed_for_real
     FROM active_setups a
     JOIN order_placements e ON e.setup_id = a.id AND e.purpose = 'ENTRY'
     WHERE a.id = ANY($1)

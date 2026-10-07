@@ -12,7 +12,7 @@ const rows = (await query(`
   JOIN order_placements e ON e.setup_id = s.id AND e.purpose = 'ENTRY' AND e.status = 'FILLED'
   LEFT JOIN LATERAL (
     SELECT purpose, status, avg_fill_price FROM order_placements o
-    WHERE o.setup_id = s.id AND o.purpose IN ('STOP','EXIT') AND o.status = 'FILLED'
+    WHERE o.setup_id = s.id AND o.purpose IN ('STOP','EXIT','TARGET') AND o.status = 'FILLED'
     ORDER BY o.id DESC LIMIT 1) x ON TRUE
   WHERE s.origin_status = 'ACTIVE' AND s.trade_date >= '2026-09-28'
   ORDER BY s.id`)).rows;

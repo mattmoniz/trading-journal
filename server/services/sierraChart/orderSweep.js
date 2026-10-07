@@ -25,7 +25,7 @@
 import { query } from '../../db.js';
 import { isOrderEligible } from './orderEligibility.js';
 import { evaluateDailyLossLimit } from './dllGate.js';
-import { placeEntryOrder, placeExitOrder, isAnotherPositionOpen } from './reconciliation.js';
+import { placeEntryOrder, placeBracketEntryOrder, placeExitOrder, isAnotherPositionOpen } from './reconciliation.js';
 import { resolveMnqFrontMonthSymbol } from './contractSymbol.js';
 import { resolveDirection } from '../../config/setupTypes.js';
 
@@ -91,17 +91,44 @@ async function sweepEntries(dtcClient) {
       if (await isAnotherPositionOpen(row.id)) { console.log(`[sierraChart.orderSweep] setup_id=${row.id} (${row.setup_type}): another real position is already open -- skipping entry (one position at a time).`); await recordEntrySkip(row, 'another real position already open'); continue; }
       if (row.entry_zone_low == null) { console.error(`[sierraChart.orderSweep] setup_id=${row.id}: no entry_zone_low, cannot place LIMIT entry -- skipping.`); await recordEntrySkip(row, 'no entry_zone_low'); continue; }
       const contract = resolveMnqFrontMonthSymbol(row.trade_date);
-      const result = await placeEntryOrder(dtcClient, {
-        setupId: row.id,
-        entryPrice: Number(row.entry_zone_low),
-        symbol: contract.orderSymbol,
-        exchange: '', // exchange is embedded in the symbol string -- see contractSymbol.js's doc comment
-        side: DIRECTION_TO_SIDE[direction],
-        quantity: 1, // this app trades exactly 1 MNQ contract, never more -- see CLAUDE.md's contract_size memory
-        tradeAccount,
-        environmentService: dtcClient.lastKnownService ?? null,
-      });
-      if (result) console.log(`[sierraChart.orderSweep] placed ENTRY for setup_id=${row.id} (${row.setup_type}): ${JSON.stringify(result)}`);
+      const side = DIRECTION_TO_SIDE[direction];
+      // Native-OCO bracket (2026-10-07 build): off by default (SIERRA_USE_OCO_BRACKET unset).
+      // The stop+target link has not round-tripped a fill against a venue that actually rests
+      // orders -- Sim1 fills at market, so it can confirm the broker accepts/links the three
+      // orders but not that the server-side cancel-the-sibling-on-fill behavior engages. Flip
+      // this on only after a deliberate, deliberately-unfillable bracket test, per the plan
+      // discussed 2026-10-07. Falls back to the existing standalone-STOP path (placeEntryOrder,
+      // then placeStopOrder on fill confirmation) whenever the flag is off or either level is
+      // missing, so this is purely additive -- no change to today's default behavior.
+      const useBracket = process.env.SIERRA_USE_OCO_BRACKET === 'true' && Number.isFinite(Number(row.stop_level)) && Number.isFinite(Number(row.t1_level));
+      let result;
+      if (useBracket) {
+        result = await placeBracketEntryOrder(dtcClient, {
+          setupId: row.id,
+          entryPrice: Number(row.entry_zone_low),
+          stopPrice: Number(row.stop_level),
+          targetPrice: Number(row.t1_level),
+          symbol: contract.orderSymbol,
+          exchange: '',
+          side,
+          quantity: 1,
+          tradeAccount,
+          environmentService: dtcClient.lastKnownService ?? null,
+        });
+        if (result) console.log(`[sierraChart.orderSweep] placed BRACKET ENTRY for setup_id=${row.id} (${row.setup_type}): ${JSON.stringify(result)}`);
+      } else {
+        result = await placeEntryOrder(dtcClient, {
+          setupId: row.id,
+          entryPrice: Number(row.entry_zone_low),
+          symbol: contract.orderSymbol,
+          exchange: '', // exchange is embedded in the symbol string -- see contractSymbol.js's doc comment
+          side,
+          quantity: 1, // this app trades exactly 1 MNQ contract, never more -- see CLAUDE.md's contract_size memory
+          tradeAccount,
+          environmentService: dtcClient.lastKnownService ?? null,
+        });
+        if (result) console.log(`[sierraChart.orderSweep] placed ENTRY for setup_id=${row.id} (${row.setup_type}): ${JSON.stringify(result)}`);
+      }
     } catch (err) {
       console.error(`[sierraChart.orderSweep] entry placement threw for setup_id=${row.id} (${row.setup_type}):`, err);
     }

@@ -1,14 +1,15 @@
 {
   "permissions": {
-    "defaultMode": "bypassPermissions",
     "allow": [
       "Bash(*)",
       "Read(*)",
       "Write(*)",
       "Edit(*)",
       "Glob(*)",
-      "Grep(*)"
-    ]
+      "Grep(*)",
+      "Edit(server/services/sierraChart/**)"
+    ],
+    "defaultMode": "bypassPermissions"
   },
   "hooks": {
     "SessionStart": [
