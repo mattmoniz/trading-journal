@@ -9,6 +9,26 @@ Older resolved/superseded threads are periodically moved to [OPEN_THREADS_ARCHIV
 - **2024–2025 bar gaps (MEDIUM):** measured. 2023 is almost entirely thin (229 of 252 weekdays under 300 bars). 2024 Jan 2 to Aug 20 is thin (117 weekdays at 1 bar/day, the known placeholder issue in KNOWN_ISSUES #17). 2025 is clean except Thanksgiving. The thin 2023 and 2024 days are unflagged in the DB. Open, needs a bad_bars-style flag or a decision to exclude the window.
 - **ML promotion gate (MEDIUM):** the 2026-10-05 `ML_CHECKPOINT_PROMOTION` report does not meet the promotion rule. 1,219 comparable unseen trades is enough, but only 10 distinct days against the 20-day floor. Candidate policy mean is -$0.15 vs checkpoint -$0.61, with a day-blocked CI of [-1.87, 2.95] (crosses zero). The checkpoint stays `metalabel_v20260928_202126`. Stop-width check is still due Oct 6 (not yet due).
 - **Exit test, per setup (MEDIUM):** done. `scripts/backtest_exit_tightening_20261005.mjs` now prints and stores a per-setup breakdown (`perSetup` in `scratch/exit_tightening_20261005.json`). Of 320 verdicted cells (20 setups, N>=20 each): 281 FLAT, 26 NEGATIVE, 13 POSITIVE. The one consistent positive is `GLOBEX_VWAP_FADE_SHORT` (6 of 16 cells, mean +$4.58 to +$16.78/trade). Recorded as PROVISIONAL (`exit_tightening_per_setup_20261005`). It is grid-searched, so it needs a placebo test and a chronological split before any use.
+## 2026-10-06 wrap-up: broker-truth recording, Sim2 routing, open broker position
+
+**URGENT, needs a decision:** the broker shows an OPEN long 1 MNQZ6.CME at average 31559.50 on Sim1 (reconciliation on the 2026-10-07 00:02 restart). No app trade records it. Most likely the stop fill on setup 131378 (31559.50 buy) opened a long after its short had already closed, but this is unconfirmed. The switch is OFF. Decide whether to flatten it at the broker, after confirming the direction. Closing it is an order, so it needs an explicit go-ahead.
+
+Done this session (merged to main, restarted, switch OFF):
+- Fill check keeps real market fills (bid/ask quote check) and flags them.
+- Converted broker prices rounded to the 0.25 MNQ tick.
+- Raw-unit fill repair (10 rows) and missing stop/exit price repair (5 rows), both backed up.
+- Broker-derived P&L written on close (`broker_pnl`, `pnl_source`), tested, live on restart. Not yet verified on a live close.
+- Globex entries routed to Sim2 (Sim2 confirmed on the broker's account list). Not yet verified on a live order.
+- Daily loss-limit gate (`dllGate.js`) built and tested; NOT wired into the entry path.
+
+Still open:
+- OCO bracket (stop + target), not built. Depends on Sim1 filling limits and stops correctly, which is not confirmed.
+- Skip reasons not persisted; loss-limit gate not enforced at entry.
+- 127681 and 127693: app says closed, but the broker has no exit fill (exit rows still OPEN).
+- 131237: stop and exit both show broker fills, which is impossible for one flat position. Part of the open-position investigation.
+- Sim1 fill behaviour: limits and stops fill at the quoted bid/ask, not at their prices (see DeepSeek day-scope review).
+- Morning pre-placed limits: pilot only, not built.
+
 ## ✅ 2026-10-05: NQ bad-bar repair, Sep 28 to Nov 19 2025 — DONE (one gap left, flagged)
 The Sep 28 to Nov 19 2025 NQ window was stored only as the NQH26 back-month contract (about 2 contracts per minute, against about 215 per minute for the real front month NQZ25). Nothing in the DB held the front-month bars for those dates; the NQZ5 text export starts 2025-11-19 16:15. Rebuilt the 52,395 front-month 1-minute bars directly from the raw `NQZ5.CME.scid` tick file with `scripts/tick_microstructure/build_1m_bars_from_scid.py` (aggregator reuses the canonical `scid_reader.py`). Validated against Sierra's own 1-minute export first: OHLC exact on all 4,545 overlapping minutes, volume/bid/ask/trades exact on all but 2 minutes (a 53-contract difference at 2025-11-19 16:35). Applied `scripts/repair_nq_front_month_bars_sep_nov2025_20261005.mjs --write` after a dry run: backup of 9,899 bad rows (`price_bars_nqh26_sep_nov2025_backup_20261005`, catalogued), transactional delete + insert, calendar reconcile, matview refresh. Verified through the app's own view (`price_bars_primary`): calendar picks NQZ25 for every day in the window, zero open-vs-prior-close gaps over 50pt except real weekend gaps (including Oct 10's Sunday rebound after the Friday selloff). Server stayed up throughout; no new entries in `scratch/server_errors.jsonl`.
 - **Not verified / deliberately not changed:** the 2 minutes with a small volume difference against Sierra's export, and whether any research claim or calibration was computed on the old NQH26 rows for this window. NOT checked yet; that is the next step before trusting any result that spans Sep 28 to Nov 19 2025. The volume-piling claim already re-ran from 2025-11-20.
