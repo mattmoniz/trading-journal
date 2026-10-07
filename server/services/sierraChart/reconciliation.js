@@ -628,10 +628,15 @@ export async function checkPositionInvariant(dtcClient, killSwitch, symbol, snap
     SELECT COALESCE(SUM(filled_quantity * (CASE WHEN side = 'BUY' THEN 1 ELSE -1 END)), 0) AS expected_net
     FROM order_placements
     WHERE symbol = $1
-      AND setup_id IN (
-        SELECT setup_id FROM order_placements
-        WHERE symbol = $1
-          AND id > (SELECT COALESCE(MAX(baseline_order_id), 0) FROM order_placements_invariant_baseline)
+      AND (
+        setup_id IN (
+          SELECT setup_id FROM order_placements
+          WHERE symbol = $1
+            AND id > (SELECT COALESCE(MAX(baseline_order_id), 0) FROM order_placements_invariant_baseline)
+        )
+        -- Manual, non-setup fills (no owning setup, e.g. a hand-placed flatten recorded via
+        -- scripts/record_manual_flatten_20261007.mjs) count after the baseline, same as any order.
+        OR (setup_id IS NULL AND id > (SELECT COALESCE(MAX(baseline_order_id), 0) FROM order_placements_invariant_baseline))
       )
   `, [symbol]);
   const expectedNet = Number(expectedQ.rows[0].expected_net);
