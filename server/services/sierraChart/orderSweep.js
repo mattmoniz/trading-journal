@@ -24,6 +24,7 @@
 
 import { query } from '../../db.js';
 import { isOrderEligible } from './orderEligibility.js';
+import { evaluateDailyLossLimit } from './dllGate.js';
 import { placeEntryOrder, placeExitOrder, isAnotherPositionOpen } from './reconciliation.js';
 import { resolveMnqFrontMonthSymbol } from './contractSymbol.js';
 import { resolveDirection } from '../../config/setupTypes.js';
@@ -49,6 +50,23 @@ export function selectTradeAccount({ isRth, rthAccount, globexAccount }) {
   return isRth === false ? globexAccount : rthAccount;
 }
 
+// Durable record of every entry skip (2026-10-07, item 6). Written to gated_candidates -- the
+// existing per-gate audit table -- so a skip is queryable later, not just a console line.
+// De-duplicated per setup and reason over 5 minutes, since the sweep re-visits a fresh row on
+// every poll inside its lookback window. gate_reason carries setup_id because gated_candidates
+// has no setup_id column.
+async function recordEntrySkip(row, reason) {
+  await query(`
+    INSERT INTO gated_candidates (trade_date, setup_type, gate_name, gate_reason)
+    SELECT CURRENT_DATE, $1, 'SIERRA_ENTRY_SKIP', $2
+    WHERE NOT EXISTS (
+      SELECT 1 FROM gated_candidates
+      WHERE gate_name = 'SIERRA_ENTRY_SKIP' AND setup_type = $1 AND gate_reason = $2
+        AND evaluated_at > NOW() - interval '5 minutes'
+    )
+  `, [row.setup_type, `setup_id=${row.id} ${reason}`]).catch((err) => console.error('[sierraChart.orderSweep] failed to persist skip:', err.message));
+}
+
 async function sweepEntries(dtcClient) {
   const rows = await query(`
     SELECT id, setup_type, entry_zone_low, stop_level, t1_level, trade_date, is_rth
@@ -60,14 +78,18 @@ async function sweepEntries(dtcClient) {
   for (const row of rows.rows) {
     try {
       const direction = resolveDirection(row);
-      if (!direction) { console.error(`[sierraChart.orderSweep] setup_id=${row.id} (${row.setup_type}): direction unresolvable (name/price disagreement or missing levels) -- skipping entry, not guessing.`); continue; }
+      const tradeAccount = selectTradeAccount({ isRth: row.is_rth, rthAccount: dtcClient.tradeAccount, globexAccount: process.env.DTC_GLOBEX_TRADE_ACCOUNT || 'Sim2' });
+      if (!direction) { console.error(`[sierraChart.orderSweep] setup_id=${row.id} (${row.setup_type}): direction unresolvable (name/price disagreement or missing levels) -- skipping entry, not guessing.`); await recordEntrySkip(row, 'direction unresolvable'); continue; }
       const elig = await isOrderEligible(row.setup_type, row.id);
-      if (!elig.eligible) continue; // not an error -- most rows will legitimately be ineligible (kill switch off, suppressed, etc.)
+      if (!elig.eligible) { await recordEntrySkip(row, elig.reason); continue; } // not an error -- most rows will legitimately be ineligible (kill switch off, suppressed, etc.)
+      // Daily loss limit (item 7). Fails closed when DTC_DLL_LIMIT_USD is unset.
+      const dll = await evaluateDailyLossLimit(tradeAccount);
+      if (dll.blocked) { console.log(`[sierraChart.orderSweep] setup_id=${row.id} (${row.setup_type}): entry blocked by daily loss limit -- ${dll.reason}`); await recordEntrySkip(row, `daily loss limit: ${dll.reason}`); continue; }
       // Single-position-at-a-time invariant (2026-09-29, DeepSeek review after a real
       // misattribution bug -- see reconciliation.js's header). This app-level check is
       // just a fast path; the real guarantee is idx_order_placements_one_open_position.
-      if (await isAnotherPositionOpen(row.id)) { console.log(`[sierraChart.orderSweep] setup_id=${row.id} (${row.setup_type}): another real position is already open -- skipping entry (one position at a time).`); continue; }
-      if (row.entry_zone_low == null) { console.error(`[sierraChart.orderSweep] setup_id=${row.id}: no entry_zone_low, cannot place LIMIT entry -- skipping.`); continue; }
+      if (await isAnotherPositionOpen(row.id)) { console.log(`[sierraChart.orderSweep] setup_id=${row.id} (${row.setup_type}): another real position is already open -- skipping entry (one position at a time).`); await recordEntrySkip(row, 'another real position already open'); continue; }
+      if (row.entry_zone_low == null) { console.error(`[sierraChart.orderSweep] setup_id=${row.id}: no entry_zone_low, cannot place LIMIT entry -- skipping.`); await recordEntrySkip(row, 'no entry_zone_low'); continue; }
       const contract = resolveMnqFrontMonthSymbol(row.trade_date);
       const result = await placeEntryOrder(dtcClient, {
         setupId: row.id,
@@ -76,7 +98,7 @@ async function sweepEntries(dtcClient) {
         exchange: '', // exchange is embedded in the symbol string -- see contractSymbol.js's doc comment
         side: DIRECTION_TO_SIDE[direction],
         quantity: 1, // this app trades exactly 1 MNQ contract, never more -- see CLAUDE.md's contract_size memory
-        tradeAccount: selectTradeAccount({ isRth: row.is_rth, rthAccount: dtcClient.tradeAccount, globexAccount: process.env.DTC_GLOBEX_TRADE_ACCOUNT || 'Sim2' }),
+        tradeAccount,
         environmentService: dtcClient.lastKnownService ?? null,
       });
       if (result) console.log(`[sierraChart.orderSweep] placed ENTRY for setup_id=${row.id} (${row.setup_type}): ${JSON.stringify(result)}`);

@@ -225,6 +225,19 @@ export async function placeExitOrder(dtcClient, params) {
     }
     return { action: canceled ? 'CANCELED_UNFILLED_ENTRY' : 'NOTHING_TO_DO' };
   }
+  // Broker-truth check before any flatten (2026-10-07, wiring item 3). The app's own STOP row
+  // can read non-terminal while the broker has already closed the position (setup 131237:
+  // stop filled 19:19, a second BUY exit still went out at 20:33 and opened a long). The
+  // broker's position for this symbol is the only thing that knows, so it must agree with
+  // this setup's expected open quantity before a market exit is sent. Used as a fail-closed
+  // guard only, never to choose side or quantity (see this file's header).
+  const snapshot = await getBrokerSnapshot(dtcClient, { collectWindowMs: 3000 });
+  const brokerQty = extractPositionForSymbol(snapshot.positionMessages, params.symbol);
+  const guard = brokerExitDecision({ brokerQty, entrySide: side, filledQuantity });
+  if (!guard.ok) {
+    console.error(`[sierraChart.reconciliation] setup_id=${params.setupId}: REFUSED market exit -- ${guard.reason}. Nothing sent. Check the broker's position and order history directly.`);
+    return { action: 'REFUSED_BROKER_MISMATCH', reason: guard.reason, brokerQty };
+  }
   const clientOrderId = exitClientOrderId(params.setupId);
   const exitParams = { ...params, side: OPPOSITE_SIDE[side], orderType: 'MARKET', quantity: filledQuantity, price1: null, price2: null };
   // onConflictDoNothing=true: the real guarantee against a double-flatten under two
@@ -552,6 +565,21 @@ function extractPositionForSymbol(positionMessages, symbol) {
   const msg = positionMessages.find((p) => p.Symbol === symbol);
   if (!msg) return null;
   return msg.NoPositions ? 0 : msg.Quantity;
+}
+
+/**
+ * Pure guard for placeExitOrder (2026-10-07). A market exit is only allowed when the broker's
+ * signed position on the symbol is exactly the open quantity this setup's own fills imply: the
+ * entry side's sign times the filled quantity. Unknown (null) or flat (0) or the wrong size all
+ * refuse, so an exit can never open a new position. Exported for the offline test.
+ */
+export function brokerExitDecision({ brokerQty, entrySide, filledQuantity }) {
+  if (brokerQty == null) return { ok: false, reason: 'broker reported no position for this symbol (unknown, not flat)' };
+  const sign = entrySide === 'BUY' ? 1 : entrySide === 'SELL' ? -1 : null;
+  if (sign == null || !(filledQuantity > 0)) return { ok: false, reason: `invalid entry side "${entrySide}" or quantity ${filledQuantity}` };
+  const expected = sign * filledQuantity;
+  if (Number(brokerQty) !== expected) return { ok: false, reason: `broker net position ${brokerQty} does not equal this setup's expected open ${expected}` };
+  return { ok: true, reason: null };
 }
 
 /**

@@ -153,3 +153,5 @@ column list — these are real point-in-time snapshots, not projections.
 ## active_setups_131237_tick_backup_20261006 and order_placements_131237_tick_backup_20261006
 - What: copies of trade 131237's active_setups row and its ENTRY order (id 25) before the 2026-10-06 tick rounding (entry avg 31356.9993 -> 31357.00).
 - Restore: copy avg_fill_price back to order_placements id 25 from the backup table.
+
+- `order_placements_stale_exit_backup_20261007` -- rows 4 and 16 (EXIT for setups 127681/127693) as they stood before `scripts/repair_stale_exit_rows_20261007.mjs --apply` (2026-10-07), when they read status OPEN with no broker exit. The live rows now read `UNRESOLVED_BROKER_ABSENT`.
