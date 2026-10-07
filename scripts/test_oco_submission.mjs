@@ -11,10 +11,13 @@ const c = new DtcClient({ host: 'x', port: 1, username: '', password: '' });
 c._loggedOn = true;
 c._send = (msg) => sent.push(msg);
 
-// Parent order: IsParentOrder must be set (Sierra's bracket procedure requires this exact field).
+// Parent order: IsParentOrder must be set as the integer 1, not a JSON boolean (2026-10-07 fix -- the
+// real struct field is uint8_t; a JSON `true` silently failed to register as a parent on a live venue).
 c.submitOrder({ symbol: 'MNQZ6.CME', exchange: '', side: 'SELL', orderType: 'LIMIT', quantity: 1, price1: 31567, clientOrderId: 'E1', tradeAccount: 'Sim1', isParentOrder: true });
 assert.equal(sent[0].Type, 208); // SUBMIT_NEW_SINGLE_ORDER
-assert.equal(sent[0].IsParentOrder, true);
+assert.equal(sent[0].IsParentOrder, 1);
+assert.notEqual(sent[0].IsParentOrder, true); // must be the integer, not a boolean -- this is the real bug
+assert.equal(sent[0].IsAutomatedOrder, 1);
 assert.equal(sent[0].ClientOrderID, 'E1');
 
 // A normal (non-bracket) entry must NOT carry the field at all -- existing callers unaffected.
@@ -36,6 +39,7 @@ assert.equal(oco.ClientOrderID_1, 'S1'); assert.equal(oco.OrderType_1, 3); asser
 assert.equal(oco.ClientOrderID_2, 'T1'); assert.equal(oco.OrderType_2, 2); assert.equal(oco.BuySell_2, 1); assert.equal(oco.Price1_2, 31525); assert.equal(oco.Quantity_2, 1);
 assert.equal(oco.TimeInForce, 2); // GTC
 assert.equal(oco.PartialFillHandling, 1); // REDUCE_QUANTITY default
+assert.equal(oco.IsAutomatedOrder, 1);
 
 // Validation: a bracket needs both legs, with real sides/order types -- never sent half-built.
 assert.throws(() => c.submitOcoOrder({ symbol: 'x', parentTriggerClientOrderId: 'E1', leg1: { clientOrderId: 'S1', orderType: 'STOP', side: 'BUY' } }), /leg2 is required/);

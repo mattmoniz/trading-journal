@@ -389,3 +389,36 @@ children, not just a single resting order) has STILL NOT been tested on this cor
 would hit this same rejection on this venue. Before retrying the bracket test here, either add a
 per-connection symbol-format mode to contractSymbol.js/orderSweep.js, or construct the split-field
 request manually for this one-off test, matching what test_evaluator_resting5.mjs did.
+
+## 2026-10-07: OCO bracket -- REAL FIX FOUND AND CONFIRMED LIVE, two gaps remain before arming
+
+Root cause of every "no parent order for child OCO order" rejection, found after extensive dead-end
+troubleshooting (symbol format, timing, account settings, a restart, a secondhand DeepSeek guess that
+was checked and disproven): `IsParentOrder`/`IsAutomatedOrder` are `uint8_t` in the real DTCProtocol.h
+struct, not `bool`. dtcClient.js was sending them as JSON `true`/`false`. The Trading Evaluator server
+silently never registered the order as a parent when sent that way -- the order itself was accepted
+fine, but `IsParentOrder` effectively never took, so every subsequent OCO child submission correctly
+(if confusingly) found "no parent order." Switching both fields to the integer 1 fixed it immediately,
+confirmed via the real `submitOrder()`/`submitOcoOrder()` methods, not just a hand-built message: parent
+shows "Server side bracket order," both children come back `PENDING_CHILD` (status 3) correctly
+referencing the parent's real ServerOrderID, and canceling the parent correctly cascades to cancel both
+children automatically. Fixed in `server/services/sierraChart/dtcClient.js`; `scripts/test_oco_submission.mjs`'s
+assertions updated to check for the integer (the old assertions had been checking for `true`, which is
+why this bug shipped unnoticed in the first place -- a number computed twice by the same code isn't
+verification, same lesson, now caught in a test rather than a comment).
+
+**Two real gaps before this can be armed in production, not yet closed:**
+
+1. **Never tested against Sim1/Rithmic, only against the Trading Evaluator test instance.** The split
+   Symbol/Exchange field format (`"MNQZ26"`/`"CME"`, not `"MNQZ26.CME"`/`""`) was required by the
+   Evaluator specifically. Production's `contractSymbol.js`/`orderSweep.js` still build the combined
+   format, matching Rithmic's own convention (confirmed working for plain ENTRY/STOP orders all session).
+   Whether Rithmic/Sim1 needs the same split-format fix for a bracket submission, or accepts the combined
+   format brackets use fine, is unverified -- this fix was proven on a different venue than the one
+   `SIERRA_USE_OCO_BRACKET` would actually route through.
+2. **No independent review of this fix**, per the standing higher-stakes-work rule. This is real-money-
+   adjacent code (even though today's testing was entirely on sim/eval accounts) and hasn't been through
+   DeepSeek or a second pass.
+
+`OPEN_DECISION oco_bracket_integer_flag_fix_needs_rithmic_test_and_review_20261007` tracks both before
+`SIERRA_USE_OCO_BRACKET` is ever set true against the production connection.

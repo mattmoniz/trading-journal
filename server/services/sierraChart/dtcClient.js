@@ -416,9 +416,15 @@ export class DtcClient extends EventEmitter {
       TimeInForce: TIME_IN_FORCE[timeInForce],
       Quantity: quantity,
       TradeAccount: tradeAccount || this._tradeAccount,
-      IsAutomatedOrder: true,
+      // 1/0, not true/false (2026-10-07 fix): IsAutomatedOrder/IsParentOrder are uint8_t in the real
+      // DTCProtocol.h struct, not bool. Sending a JSON boolean here silently failed to register the
+      // order as a parent -- confirmed live: the Trading Evaluator server accepted the order fine
+      // either way, but every OCO child submission referencing it as a parent was rejected with
+      // "There is no parent order for child OCO order," because the server never actually saw
+      // IsParentOrder as set. Switching to the integer form fixed it immediately, no other change.
+      IsAutomatedOrder: 1,
     };
-    if (isParentOrder) msg.IsParentOrder = true;
+    if (isParentOrder) msg.IsParentOrder = 1;
     this._send(msg);
     return clientOrderId;
   }
@@ -468,7 +474,7 @@ export class DtcClient extends EventEmitter {
       Quantity_2: leg2.quantity,
       TimeInForce: TIME_IN_FORCE[timeInForce],
       PartialFillHandling: PARTIAL_FILL_HANDLING[partialFillHandling],
-      IsAutomatedOrder: true,
+      IsAutomatedOrder: 1, // uint8_t, not bool -- see submitOrder()'s comment on the same fix
     });
     return { clientOrderId1: leg1.clientOrderId, clientOrderId2: leg2.clientOrderId };
   }
