@@ -314,3 +314,32 @@ Read-only review (plan mode, auto-approve off, full diff embedded in the prompt 
 - **Fixed**: `dllGateDecision()` (`server/services/sierraChart/dllGate.js`) used to report `unknownCount > 0` (a trade closed with no broker_pnl recorded yet) without blocking — fail-open exactly when reconciliation is lagging and a real loss could be hiding past the limit. Now blocks. Test added to `scripts/test_broker_guards.mjs`.
 - **Not a bug (verified against the DB, not just re-asserted)**: the reviewer flagged `scripts/repair_stale_exit_rows_20261007.mjs`'s hardcoded `IDS=[4,16]` against setups 127681/127693 as a discrepancy to confirm — already confirmed earlier the same day via a direct query (row 4 = 127681's EXIT, row 16 = 127693's EXIT).
 - **Open, not blocking**: the position invariant's baseline assumes the broker was flat at `order_placements_invariant_baseline`'s own baseline id — never independently confirmed, just asserted in a comment. `getBrokerSnapshot`'s 3-second collection window could miss a position message in some environment, which would fail-closed (refuse every exit) rather than silently misbehave — also not independently tested against a real DTC session dropping a position message.
+
+## 2026-10-07: Native OCO bracket test on Sim1 -- FAILED, decisive negative, real position opened and closed
+
+Live test (user-authorized): a parent SELL LIMIT far from market (33000, last price ~31267) followed
+immediately by the OCO children (STOP BUY @33200, LIMIT BUY @32800), via the new `placeBracketEntryOrder()`
+build. Intended to be unfillable by all three legs. Instead: the parent filled INSTANTLY at market
+(31267.25, not its 33000 limit -- the same sim-fills-at-market behavior documented 2026-10-05/07), and
+both OCO children were REJECTED with "There is no parent order for child OCO order" -- the parent had
+already transitioned to FILLED before the server processed the OCO submission, even though the two
+messages were sent back to back with no `await` between them. Result: a real, completely unprotected
+short position (-1 MNQZ6), zero stop, zero target. Flattened immediately (BUY @31272.00, -$10.50 before
+commission) and recorded in the ledger (`scripts/record_oco_test_trade_20261007.mjs`); invariant confirmed
+back to 0 against a flat broker.
+
+**This is not "untested" anymore -- it's a decisive negative for Sim1 specifically.** Sierra's own
+documented bracket procedure requires the parent to still be pending/working when the OCO message
+arrives. Sim1's simulator resolves a fill synchronously at order-submission time, before the next
+message can be processed as "parent still pending" -- so ANY parent order (not just one at an extreme
+price) will outrun the OCO submission on this venue, every time. `SIERRA_USE_OCO_BRACKET` must stay off
+on Sim1 -- enabling it would systematically produce naked, unprotected positions, worse than today's
+existing standalone-stop-after-fill path, not just an unverified improvement on it.
+
+**Not yet determined**: whether this is purely a Sim1 (local-fill-simulation) artifact that a venue which
+actually rests orders (the real Rithmic-backed sim, or further up the stack) would not share, or a more
+general DTC-server-side race this build's own back-to-back-no-await submission can't close no matter the
+venue. The message ordering is correct per the protocol doc; the failure is in how fast the venue resolves
+the parent, not in this app's own submission logic. `OPEN_DECISION oco_bracket_sim1_structurally_broken_20261007`
+tracks the follow-up: find a venue that genuinely rests a LIMIT order before testing bracket linking again,
+or confirm this fails the same way there too.
