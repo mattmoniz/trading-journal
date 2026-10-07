@@ -1,13 +1,21 @@
 // Daily loss limit gate for real entries (added 2026-10-06, NOT yet wired into the entry path).
 // Uses the day's realized P&L from BROKER fills (broker_pnl, when present), not the app's model. A trade
 // with no broker P&L yet is not counted as zero: it is reported in `unknownCount` so the gate can say so.
+//
+// FIXED 2026-10-07 (DeepSeek review finding M2): a trade closed today with no broker_pnl recorded yet
+// (reconciliation lag/failure) used to be reported in unknownCount but never blocked -- a real loss could
+// sit hidden past the limit while reconciliation was behind. unknownCount > 0 now blocks, matching the
+// fail-closed intent this function already states for the limit variable itself.
 export function dllGateDecision({ realizedBrokerPnl, unknownCount = 0, limit }) {
   if (!Number.isFinite(limit) || limit <= 0) return { blocked: false, reason: 'no limit configured' };
   if (!Number.isFinite(realizedBrokerPnl)) return { blocked: false, reason: 'no broker P&L yet -- cannot evaluate' };
   if (realizedBrokerPnl <= -limit) {
     return { blocked: true, reason: `daily broker loss ${realizedBrokerPnl.toFixed(2)} reached limit -${limit}` };
   }
-  return { blocked: false, reason: unknownCount > 0 ? `${unknownCount} trade(s) still without broker P&L` : 'within limit' };
+  if (unknownCount > 0) {
+    return { blocked: true, reason: `${unknownCount} trade(s) still without broker P&L -- cannot confirm the account is within limit` };
+  }
+  return { blocked: false, reason: 'within limit' };
 }
 
 // Wiring (2026-10-07, item 7). The limit comes from DTC_DLL_LIMIT_USD, not account_settings: no

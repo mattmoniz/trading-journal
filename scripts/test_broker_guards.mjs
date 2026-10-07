@@ -9,8 +9,10 @@ assert.equal(brokerExitDecision({ brokerQty: 0, entrySide: 'SELL', filledQuantit
 assert.equal(brokerExitDecision({ brokerQty: 1, entrySide: 'SELL', filledQuantity: 1 }).ok, false); // opposite -> refuse
 assert.equal(brokerExitDecision({ brokerQty: null, entrySide: 'BUY', filledQuantity: 1 }).ok, false); // unknown -> refuse
 assert.equal(brokerExitDecision({ brokerQty: 2, entrySide: 'BUY', filledQuantity: 1 }).ok, false); // wrong size -> refuse
-// DLL: over-limit blocks; within limit passes; unknown P&L does not block by itself.
+// DLL: over-limit blocks; within limit with no unknowns passes; unknown P&L now blocks (fixed 2026-10-07,
+// DeepSeek review finding M2) since an unresolved loss could be hiding past the limit.
 assert.equal(dllGateDecision({ realizedBrokerPnl: -400, limit: 400 }).blocked, true);
-assert.equal(dllGateDecision({ realizedBrokerPnl: -100, limit: 400 }).blocked, false);
-assert.equal(dllGateDecision({ realizedBrokerPnl: NaN, limit: 400 }).blocked, false);
+assert.equal(dllGateDecision({ realizedBrokerPnl: -100, limit: 400, unknownCount: 0 }).blocked, false);
+assert.equal(dllGateDecision({ realizedBrokerPnl: -100, limit: 400, unknownCount: 2 }).blocked, true);
+assert.equal(dllGateDecision({ realizedBrokerPnl: NaN, limit: 400 }).blocked, false); // no limit data at all -- different branch, not unknownCount
 console.log('broker guard + DLL checks passed');
