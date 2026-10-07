@@ -420,5 +420,5 @@ verification, same lesson, now caught in a test rather than a comment).
    adjacent code (even though today's testing was entirely on sim/eval accounts) and hasn't been through
    DeepSeek or a second pass.
 
-`OPEN_DECISION oco_bracket_integer_flag_fix_needs_rithmic_test_and_review_20261007` tracks both before
+`OPEN_DECISION oco_bracket_fix_needs_rithmic_test_review_20261007` tracks both before
 `SIERRA_USE_OCO_BRACKET` is ever set true against the production connection.
