@@ -31,6 +31,7 @@ import {
   tagDirectionGateShadow, REFIRE_COOLDOWN_MINUTES, isInRefireCooldown,
   SHADOW_NOISE_SUPPRESSION_MINUTES, recentlyShadowedSameType, getSessionBarsSinceOpen,
   tagMomentumAgainstFadeShadow, checkFadeAgainstBigMoveExit, postWinFamilyOf,
+  isRotationDirectionConflict,
 } from '../services/acdRiskGates.js';
 import { scoreMlVetoGate, persistGateVerdict, isInMlVetoGateWindow } from '../services/mlLiveVetoGate.js';
 export { isCrossDirectionFastFlip, isPostWinOppositeFamilyBlocked, isOppositeDirectionOpen, RTH_SESSION_FIRED_AT_SQL, getSessionBarsSinceOpen, checkFadeAgainstBigMoveExit };
@@ -77,6 +78,7 @@ import { isPastMechanismSessionEnd, firedAtToMod, isFiredInRTH } from '../servic
 import { computeSuppressionSets, isLiveEligible, getCanonicalLiveStatus, CAPITAL_EXPOSURE_OVERRIDE, isLiveTimeWindowBlocked, ALL_LEVELS_LIVE, isLevelForcedLive, SUPPRESS_ALL_DISABLED, suppressAllDisabledOverrides } from '../services/setupEligibility.js';
 import { tagEntryOrderFlowShadow } from '../services/entryOrderFlowShadow.js';
 import { tagTouchOrderflowPressureShadow } from '../services/touchOrderflowPressureShadow.js';
+import { tagRotation65ptGateShadow } from '../services/rotation65ptGateShadow.js';
 // buildAllCandidates/computeLevelFadeFactors/logGatedCandidate moved to
 // server/services/acdCandidateBuilder.js 2026-09-20 (Phase A of
 // docs/ACDJS_FILE_SIZE_REDUCTION_SPEC.md) -- see that file's own header for the real
@@ -817,6 +819,11 @@ async function detectGlobexSetup(sessionDate, io) {
       if (live.status !== 'SHADOW' && await isSameSetupRefireBlocked(sessionDate, c.type, 'GLOBEX')) {
         live = { status: 'SHADOW', reason: 'SAME_TYPE_REFIRE' };
       }
+      // 65pt rotation-direction gate (2026-10-11) -- see isRotationDirectionConflict() header
+      // (acdRiskGates.js). Same cheap-check-before-expensive-ML-VETO ordering as the gates above.
+      if (live.status !== 'SHADOW' && await isRotationDirectionConflict(c.dir)) {
+        live = { status: 'SHADOW', reason: 'ROTATION_DIRECTION_CONFLICT' };
+      }
       // ML meta-labeling VETO gate (2026-09-29) -- see mlLiveVetoGate.js's own header for the
       // full design/evidence. Last gate before the INSERT, on purpose (per DeepSeek's design
       // critique): scoring is the most expensive of these checks and the most likely to be
@@ -1001,6 +1008,7 @@ async function detectGlobexSetup(sessionDate, io) {
       await tagDirectionGateShadow(ins.rows[0].id, c.dir);
       await tagMomentumAgainstFadeShadow(ins.rows[0].id, c.dir);
       await tagTouchOrderflowPressureShadow(ins.rows[0].id, { direction: c.dir, firedAt: ins.rows[0].fired_at });
+      await tagRotation65ptGateShadow(ins.rows[0].id, c.dir);
       // FIXED 2026-09-26 (DeepSeek week-review batch 3, MEDIUM finding): tagEntryOrderFlowShadow()
       // was awaited inline at all 6 real insert sites -- but getPriorClosedBarDelta() (the
       // function it calls) has an internal 8-SECOND sleep on a stale-bar retry (~1/3 of RTH SHORT
@@ -3100,6 +3108,11 @@ export default function createACDRouter(io) {
                 if (live.status !== 'SHADOW' && (await isOpeningDriveCounterTrade(direction)).blocked) {
                   live = { status: 'SHADOW', reason: OPENING_DRIVE_GATE.REASON };
                 }
+                // 65pt rotation-direction gate (2026-10-11) -- see isRotationDirectionConflict()
+                // header (acdRiskGates.js).
+                if (live.status !== 'SHADOW' && await isRotationDirectionConflict(direction)) {
+                  live = { status: 'SHADOW', reason: 'ROTATION_DIRECTION_CONFLICT' };
+                }
                 // ML meta-labeling VETO gate (2026-09-29, window extended 2026-10-04 to cover
                 // full RTH -- see mlLiveVetoGate.js's header). RTH-side wiring (9:30-9:35 is
                 // already fully skipped above via inStackVolDeadZone). Only runs inside the
@@ -3146,6 +3159,7 @@ export default function createACDRouter(io) {
                   await tagDirectionGateShadow(ins.rows[0].id, direction);
                   await tagMomentumAgainstFadeShadow(ins.rows[0].id, direction);
                   await tagTouchOrderflowPressureShadow(ins.rows[0].id, { direction, firedAt: ins.rows[0].fired_at });
+                  await tagRotation65ptGateShadow(ins.rows[0].id, direction);
                   tagEntryOrderFlowShadow(ins.rows[0].id, { direction, setupType: svSetupType, entryPrice: svEntry }).catch(() => {}); // fire-and-forget -- see the first call site comment (line 1630) for why
                   if (svMlGateResult) persistGateVerdict(ins.rows[0].id, svMlGateResult).catch(() => {});
                   if (live.status === 'ACTIVE' && io) {
@@ -4587,7 +4601,10 @@ export default function createACDRouter(io) {
                           && !(await isOppositeDirectionOpen(sibDirStr))
                           && !(await isInRefireCooldown(todayET, candType))
                           && !(await isSameSetupRefireBlocked(todayET, candType, 'RTH'))
-                          && !(await isOpeningDriveCounterTrade(sibDirStr)).blocked;
+                          && !(await isOpeningDriveCounterTrade(sibDirStr)).blocked
+                          // 65pt rotation-direction gate (2026-10-11) -- see
+                          // isRotationDirectionConflict() header (acdRiskGates.js).
+                          && !(await isRotationDirectionConflict(sibDirStr));
                         // ML meta-labeling VETO gate (2026-09-29) -- see mlLiveVetoGate.js's
                         // header. Last check, same "only run once every other gate already
                         // passed" convention as every other site. sibLevel is this sibling's
@@ -4636,6 +4653,7 @@ export default function createACDRouter(io) {
                       await tagDirectionGateShadow(sibIns.rows[0].id, sibDir);
                       await tagMomentumAgainstFadeShadow(sibIns.rows[0].id, sibDir);
                       await tagTouchOrderflowPressureShadow(sibIns.rows[0].id, { direction: sibDir, firedAt: sibIns.rows[0].fired_at });
+                      await tagRotation65ptGateShadow(sibIns.rows[0].id, sibDir);
                       tagEntryOrderFlowShadow(sibIns.rows[0].id, { direction: sibDir, setupType: candType, entryPrice: sibLevel }).catch(() => {}); // fire-and-forget -- see the first call site comment (line 1630) for why
                       if (sibMlGateResult) persistGateVerdict(sibIns.rows[0].id, sibMlGateResult).catch(() => {});
                     }
@@ -5194,6 +5212,7 @@ export default function createACDRouter(io) {
                 await tagDirectionGateShadow(auditIns.rows[0].id, dir);
                 await tagMomentumAgainstFadeShadow(auditIns.rows[0].id, dir);
                 await tagTouchOrderflowPressureShadow(auditIns.rows[0].id, { direction: dir, firedAt: auditIns.rows[0].fired_at });
+                await tagRotation65ptGateShadow(auditIns.rows[0].id, dir);
                 tagEntryOrderFlowShadow(auditIns.rows[0].id, { direction: dir, setupType: type, entryPrice: currentPrice }).catch(() => {}); // fire-and-forget -- see the first call site comment (line 1630) for why
               }
               // Tag the anchor trade with this attributed setup, so the trade detail modal can
@@ -6452,6 +6471,12 @@ export default function createACDRouter(io) {
         const openingDriveCounter = !crossDirectionCooldownMin && !postWinOppBlocked && !oppositeDirectionOpen && !sameTypeRefireBlocked && rthDir
           ? (await isOpeningDriveCounterTrade(rthDir)).blocked
           : false;
+        // 65pt rotation-direction gate (2026-10-11) -- see isRotationDirectionConflict() header
+        // (acdRiskGates.js). Same short-circuit pattern as the directional gates above.
+        const rotationDirectionConflict = !crossDirectionCooldownMin && !postWinOppBlocked && !oppositeDirectionOpen
+          && !sameTypeRefireBlocked && !openingDriveCounter && rthDir
+          ? await isRotationDirectionConflict(rthDir)
+          : false;
         // Per-setup live time window (2026-09-25) -- see LIVE_TIME_WINDOW_OVERRIDE in
         // setupEligibility.js (PD_VAL_FADE_LONG after 13:00 ET). Pure lookup, no query.
         // FIXED 2026-09-25 (OPEN_DECISION live_time_window_blocked_etmin_staleness_20260925):
@@ -6512,6 +6537,7 @@ export default function createACDRouter(io) {
         const mlVetoGateBlocked = !isTrailMechanism && !baseIneligible && !mainInNewEntryDeadZone
           && !inRefireCooldown && !exposureOverride && !crossDirectionCooldownMin && !postWinOppBlocked
           && !oppositeDirectionOpen && !sameTypeRefireBlocked && !openingDriveCounter
+          && !rotationDirectionConflict
           && !liveTimeWindowBlocked && !mainInRthOpenDeadZone && isInMlVetoGateWindow(firedEtMin)
           ? (mainMlGateResult = await scoreMlVetoGate({
               entry: active.entry, tradeDate: todayET, confluenceScore: active.confluenceCount ?? null, isRth: true,
@@ -6528,6 +6554,7 @@ export default function createACDRouter(io) {
           || oppositeDirectionOpen
           || sameTypeRefireBlocked
           || openingDriveCounter
+          || rotationDirectionConflict
           || liveTimeWindowBlocked
           || mainInRthOpenDeadZone
           || mlVetoGateBlocked;
@@ -6540,6 +6567,7 @@ export default function createACDRouter(io) {
           : oppositeDirectionOpen ? 'OPPOSITE_DIRECTION_OPEN'
           : sameTypeRefireBlocked ? 'SAME_TYPE_REFIRE'
           : openingDriveCounter ? OPENING_DRIVE_GATE.REASON
+          : rotationDirectionConflict ? 'ROTATION_DIRECTION_CONFLICT'
           : liveTimeWindowBlocked ? 'LIVE_TIME_WINDOW'
           : mainInRthOpenDeadZone ? 'RTH_OPEN_DEAD_ZONE'
           : mlVetoGateBlocked ? mainMlGateResult.reason
@@ -6669,6 +6697,7 @@ export default function createACDRouter(io) {
           await tagDirectionGateShadow(ins.rows[0].id, rthDir);
           await tagMomentumAgainstFadeShadow(ins.rows[0].id, rthDir);
           await tagTouchOrderflowPressureShadow(ins.rows[0].id, { direction: rthDir, firedAt: ins.rows[0].fired_at });
+          await tagRotation65ptGateShadow(ins.rows[0].id, rthDir);
           tagEntryOrderFlowShadow(ins.rows[0].id, { direction: rthDir, setupType: active.type, entryPrice: active.entry }).catch(() => {}); // fire-and-forget -- see the first call site comment (line 1630) for why
           if (mainMlGateResult) persistGateVerdict(ins.rows[0].id, mainMlGateResult).catch(() => {});
         }
@@ -6886,6 +6915,14 @@ export default function createACDRouter(io) {
             // Only evaluated when this row would otherwise go ACTIVE (it can't change a SHADOW row).
             const shadowOpeningDriveCounter = shadowIsLive && !shadowCrossDirectionCooldownMin && !shadowPostWinBlocked && !shadowOppositeDirectionOpen && !shadowSameTypeRefireBlocked
               && shadow.direction && (await isOpeningDriveCounterTrade(shadow.direction)).blocked;
+            // 65pt rotation-direction gate (2026-10-11) -- see isRotationDirectionConflict()
+            // header (acdRiskGates.js). Fifth insert site wired (Globex, STACK_VOL_BREAK_LIVE,
+            // RTH main, cluster-sibling are the other 4) -- this loop is where most level-fade
+            // candidates that don't win the single `active` slot actually fire ACTIVE from, same
+            // reasoning that drove every other gate's coverage here.
+            const shadowRotationDirectionConflict = shadowIsLive && !shadowCrossDirectionCooldownMin && !shadowPostWinBlocked
+              && !shadowOppositeDirectionOpen && !shadowSameTypeRefireBlocked && !shadowOpeningDriveCounter
+              && shadow.direction && await isRotationDirectionConflict(shadow.direction);
             // FIXED 2026-09-25 (OPEN_DECISION live_time_window_blocked_etmin_staleness_20260925) --
             // same firedEtMin fix as the main active-slot site above; this loop's INSERT also
             // stamps fired_at from firedAtTs (the triggering bar's time), not NOW().
@@ -6903,13 +6940,14 @@ export default function createACDRouter(io) {
             let shadowMlGateResult = null;
             const shadowMlVetoBlocked = shadowIsLive && !shadowCrossDirectionCooldownMin && !shadowPostWinBlocked
               && !shadowOppositeDirectionOpen && !shadowSameTypeRefireBlocked && !shadowOpeningDriveCounter
+              && !shadowRotationDirectionConflict
               && !shadowLiveTimeWindowBlocked && isInMlVetoGateWindow(firedEtMin)
               ? (shadowMlGateResult = await scoreMlVetoGate({
                   entry: shadow.entry, tradeDate: todayET, confluenceScore: null, isRth: true,
                   minutesFromOpen: minutesFromSessionOpen(etMin, 'RTH'),
                 })).shadow
               : false;
-            const st = (shadowIsLive && !shadowCrossDirectionCooldownMin && !shadowPostWinBlocked && !shadowOppositeDirectionOpen && !shadowSameTypeRefireBlocked && !shadowOpeningDriveCounter && !shadowLiveTimeWindowBlocked && !shadowMlVetoBlocked) ? 'ACTIVE' : 'SHADOW';
+            const st = (shadowIsLive && !shadowCrossDirectionCooldownMin && !shadowPostWinBlocked && !shadowOppositeDirectionOpen && !shadowSameTypeRefireBlocked && !shadowOpeningDriveCounter && !shadowRotationDirectionConflict && !shadowLiveTimeWindowBlocked && !shadowMlVetoBlocked) ? 'ACTIVE' : 'SHADOW';
             const regimeStamp = computeRegimeStamp(shadow.entry, vaMap);
             const shadowVaOverlapStreak = await getVaOverlapStreak(todayET).catch(() => null);
             // Volume-building signal (2026-08-29, informational only -- see touchQuality.js's
@@ -6959,6 +6997,7 @@ export default function createACDRouter(io) {
               await tagDirectionGateShadow(shadowIns.rows[0].id, shadow.direction);
               await tagMomentumAgainstFadeShadow(shadowIns.rows[0].id, shadow.direction);
               await tagTouchOrderflowPressureShadow(shadowIns.rows[0].id, { direction: shadow.direction, firedAt: firedAtTs });
+              await tagRotation65ptGateShadow(shadowIns.rows[0].id, shadow.direction);
               tagEntryOrderFlowShadow(shadowIns.rows[0].id, { direction: shadow.direction, setupType: shadow.type, entryPrice: shadow.entry }).catch(() => {}); // fire-and-forget -- see the first call site comment (line 1630) for why
               if (shadowMlGateResult) persistGateVerdict(shadowIns.rows[0].id, shadowMlGateResult).catch(() => {});
               // Cluster role claimed HERE, after the insert actually succeeded -- not before

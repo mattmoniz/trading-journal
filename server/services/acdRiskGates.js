@@ -27,6 +27,7 @@
 import { query } from '../db.js';
 import { getCached, setCached, getGlobalCalib, DAY_CACHE_TTL } from './acdShared.js';
 import { resolveDirection } from '../config/setupTypes.js';
+import { getCurrentRotationDirection } from './rotation65ptGateShadow.js';
 
 // Re-fire cooldown (2026-08-03) — gates a NEW candidate to SHADOW/skip if the SAME
 // setup_type resolved within the last N minutes today. IB_BEARISH: 30min is
@@ -277,6 +278,49 @@ export async function isOppositeDirectionOpen(direction) {
     WHERE origin_status = 'ACTIVE' AND resolved_at IS NULL
   `).catch(() => ({ rows: [] }));
   return rows.some(r => resolveDirection(r) === oppositeDir);
+}
+
+// 65pt rotation-direction gate (2026-10-11) -- RESEARCH_CLAIM
+// roster_65pt_rotation_direction_gate_20261008 (CORRECTED version, see that claim's text for
+// the inversion-bug history). Promotes rotation65ptGateShadow.js's SHADOW-only observation tag
+// (tagRotation65ptGateShadow(), live since 2026-10-08) into a real force-SHADOW eligibility
+// gate -- same shape as isOppositeDirectionOpen()/isSameSetupRefireBlocked() above (force
+// SHADOW, never skip the insert). Motivating incident: on 2026-10-09 the live roster kept
+// firing ACTIVE shorts for an extended stretch while the current 65pt rotation leg was UP
+// (long), with nothing in the eligibility chain aware of rotation direction at all -- the tag
+// existed but only wrote itself to already-inserted rows, after the fact.
+//
+// Evidence before wiring: backtest (scratch/poc_65pt_gate_current_leg_verify_20261008.mjs,
+// n=5,474, 2025-06-01-present) AGREE WR=64.3%/mean=+$37.61 vs DISAGREE WR=28.5%/mean=-$29.40,
+// day-blocked CI excludes zero both sides; RTH and Globex independently checked, same
+// direction in both (scratch/poc_65pt_gate_rth_globex_scoped_20261008.mjs); cross-checked
+// against the live momentum_against_fade_shadow tag and found genuinely incremental, not a
+// relabel (scratch/poc_65pt_gate_momfade_overlap_20261008.mjs, 57.7% overlap). First real
+// live-tagged day (2026-10-09, n=62 AGREE/68 DISAGREE primary-only, single day --
+// production-computed via rotation65ptGateShadow.js's NOW() AT TIME ZONE approach, so neither
+// of DeepSeek's two script-level bugs from the 2026-10-08 review (a hardcoded -04:00 DST
+// offset, an unaliased volume column) apply to this live-computed population) held the same
+// DIRECTION (-$1.05 vs -$9.98/trade, 45.2% vs 33.8% positive) though at much smaller
+// separation than the full backtest -- expected single-day noise, not a reversal.
+//
+// NOT yet addressed: the roster-drift confound (does the AGREE/DISAGREE split still hold now
+// that PROMOTE_ALL_MODE grew the live roster ~3.5x within the backtest's own window) -- the
+// 2026-10-09 live-tagged sample above is itself POST-PROMOTE_ALL_MODE (that flag has been on
+// since 2026-09-28), so it's a real, if thin, same-regime data point, not a full resolution of
+// the confound. Treat this gate as PROVISIONAL and revisit once more live-tagged days
+// accumulate (same discipline as isSameSetupRefireBlocked() above, which waited for its own
+// calibration to stabilize across 9 days before being trusted).
+//
+// Returns false (never blocks) if no rotation leg has formed yet this session, or during the
+// 5-6PM ET maintenance gap -- matches getCurrentRotationDirection()'s own fail-closed-to-null
+// contract (never guess, never block on an unknown reading).
+export async function isRotationDirectionConflict(direction) {
+  if (!direction) return false; // candidate itself has no resolvable direction -- can't conflict
+  const rotationDir = await getCurrentRotationDirection();
+  if (rotationDir == null) return false; // no leg formed yet, or maintenance gap -- don't guess
+  const tradeIsLong = direction === 'LONG';
+  const agree = (rotationDir === 'UP') === tradeIsLong;
+  return !agree;
 }
 
 // Same-setup-type "refire gate" (2026-09-13, OPEN_DECISION same_type_refire_gate_live_wiring_

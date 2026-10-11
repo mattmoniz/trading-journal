@@ -60,7 +60,7 @@ const T1_PLACEHOLDER_DIST = 1000; // informational-only, see header -- never che
 
 let _cache = { sessionKey: null, lastProcessedEntryTs: null };
 
-async function getTheta() {
+export async function getTheta() {
   const cached = cacheGet(THETA_CACHE_KEY);
   if (cached != null) return cached;
   const r = await query(`SELECT PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY high - low) as median_range FROM price_bars_primary WHERE symbol='NQ'`);
@@ -70,7 +70,7 @@ async function getTheta() {
 
 // Current 6PM-5PM session's own trade_date (developing_value_log convention) as of "now".
 // Returns null during the 5-6PM ET daily maintenance gap -- no session is open then.
-function currentSessionDate(nowEt) {
+export function currentSessionDate(nowEt) {
   const etMin = nowEt.getUTCHours() * 60 + nowEt.getUTCMinutes(); // db.js parses ET wall-clock as UTC digits
   const y = nowEt.getUTCFullYear(), m = nowEt.getUTCMonth(), d = nowEt.getUTCDate();
   if (etMin >= 1080) { // >= 6PM -- tonight's session, dated tomorrow
