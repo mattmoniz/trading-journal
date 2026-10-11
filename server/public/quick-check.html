@@ -1856,16 +1856,31 @@ function renderTimeline() {
     const isWin = isWinRow(s);
     const isLoss = isLossRow(s);
     const badgeClass = isOpen ? 'open' : isWin ? 'win' : isLoss ? 'loss' : 'other';
-    const isTrail = s.resolution === 'TRAIL_EXIT';
     const isLong = isLongSetupType(s.setup_type);
     // Unrealized P&L on the "open" badge itself (2026-09-22, user request), same inline-not-
     // hidden-behind-a-tap convention as everything else on this row. Falls back to plain
     // "open" if a live price isn't available yet -- never shows a fabricated number.
     // Unfilled cluster sibling (server flag entry_filled, 2026-10-05): no P&L, labelled honestly.
     const openPnl = isOpen && s.entry_filled !== false ? openPnlEstimate(s.entry_zone_low, isLong) : null;
+    // CHANGED 2026-10-08 (user request): was 'T1 ✓'/'Stop ✗'/'Trail ✓/✗' -- now the real $
+    // P&L, with a compact "% of MFE captured" prefix when available. A first version here
+    // used a DIFFERENT formula (mfe_points/target-distance) than the trade-detail modal's
+    // own "Captured vs. available" row -- user caught this live, the two numbers disagreed
+    // wildly on the same trade (e.g. one real trade showed 468% here vs 41% in the modal),
+    // which is actively misleading, not just a harmless alternate metric. FIXED: now the
+    // EXACT same formula as the modal (openTradeModal(), search "Captured vs. available") --
+    // capturedPts backs out real points from net pnl (commission-adjusted), pct =
+    // capturedPts/mfe_points. SECOND change, same day, per direct user feedback ("if it's a
+    // loss you don't need the mfe, only the loss amount"): the % prefix is now shown ONLY on
+    // a real win (rowPnl > 0) -- a loss just shows the plain -$X amount, no percent at all.
+    // (It was already mathematically 0% on every loss under the matched-modal formula, which
+    // is accurate but uninformative clutter next to a dollar loss -- dropping it entirely is
+    // simpler than displaying a number nobody wants there.)
+    const pctPrefix = (rowPnl != null && rowPnl > 0 && s.mfe_points != null && Number(s.mfe_points) > 0)
+      ? Math.max(0, Math.min(999, (((rowPnl + COMMISSION_PER_TRADE) / 2) / Number(s.mfe_points)) * 100)).toFixed(0) + '% '
+      : '';
     const badgeText = isOpen ? (s.entry_filled === false ? 'pending fill' : openPnl == null ? 'open' : (openPnl >= 0 ? '+$' : '-$') + Math.abs(openPnl).toFixed(0)) :
-      isTrail ? (isWin ? 'Trail ✓' : 'Trail ✗') :
-      isWin ? 'T1 ✓' : isLoss ? 'Stop ✗' :
+      rowPnl != null ? pctPrefix + (rowPnl >= 0 ? '+$' : '-$') + Math.abs(rowPnl).toFixed(0) :
       (s.resolution === 'TIME_EXPIRED' || s.resolution === 'SESSION_CLOSED') ? 'expired' :
       s.resolution === 'INVALIDATED' ? 'inv.' :
       s.resolution === 'NOT_FILLED' ? 'not filled' : '—';
@@ -3496,10 +3511,31 @@ renderSharedFilters();
 // Status dot next to the NQ price (2026-10-05). Replaces the full-width banner, which blocked
 // the hamburger. Red = Sierra Chart DISARMED (no real orders); yellow = a status check failed
 // or a temporary override is on; green = armed and no overrides. Hover/tap title lists details.
-let sierraStatus = { color: null, title: 'Checking Sierra Chart status…' };
+let sierraStatus = { color: null, title: 'Checking Sierra Chart status…', armed: null };
 function sierraDotHtml() {
   if (!sierraStatus.color) return '';
-  return `<span title="${sierraStatus.title.replace(/"/g, '&quot;')}" style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${sierraStatus.color};margin-left:6px;vertical-align:middle;"></span>`;
+  const title = (sierraStatus.armed === false ? 'Tap to arm. ' : '') + sierraStatus.title;
+  return `<span onclick="armSierraChart(event)" title="${title.replace(/"/g, '&quot;')}" style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${sierraStatus.color};margin-left:6px;vertical-align:middle;cursor:pointer;"></span>`;
+}
+// Tap-to-arm on the status dot (2026-10-11, user request -- wants to rearm from this page
+// directly, not just see the state). Always calls the same POST /api/sierra-chart/start the
+// main dashboard's own arm button uses -- no new order-placement code, same idempotent
+// killSwitch.arm() either way. A real, consequential action (turns on real order placement),
+// so a confirm() guards against an accidental tap -- this page is meant to be tapped quickly
+// from a phone, where a stray touch is a real risk a desktop dashboard doesn't have as much.
+async function armSierraChart(ev) {
+  ev.stopPropagation();
+  if (sierraStatus.armed === true) { alert('Sierra Chart is already armed.'); return; }
+  if (!confirm('Arm Sierra Chart for real order placement?')) return;
+  try {
+    const r = await fetch('/api/sierra-chart/start', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ by: 'quick-check-dot' }), cache: 'no-store' });
+    const d = await r.json();
+    if (!d.ok) { alert('Arm failed: ' + (d.error || 'unknown error')); return; }
+    alert('Armed. armedAt=' + d.state.armedAt);
+  } catch (e) {
+    alert('Arm request failed: ' + e.message);
+  }
+  checkFlagsBanner();
 }
 async function checkFlagsBanner() {
   try {
@@ -3521,10 +3557,10 @@ async function checkFlagsBanner() {
       color = color === '#f87171' ? color : '#facc15';
       lines.push('ALL_LEVELS_LIVE ON — every level-fade type fires live');
     }
-    sierraStatus = { color, title: lines.join(' | ') };
+    sierraStatus = { color, title: lines.join(' | '), armed: d.sierraArmed === false ? false : true };
   } catch (e) {
     // Visible, not silent (2026-10-05): a failed check shows as a yellow "unknown" dot.
-    sierraStatus = { color: '#facc15', title: 'Could not check Sierra Chart armed state — unknown' };
+    sierraStatus = { color: '#facc15', title: 'Could not check Sierra Chart armed state — unknown', armed: null };
   }
   const nqSlot = document.getElementById('sierra-dot-slot');
   if (nqSlot) nqSlot.innerHTML = sierraDotHtml();
