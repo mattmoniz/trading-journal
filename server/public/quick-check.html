@@ -3517,23 +3517,29 @@ function sierraDotHtml() {
   const title = (sierraStatus.armed === false ? 'Tap to arm. ' : '') + sierraStatus.title;
   return `<span onclick="armSierraChart(event)" title="${title.replace(/"/g, '&quot;')}" style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${sierraStatus.color};margin-left:6px;vertical-align:middle;cursor:pointer;"></span>`;
 }
-// Tap-to-arm on the status dot (2026-10-11, user request -- wants to rearm from this page
-// directly, not just see the state). Always calls the same POST /api/sierra-chart/start the
-// main dashboard's own arm button uses -- no new order-placement code, same idempotent
-// killSwitch.arm() either way. A real, consequential action (turns on real order placement),
-// so a confirm() guards against an accidental tap -- this page is meant to be tapped quickly
-// from a phone, where a stray touch is a real risk a desktop dashboard doesn't have as much.
+// Tap-to-arm/disarm on the status dot (2026-10-11, user request -- wants to toggle from this
+// page directly, not just see the state, with a confirm on either direction). Toggles based on
+// sierraStatus.armed: calls the same POST /api/sierra-chart/start the main dashboard's own arm
+// button uses, or POST /api/sierra-chart/halt (HALT ONLY -- stops new entries, never touches
+// open positions or the broker, see sierraChart.js's own header on that endpoint for why it's
+// safe to expose remotely) -- no new order-placement or position-management code either way.
+// Both are real, consequential actions, so a confirm() guards against an accidental tap on
+// either direction -- this page is meant to be tapped quickly from a phone, where a stray touch
+// is a real risk a desktop dashboard doesn't have as much.
 async function armSierraChart(ev) {
   ev.stopPropagation();
-  if (sierraStatus.armed === true) { alert('Sierra Chart is already armed.'); return; }
-  if (!confirm('Arm Sierra Chart for real order placement?')) return;
+  if (sierraStatus.armed === null) { alert('Sierra Chart status unknown -- cannot toggle right now.'); return; }
+  const arming = sierraStatus.armed === false;
+  const path = arming ? '/api/sierra-chart/start' : '/api/sierra-chart/halt';
+  const label = arming ? 'Arm Sierra Chart for real order placement?' : 'Halt Sierra Chart (stop new entries only -- open positions are untouched)?';
+  if (!confirm(label)) return;
   try {
-    const r = await fetch('/api/sierra-chart/start', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ by: 'quick-check-dot' }), cache: 'no-store' });
+    const r = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ by: 'quick-check-dot' }), cache: 'no-store' });
     const d = await r.json();
-    if (!d.ok) { alert('Arm failed: ' + (d.error || 'unknown error')); return; }
-    alert('Armed. armedAt=' + d.state.armedAt);
+    if (!d.ok) { alert((arming ? 'Arm' : 'Halt') + ' failed: ' + (d.error || 'unknown error')); return; }
+    alert((arming ? 'Armed. armedAt=' + d.state.armedAt : 'Halted. haltedAt=' + d.state.haltedAt));
   } catch (e) {
-    alert('Arm request failed: ' + e.message);
+    alert((arming ? 'Arm' : 'Halt') + ' request failed: ' + e.message);
   }
   checkFlagsBanner();
 }
