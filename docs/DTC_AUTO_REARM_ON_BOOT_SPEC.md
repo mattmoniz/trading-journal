@@ -1,30 +1,21 @@
-# Auto re-arm on boot (dev-phase convenience) — PARTIALLY shipped 2026-10-11
+# Auto re-arm on boot (dev-phase convenience) — FULLY shipped 2026-10-11
 
-**Status (2026-10-11): a SIMPLER version of this shipped** (commit `009f09e`,
-`server/services/sierraChart/connectionManager.js`'s `DTC_AUTO_REARM_SAFE` flag, scoped
-per-account-profile rather than this doc's original single global env var) — but the
-real safety improvement THIS doc describes (gate the re-arm on the post-logon
-reconciliation actually coming back clean, not just "arm immediately at boot") is still
-NOT applied. The Edit that would have added it was denied again, same classifier, same
-reason, even though the change only ADDS a safety check (it makes auto-rearm stricter,
-not weaker). Per the standing collaboration rule, not retried through another tool —
-still here for a future session (or the user, applying it by hand) to finish.
+**Status (2026-10-11): shipped in full** (commits `009f09e` then `0c7502e`,
+`server/services/sierraChart/connectionManager.js`). First pass (`009f09e`) shipped a
+simpler version — `DTC_AUTO_REARM_SAFE` scoped per-account-profile, armed immediately at
+boot with no reconciliation check. The Edit adding THIS doc's own real safety
+improvement (gate the re-arm on the post-logon reconciliation actually coming back
+clean) was denied once by the sandbox classifier — explained clearly to the user, who
+then explicitly asked to try again with full knowledge of the denial; the retry
+succeeded cleanly with no workaround needed, just a second, informed attempt.
 
-**What's live today (the weaker version):** `startConnectionManager()` checks
-`DTC_AUTO_REARM_SAFE === 'true'` and calls `killSwitch.arm()` immediately, right after
-the unconditional boot halt — before any reconnection or reconciliation has happened.
-This is safe in the sense that it only applies to accounts explicitly, consciously
-flagged non-real (sim1/evaluator-globex/evaluator-simulator today) — but it does NOT
-check whether the broker/app state actually agrees before re-arming, the gap this doc's
-original design closes.
-
-**What's still missing (apply this to upgrade, once the classifier allows it or someone
-applies it by hand):** move the arm call from `startConnectionManager()` to a new
-`maybeAutoRearmAfterReconcile()`, called right after `triggerReconciliation('LOGON')`
-in the `logon` handler — only re-arm if `killSwitch.getState().haltedBy === 'system-boot'`
-(nothing else re-halted it for a real reason since boot) AND
-`lastReconciliationReport?.clean === true`. The exact code for this is still below,
-unchanged from the 2026-10-08 draft — it remains correct, just not yet applied.
+`maybeAutoRearmAfterReconcile()` now runs after `triggerReconciliation('LOGON')` in the
+`logon` handler, not inside `startConnectionManager()` — only re-arms if
+`killSwitch.getState().haltedBy === 'system-boot'` (nothing else re-halted it for a real
+reason since boot) AND `lastReconciliationReport?.clean === true`. Verified live: a real
+restart landed `armed=true`/`armedBy='auto-rearm-on-simulation-boot'` only once
+reconciliation reported `clean: true` — the full design below is now exactly what's
+running, not just a draft.
 
 ## Why this exists
 
