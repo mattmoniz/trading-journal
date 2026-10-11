@@ -52,21 +52,32 @@ function buildClient() {
  */
 export async function startConnectionManager() {
   killSwitch.forceHaltOnBoot('process restart (fail-closed default)');
-  // Auto-rearm-on-simulation (2026-10-11, user request). Deliberately an explicit, per-profile
-  // OPT-IN flag (DTC_AUTO_REARM_SAFE, set in config/dtc-accounts/*.env), not an inference from
-  // the account name/number -- the user's own first framing ("anything that doesn't have a
-  // valid account number") would mean pattern-matching DTC_TRADE_ACCOUNT, which is exactly the
-  // kind of guessable heuristic this codebase's "do not guess" rule exists to prevent for
-  // anything real-money-adjacent. Today all 3 existing profiles (sim1, evaluator-globex,
-  // evaluator-simulator) are confirmed non-real by their own header comments and carry this
-  // flag; a FUTURE real-account profile defaults to NOT having it, so the fail-closed boot
-  // default above still applies unless someone consciously adds the flag to that new profile.
-  if (process.env.DTC_AUTO_REARM_SAFE === 'true') {
-    killSwitch.arm('auto-rearm-on-simulation-boot');
-    console.log(`[sierraChart.connectionManager] DTC_AUTO_REARM_SAFE=true for trade account "${process.env.DTC_TRADE_ACCOUNT}" -- auto-armed on boot instead of the usual fail-closed halt.`);
-  }
   bootHaltDone = true;
   await connectOnce();
+}
+
+/**
+ * Auto-rearm-on-simulation, upgraded 2026-10-11 to also gate on a clean post-reconnect
+ * reconciliation (matches docs/DTC_AUTO_REARM_ON_BOOT_SPEC.md's original 2026-10-08 design).
+ * Two independent gates, both required:
+ *  1. SCOPE: DTC_AUTO_REARM_SAFE=true, an explicit per-profile opt-in flag
+ *     (config/dtc-accounts/*.env) -- not an inference from the account name/number.
+ *  2. HEALTH: only re-arms once the first post-logon reconciliation finishes, and only if
+ *     NOTHING re-halted the switch for a real reason in the meantime (haltedBy is still
+ *     'system-boot') AND that reconciliation actually came back clean. A crash/restart that
+ *     leaves the broker and this app's own records genuinely disagreeing -- the exact case
+ *     fail-closed-on-boot exists for -- stays halted even on a flagged-safe account, because
+ *     runReconciliation() will already have called killSwitch.halt() with a different reason
+ *     before this ever runs.
+ */
+function maybeAutoRearmAfterReconcile() {
+  if (process.env.DTC_AUTO_REARM_SAFE !== 'true') return;
+  const state = killSwitch.getState();
+  if (state.armed) return;
+  if (state.haltedBy !== 'system-boot') return; // something else halted it for a real reason -- leave it
+  if (!lastReconciliationReport || !lastReconciliationReport.clean) return;
+  killSwitch.arm('auto-rearm-on-simulation-boot');
+  console.log(`[sierraChart.connectionManager] DTC_AUTO_REARM_SAFE=true for trade account "${process.env.DTC_TRADE_ACCOUNT}" and reconciliation came back clean -- auto-armed.`);
 }
 
 /**
@@ -125,6 +136,7 @@ async function connectOnce() {
     // Also fail-closed halts on a position-invariant mismatch (see reconciliation.js's
     // header) -- both folded into the one triggerReconciliation() call below.
     await triggerReconciliation('LOGON');
+    maybeAutoRearmAfterReconcile();
     // Periodic backstop for a quiet night with zero real order activity at all -- restart
     // it fresh on every (re)logon so a reconnect never ends up with two overlapping timers.
     stopPeriodicReconcile();
