@@ -31,11 +31,23 @@ const FALLBACK_AT_LEVEL_PT = 5;
 const FALLBACK_LATE_PT = 15;
 
 export async function getRollingATR(logDate) {
+  // Lower bound added 2026-10-08 (found while trying to run a 1-year major-pivot backtest --
+  // the unbounded `ts::date < $1` scan, fired once per unique pivot date via Promise.all,
+  // exhausted the DB connection pool at 172+ concurrent calls). price_bars_primary is a VIEW
+  // (join+GROUP BY, no index possible per this codebase's own standing convention) -- an
+  // upper-bound-only query like the old one forces a full scan from the start of the table
+  // every single call. 90 calendar days is generous enough to always contain the needed
+  // trailing ATR_WINDOW_DAYS=20 real trading sessions even across a real multi-day gap
+  // (a quarterly contract roll, a holiday week, or the documented WSL2 sleep-outage incident)
+  // -- semantically identical result, just bounded. Live callers (majorPivotDefendedBreakDetector.js,
+  // stallDefendedLevelDetector.js, minorDefendedLevelDetector.js, pivotConfluenceAnalysis.js)
+  // are unaffected since the ORDER BY ... LIMIT ATR_WINDOW_DAYS subquery already only ever
+  // wanted the nearest 20 trading days regardless.
   const { rows } = await query(`
     SELECT AVG(range)::float as atr, COUNT(*)::int as n FROM (
       SELECT ts::date as d, (MAX(high) - MIN(low)) as range
       FROM price_bars_primary
-      WHERE symbol='NQ' AND ts::date < $1
+      WHERE symbol='NQ' AND ts::date < $1 AND ts::date >= $1::date - INTERVAL '90 days'
         AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 959
       GROUP BY ts::date
       ORDER BY d DESC LIMIT ${ATR_WINDOW_DAYS}

@@ -103,12 +103,17 @@ function isGlobexMod(mod) {
 // following the breakout direction work" research WITHOUT changing what live actually fires on
 // -- see scratch/backtest_follow_defended_break_looser_20260925.mjs) -- defaults to the live
 // constant, so every existing caller (the live detector itself) is byte-identical, unchanged.
-export async function computeDefendedBreaks(zigzagThreshold = ZIGZAG_THRESHOLD) {
+// lookbackDays: optional override of LOOKBACK_DAYS, added 2026-10-08 so a research/backtest
+// caller can re-run this SAME real function over a longer historical window (e.g. ~1 year,
+// matching the original 2026-09-10 validation's scope) without reimplementing any of the
+// pivot/break logic -- default unchanged, so the live call site (computeMajorPivotDefendedBreakSignal
+// -> getDefendedBreaksCached -> computeDefendedBreaks()) is byte-identical in behavior.
+export async function computeDefendedBreaks(zigzagThreshold = ZIGZAG_THRESHOLD, lookbackDays = LOOKBACK_DAYS) {
   const barsRes = await query(`
     SELECT to_char(ts, 'YYYY-MM-DD HH24:MI:SS') as tc, to_char(ts,'YYYY-MM-DD') as d,
            open::float, high::float, low::float, close::float
     FROM price_bars_primary
-    WHERE symbol = 'NQ' AND ts >= NOW() - INTERVAL '${LOOKBACK_DAYS} days' AND ts <= NOW()
+    WHERE symbol = 'NQ' AND ts >= NOW() - INTERVAL '${lookbackDays} days' AND ts <= NOW()
     ORDER BY ts ASC
   `);
   const bars1m = barsRes.rows;
@@ -128,9 +133,21 @@ export async function computeDefendedBreaks(zigzagThreshold = ZIGZAG_THRESHOLD) 
     if (!atrCache.has(d)) atrCache.set(d, getRollingATR(d));
     return atrCache.get(d);
   }
+  // Batched, not one giant Promise.all (found 2026-10-08 running this function over a 1-year
+  // lookbackDays: with ~280 unique pivot dates, firing every getRollingATR() call at once
+  // exhausted the DB pool's connection budget (max 60) and the run crashed with a pool-
+  // checkout timeout -- even after getRollingATR's own query was bounded/fast. Batching
+  // matches the ATR_BATCH convention the original research script for this same detector
+  // (scratch/major_pivot_defended_break.mjs) already used for this exact reason; the live
+  // 120-day call site normally has few enough unique dates that this never mattered, but it's
+  // a real latent risk there too as real pivot history accumulates, not just a backtest-only
+  // fix.
+  const ATR_BATCH = 20;
   const uniqueDates = Array.from(new Set(merged.map(p => bars5m[p.idx].dateStr)));
-  for (const d of uniqueDates) { if (!atrCache.has(d)) atrCache.set(d, getRollingATR(d)); }
-  await Promise.all(Array.from(atrCache.values()));
+  for (let i = 0; i < uniqueDates.length; i += ATR_BATCH) {
+    const batch = uniqueDates.slice(i, i + ATR_BATCH);
+    await Promise.all(batch.map(async d => { if (!atrCache.has(d)) atrCache.set(d, await getRollingATR(d)); }));
+  }
 
   const accepted = await walkZigZagAcceptance(merged, bars5m, rollDates, zigzagThreshold, atrFor);
 
