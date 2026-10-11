@@ -93,6 +93,7 @@ import { computeUnifiedPerformanceAudit } from '../services/unifiedSignalTable.j
 // (only query/getLatestBars/getCached/setCached) before moving.
 import { computeMarketPulse } from '../services/marketPulse.js';
 import { sweepRealOrders } from '../services/sierraChart/orderSweep.js';
+import { closeOnRotationFlip } from '../services/rotationFlipClose.js';
 import { getClient as getSierraChartClient } from '../services/sierraChart/connectionManager.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -3237,6 +3238,12 @@ export default function createACDRouter(io) {
       await completeBreakevenStopCounterfactuals().catch(() => {});
       await expireStaleSetups(io).catch(() => {});
       await structurallyInvalidateSetups(io).catch(() => {});
+      // Rotation-flip real position close (2026-10-11) -- see rotationFlipClose.js's own
+      // header for the full design/backtest/review account. Deliberately slotted here: after
+      // the normal resolution/expiry/invalidation passes, before sweepRealOrders() -- a row
+      // this closes gets picked up by the real order sweep in the SAME poll, matching
+      // orderSweep.js's own documented "deliberately last" latency guarantee.
+      await closeOnRotationFlip(io).catch((err) => console.error('[acd.js] closeOnRotationFlip threw unexpectedly:', err));
       // Real Sierra Chart order placement (2026-09-29) -- the ONE call site wiring this
       // app's real DTC order-placement side effects to the simulated detection/resolution
       // logic above. Deliberately last, deliberately a single centralized sweep rather
