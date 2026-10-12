@@ -295,6 +295,65 @@ const WIDER_WINDOW_OVERNIGHT_LEVELS = [
   { levelName: 'PY_VAH',        type: 'PY_VAH_FADE_SHORT_OVERNIGHT',        displayName: 'PY VAH',        dir: 'SHORT' },
   { levelName: 'PY_VAL',        type: 'PY_VAL_FADE_LONG_OVERNIGHT',         displayName: 'PY VAL',        dir: 'LONG'  },
   { levelName: 'PY_POC',        type: 'PY_POC_FADE_LONG_OVERNIGHT',         displayName: 'PY POC',        dir: 'LONG'  },
+  // Added 2026-10-12, user-directed ("move them to live"), gated by the 65pt rotation-
+  // direction filter already wired to every candidate in this array (isRotationDirectionConflict,
+  // shipped 2026-10-11) -- the 24 entries below are the real (non-dead, non-duplicate) subset of
+  // 44 RTH-only level-fade directions tested tonight in scratch/globex_level_fade_rotation_
+  // backtest_20261012.mjs. Corrected for a real lookahead bug DeepSeek's review found (the label
+  // was built from a full-session leg lookup instead of one truncated to each touch's own bar --
+  // see RESEARCH_CLAIM globex_level_fade_rotation_filter_20261012 for the full writeup).
+  // Corrected pooled result: N=1,712 real Globex touches, AGREE-minus-DISAGREE delta=+$10.90/trade,
+  // day-blocked bootstrap CI=[$2.31,$19.54] (excludes zero) -- real but modest. HONEST CAVEAT,
+  // worth remembering before reading anything into an individual type here: 0 of 10 well-powered
+  // individual setup_types still clear their own placebo test after the fix -- this is a POOLED
+  // bet across the whole family, not 24 individually-validated edges, and several individual
+  // types even show the wrong sign in isolation. Gemini's independent re-derivation and
+  // DeepSeek's code review were both still in flight when this was wired -- not yet both back
+  // clean as of this commit, a real, knowingly-accepted gap per explicit user direction, not an
+  // oversight. Excludes 2 types from the original 44: PD2_VAH (both directions) never had a real
+  // level_prices row under that name -- a dead entry in the research script, zero real touches,
+  // not a real level. Excludes 2 more: DAILY_OPEN (both directions) -- level_prices.DAILY_OPEN
+  // has been stale since 2026-08-31 (scripts/compute_levels.js's query requires a bar at exactly
+  // 9:30:00 ET for the date being computed, but every scheduled cron that calls it runs BEFORE
+  // that date's own RTH open -- structurally can never succeed on a schedule, only ever worked
+  // via manual backfill runs that stopped happening). Flagged separately
+  // (daily_open_level_prices_stale_since_20260831), not fixed here -- wiring a stale level in
+  // would compare live price against a month-old number, worse than not firing at all. The other
+  // 16 of 44 already had a direction live somewhere above in this array (MONTHLY_OPEN LONG,
+  // MONTHLY_VWAP SHORT, MPP SHORT, MR1 SHORT, MR2 LONG, MS1 SHORT, MS2 SHORT, PM_HIGH LONG,
+  // PM_POC SHORT, PM_VAH SHORT, PW_HIGH LONG, PY_POC LONG, PY_VAH SHORT, WR1 SHORT, WR2 SHORT,
+  // WS2 SHORT) and needed no new entry. Every entry below is a brand-new _OVERNIGHT setup_type
+  // with zero rows today -- getCanonicalLiveStatus()'s fail-closed "no row -> SHADOW" default
+  // means none can fire ACTIVE until backtest_setup_status.mjs computes a real SETUP_STATUS row
+  // (PROMOTE_ALL_MODE's stat-gate then defaults ACTIVE below 5 distinct days, same as every
+  // other type on this roster). SCHEDULED REVIEW: OPEN_DECISION
+  // globex_44type_rotation_filter_2month_review_20261012, due ~2026-12-12 -- check whether the
+  // real AGREE/DISAGREE split on THIS live-fired population (not the backtest) still separates
+  // winners from losers the way the pooled backtest predicted.
+  { levelName: 'CAM_S2',         type: 'CAM_S2_FADE_LONG_OVERNIGHT',         displayName: 'CAM S2',         dir: 'LONG'  },
+  { levelName: 'FLOOR_PIVOT',    type: 'FLOOR_PIVOT_FADE_SHORT_OVERNIGHT',   displayName: 'Floor Pivot',    dir: 'SHORT' },
+  { levelName: 'FLOOR_R1',       type: 'FLOOR_R1_FADE_SHORT_OVERNIGHT',      displayName: 'Floor R1',       dir: 'SHORT' },
+  { levelName: 'FLOOR_R2',       type: 'FLOOR_R2_FADE_SHORT_OVERNIGHT',      displayName: 'Floor R2',       dir: 'SHORT' },
+  { levelName: 'FLOOR_R3',       type: 'FLOOR_R3_FADE_SHORT_OVERNIGHT',      displayName: 'Floor R3',       dir: 'SHORT' },
+  { levelName: 'FLOOR_S1',       type: 'FLOOR_S1_FADE_LONG_OVERNIGHT',       displayName: 'Floor S1',       dir: 'LONG'  },
+  { levelName: 'FLOOR_S3',       type: 'FLOOR_S3_FADE_SHORT_OVERNIGHT',      displayName: 'Floor S3',       dir: 'SHORT' },
+  { levelName: 'MONTHLY_OPEN',   type: 'MONTHLY_OPEN_FADE_SHORT_OVERNIGHT',  displayName: 'Monthly Open',   dir: 'SHORT' },
+  { levelName: 'MR1',            type: 'MR1_FADE_LONG_OVERNIGHT',            displayName: 'MR1',            dir: 'LONG'  },
+  { levelName: 'MR2',            type: 'MR2_FADE_SHORT_OVERNIGHT',           displayName: 'MR2',            dir: 'SHORT' },
+  { levelName: 'MS1',            type: 'MS1_FADE_LONG_OVERNIGHT',            displayName: 'MS1',            dir: 'LONG'  },
+  { levelName: 'MS2',            type: 'MS2_FADE_LONG_OVERNIGHT',            displayName: 'MS2',            dir: 'LONG'  },
+  { levelName: 'PD_HIGH',        type: 'PD_HIGH_FADE_LONG_OVERNIGHT',        displayName: 'PD High',        dir: 'LONG'  },
+  { levelName: 'PD_SESSION_MID', type: 'PD_SESSION_MID_FADE_SHORT_OVERNIGHT', displayName: 'PD Session Mid', dir: 'SHORT' },
+  { levelName: 'PM_HIGH',        type: 'PM_HIGH_FADE_SHORT_OVERNIGHT',       displayName: 'PM High',        dir: 'SHORT' },
+  { levelName: 'PM_VAH',         type: 'PM_VAH_FADE_LONG_OVERNIGHT',         displayName: 'PM VAH',         dir: 'LONG'  },
+  { levelName: 'PM_VAL',         type: 'PM_VAL_FADE_LONG_OVERNIGHT',         displayName: 'PM VAL',         dir: 'LONG'  },
+  { levelName: 'PW_HIGH',        type: 'PW_HIGH_FADE_SHORT_OVERNIGHT',       displayName: 'PW High',        dir: 'SHORT' },
+  { levelName: 'PY_VAH',         type: 'PY_VAH_FADE_LONG_OVERNIGHT',         displayName: 'PY VAH',         dir: 'LONG'  },
+  { levelName: 'WPP',            type: 'WPP_FADE_SHORT_OVERNIGHT',           displayName: 'WPP',            dir: 'SHORT' },
+  { levelName: 'WR1',            type: 'WR1_FADE_LONG_OVERNIGHT',            displayName: 'WR1',            dir: 'LONG'  },
+  { levelName: 'WR2',            type: 'WR2_FADE_LONG_OVERNIGHT',            displayName: 'WR2',            dir: 'LONG'  },
+  { levelName: 'WS1',            type: 'WS1_FADE_LONG_OVERNIGHT',            displayName: 'WS1',            dir: 'LONG'  },
+  { levelName: 'WS2',            type: 'WS2_FADE_LONG_OVERNIGHT',            displayName: 'WS2',            dir: 'LONG'  },
 ];
 
 // Dynamic SHADOW->ACTIVE promotion for the 4 wider-window overnight types above —
