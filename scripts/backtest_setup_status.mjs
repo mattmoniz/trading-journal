@@ -37,7 +37,7 @@
 
 import { query } from '../server/db.js';
 import pool from '../server/db.js';
-import { computeRigor } from '../server/services/rigorDiagnostics.js';
+import { computeRigor, dayBlockedBootstrapCI } from '../server/services/rigorDiagnostics.js';
 import { CONDITIONAL_VARIANTS, getBetClass } from '../server/config/setupTypes.js';
 
 const SIGNAL_TYPE = 'SETUP_STATUS';
@@ -206,23 +206,47 @@ const MANUAL_SUPPRESS_OVERRIDE = new Map([
   ['VWAP_RECLAIM_SHORT', { reason: 'worst_of_the_120_real_losers_zero_risk_mitigation_coverage', addedDate: '2026-09-28' }],
 ]);
 
-// TEMPORARY, 2026-09-28: promote every setup_type to ACTIVE regardless of real N/EV, EXCEPT
-// MANUAL_SUPPRESS_OVERRIDE above (the 4 types just added) and the separate DAY_TYPE_CONDITIONAL/
-// bet_class mechanisms below (both left fully intact -- this flag only bypasses the per-type
-// SUPPRESS_MIN_N/SUPPRESS_MAX_EV/THIN_N logic, not those). User's explicit, informed decision
-// after extensive same-night real-dollar analysis (docs/OPEN_THREADS.md's 2026-09-28 entry has
-// the full numbers): removing the N-floor requirement entirely and promoting everything except
-// the 4 named exclusions computes to a real aggregate -$6,192 over full history (vs. the prior
-// 11-type roster's +$4,346) -- shown to and knowingly accepted by the user, who wants live
-// visibility into the full, currently-suppressed population regardless of that number, matching
-// the same "everything except a short named list" shape SUPPRESS_ALL_DISABLED had before being
-// turned off earlier the same night -- but implemented HERE, at the actual source of the
-// SETUP_STATUS recommendation, not as a downstream bypass flag in setupEligibility.js, so it
-// propagates correctly through every one of this codebase's ~18 real insert sites without
-// needing to individually patch each one (the exact class of bug SUPPRESS_ALL_DISABLED hit
-// repeatedly tonight). No auto-expiry -- someone has to remember to flip this back to
-// enabled:false (or remove it) if the real numbers going forward don't hold up.
-const PROMOTE_ALL_MODE = { enabled: true, addedDate: '2026-09-28' };
+// REVISED 2026-10-11 (superseded the 2026-09-28 "promote everything, no questions asked"
+// version -- see docs/OPEN_THREADS.md's 2026-10-11 entry for the full before/after). The
+// original PROMOTE_ALL_MODE bypassed SUPPRESS_MIN_N/SUPPRESS_MAX_EV/THIN_N entirely: every
+// non-blacklisted type went straight to ACTIVE regardless of real N or real EV, forever (no
+// mechanism ever pulled a type back out once real losses accumulated). Two real problems
+// this revision fixes, both confirmed by the user directly:
+// (1) SUPPRESS_MIN_N=20 was a flat, arbitrary sample-size floor with no statistical basis --
+//     it treated "12 trades, consistently losing" the same as "12 trades, one unlucky
+//     outlier," and treated "50 trades, EV near zero" as fine just because it cleared a
+//     headcount.
+// (2) The OLD pre-9/28 N>=20-gated roster had a real, separately-confirmed asymmetry bug:
+//     because LONG and SHORT variants of the same setup_type accumulate real touches at
+//     different rates depending on which direction the market happened to favor during the
+//     measurement window, one side could clear real_n>=20 and go ACTIVE while its mirror
+//     sat THIN_N/SHADOW indefinitely waiting to catch up -- "shorts live, longs not, or vice
+//     versa," not a quality difference, just an accumulation-speed artifact. The thin-data
+//     default below (promote by default until there's enough evidence either way) applies
+//     identically to both sides of a pair, so neither side is penalized for firing less often.
+//
+// New mechanism, replacing a flat N-floor with an actual statistical test:
+// - MIN_DISTINCT_DAYS_FOR_STAT_GATE (below) is NOT a new arbitrary magnitude number -- it's
+//   the minimum spread of real trading days needed before a day-blocked bootstrap CI means
+//   anything at all (with 1-2 days, the resampling is close to deterministic and would
+//   rubber-stamp whatever that handful of days happened to show). Matches this file's own
+//   existing "N<5 -> THIN" convention elsewhere, not a fresh pick.
+// - Below that floor: promote ACTIVE by default (not enough evidence either way yet) --
+//   same benefit-of-the-doubt posture PROMOTE_ALL_MODE already had, just now bounded by an
+//   actual statistical test once enough data exists, instead of forever.
+// - At or above that floor: run dayBlockedBootstrapCI on the type's real (REAL_TRADE_FILTER)
+//   trades. If the 95% CI on real EV sits entirely below $0 AND the real trades aren't
+//   day-clustered (computeRigor's `clustered`, matching the DOW-gate precedent) -> SUPPRESS.
+//   Otherwise -> ACTIVE.
+// - Deliberately a pure sign test, not a magnitude test -- the old gate required real EV to
+//   clear -$5/trade, not just be negative. User confirmed (2026-10-11): drop the magnitude
+//   floor, suppress on confident negativity alone, however small. Revisit if a tiny-but-
+//   confidently-negative EV turns out to suppress things that don't deserve it in practice.
+//
+// MANUAL_SUPPRESS_OVERRIDE and DAY_TYPE_CONDITIONAL/bet_class are untouched by this flag,
+// exactly as before -- this only replaces what happens to everything else.
+const MIN_DISTINCT_DAYS_FOR_STAT_GATE = 5;
+const PROMOTE_ALL_MODE = { enabled: true, addedDate: '2026-09-28', revisedDate: '2026-10-11' };
 
 async function run() {
   console.log('[backtest_setup_status] Starting...');
@@ -530,19 +554,45 @@ async function run() {
       continue;
     }
 
-    // PROMOTE_ALL_MODE bypass (see that flag's own header comment above for the full
-    // reasoning/verification trail) -- checked here, after MANUAL_SUPPRESS_OVERRIDE and
-    // DAY_TYPE_CONDITIONAL have both already had their chance to `continue` above, so those
-    // 2 mechanisms are completely untouched by this flag. Every other type just goes
-    // straight to ACTIVE, skipping the SUPPRESS_MIN_N/SUPPRESS_MAX_EV/THIN_N/bet_class/
-    // day-clustering logic below entirely -- not because those checks are wrong, but
-    // because the user explicitly chose to bypass them for now, with the real-dollar
-    // consequence already computed and shown before this shipped.
+    // PROMOTE_ALL_MODE, revised 2026-10-11 (see that flag's own header comment above for the
+    // full reasoning) -- checked here, after MANUAL_SUPPRESS_OVERRIDE and DAY_TYPE_CONDITIONAL
+    // have both already had their chance to `continue` above, so those 2 mechanisms are
+    // completely untouched by this flag. Everything else now runs a real statistical test
+    // instead of an unconditional ACTIVE, and instead of the old flat SUPPRESS_MIN_N=20 floor.
     if (PROMOTE_ALL_MODE.enabled) {
-      promoted++;
       const realEvForLog = r.real_ev != null ? +r.real_ev : null;
-      console.log(`  ACTIVE   ${type.padEnd(38)} PROMOTE_ALL_MODE: N=${n} (real=${realN}) EV=$${ev.toFixed(0)} (real=$${realEvForLog != null ? realEvForLog.toFixed(0) : 'n/a'})`);
-      results.push({ type, n, realN, wr, ev, realEv: realEvForLog, totalPnl: +r.total_pnl, recommendation: 'ACTIVE', rec90, betClassOverride: null });
+      const realTrades = realTradesByType.get(type) || [];
+      const rigor = realRigorDiagnostics(type);
+
+      if (rigor.distinctDates < MIN_DISTINCT_DAYS_FOR_STAT_GATE) {
+        // Not enough spread of real trading days to run a meaningful bootstrap yet --
+        // promote by default, same benefit-of-the-doubt posture as before. Applies
+        // identically regardless of which side of a LONG/SHORT pair is thinner, so neither
+        // side is penalized for accumulating real touches more slowly than its mirror.
+        promoted++;
+        console.log(`  ACTIVE   ${type.padEnd(38)} PROMOTE_ALL_MODE: too few distinct real days (${rigor.distinctDates}<${MIN_DISTINCT_DAYS_FOR_STAT_GATE}) to test -- benefit of the doubt. N=${n} (real=${realN}) EV=$${ev.toFixed(0)} (real=$${realEvForLog != null ? realEvForLog.toFixed(0) : 'n/a'})`);
+        results.push({ type, n, realN, wr, ev, realEv: realEvForLog, totalPnl: +r.total_pnl, recommendation: 'ACTIVE', rec90, betClassOverride: null, statGate: { tested: false, distinctDates: rigor.distinctDates } });
+        continue;
+      }
+
+      const ci = dayBlockedBootstrapCI(realTrades, type, { dateField: 'trade_date' });
+      if (ci.hi < 0 && !rigor.clustered) {
+        // Statistically confident the real EV is negative (the 95% CI never crosses $0),
+        // and not just an artifact of a handful of correlated bad days. Pure sign test, no
+        // magnitude floor (user confirmed 2026-10-11) -- any confidently-negative EV
+        // suppresses, however small.
+        console.log(`  SUPPRESS ${type.padEnd(38)} PROMOTE_ALL_MODE stat gate: real N=${realN} distinctDays=${rigor.distinctDates} real EV=$${realEvForLog != null ? realEvForLog.toFixed(2) : 'n/a'} CI=[${ci.lo.toFixed(2)},${ci.hi.toFixed(2)}] (entirely <$0, not day-clustered)`);
+        suppressed++;
+        results.push({ type, n, realN, wr, ev, realEv: realEvForLog, totalPnl: +r.total_pnl, recommendation: 'SUPPRESS', rec90, betClassOverride: null, statGate: { tested: true, ciLo: +ci.lo.toFixed(2), ciHi: +ci.hi.toFixed(2), clustered: rigor.clustered, distinctDates: rigor.distinctDates } });
+        continue;
+      }
+
+      promoted++;
+      const gateNote = rigor.clustered
+        ? `CI=[${ci.lo.toFixed(2)},${ci.hi.toFixed(2)}] but day-clustered (top5DayPct=${rigor.top5DayPct}%) -- held back pending broader evidence`
+        : `CI=[${ci.lo.toFixed(2)},${ci.hi.toFixed(2)}] straddles or clears $0`;
+      console.log(`  ACTIVE   ${type.padEnd(38)} PROMOTE_ALL_MODE: ${gateNote}. N=${n} (real=${realN}, distinctDays=${rigor.distinctDates}) EV=$${ev.toFixed(0)} (real=$${realEvForLog != null ? realEvForLog.toFixed(0) : 'n/a'})`);
+      results.push({ type, n, realN, wr, ev, realEv: realEvForLog, totalPnl: +r.total_pnl, recommendation: 'ACTIVE', rec90, betClassOverride: null, statGate: { tested: true, ciLo: +ci.lo.toFixed(2), ciHi: +ci.hi.toFixed(2), clustered: rigor.clustered, distinctDates: rigor.distinctDates } });
       continue;
     }
 
@@ -675,6 +725,11 @@ async function run() {
       // "suppressed on its own record" from "suppressed because its family loses" for anyone
       // reading this row later.
       ...(r.betClassOverride ? { bet_class_override: r.betClassOverride } : {}),
+      // stat_gate (2026-10-11 PROMOTE_ALL_MODE revision) -- present only for types routed
+      // through the new day-blocked-bootstrap-CI gate. `tested:false` means too few distinct
+      // real days existed yet to run the test (promoted by default); `tested:true` carries
+      // the actual 95% CI and whether day-clustering held back an otherwise-confident SUPPRESS.
+      ...(r.statGate ? { stat_gate: r.statGate } : {}),
     });
     await query(`
       INSERT INTO performance_audit

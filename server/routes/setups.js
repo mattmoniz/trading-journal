@@ -12,15 +12,51 @@ import { MECHANISMS, MIN_REAL_N, evalBucket, modeOf } from '../../scripts/backte
 import { SUPPRESS_ALL_DISABLED, ALL_LEVELS_LIVE } from '../services/setupEligibility.js';
 import { killSwitch } from '../services/sierraChart/orderEligibility.js';
 import { gateSignalConfirmation } from '../services/rigorDiagnostics.js';
+import { isGlobexWeekClosed } from './acd.js';
 
 const router = express.Router();
+
+// PRICE_BARS_STALE_MINUTES (2026-10-11): a real, confirmed incident -- the configured
+// SIERRA_DATA_PATH export file silently stopped updating for 4 days (2026-10-07 to
+// 2026-10-11), and nothing surfaced it until the user noticed nothing firing in Globex and
+// asked directly. Bars land every ~1 minute and the ingestion poll runs every ~60s, so under
+// healthy conditions staleness should never exceed a couple of minutes -- 10 minutes leaves
+// real margin against a transient hiccup (a slow DB write, a brief Sierra Chart pause)
+// without taking long to notice a genuine outage. This is an infra/operational health
+// threshold, not a trading signal threshold -- the standing "no static thresholds" hard rule
+// is about entries/stops/targets/signal triggers, not this.
+const PRICE_BARS_STALE_MINUTES = 10;
 
 // GET /api/setups/live-flags -- exposes the temporary suppression-override flags so the
 // frontend can show an unmissable banner while they're on. Added 2026-09-26 (OPEN_DECISION
 // suppress_all_disabled_temporary_override_20260925's own text names this as one of its 3
 // resolution paths -- "someone has to remember to flip this back to enabled:false" -- a
 // visible banner is the one that doesn't need anyone to remember anything).
-router.get('/setups/live-flags', (req, res) => {
+router.get('/setups/live-flags', async (req, res) => {
+  let priceBarsStale = false;
+  let priceBarsLastBar = null;
+  let priceBarsStaleMinutes = null;
+  try {
+    const r = await query(`SELECT MAX(ts) AS last_bar, NOW() AS now_utc FROM price_bars_primary WHERE symbol='NQ'`);
+    const lastBar = r.rows[0]?.last_bar;
+    const nowUtc = r.rows[0]?.now_utc;
+    if (lastBar && nowUtc) {
+      priceBarsLastBar = lastBar;
+      priceBarsStaleMinutes = Math.round((new Date(nowUtc) - new Date(lastBar)) / 60000);
+      // Only flag during hours fresh bars should actually exist -- never during the real
+      // Globex weekly close/daily maintenance gap (isGlobexWeekClosed, the same CME-week
+      // schedule server/index.js's own autonomous poller already gates on).
+      const nowET = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
+      if (!isGlobexWeekClosed(nowET) && priceBarsStaleMinutes > PRICE_BARS_STALE_MINUTES) {
+        priceBarsStale = true;
+      }
+    }
+  } catch (e) {
+    // Fail visible, not silent -- same convention as the sierraArmed check's own catch
+    // block in quick-check.html's checkFlagsBanner(). A query error becomes "can't verify,"
+    // never "assume fine."
+    priceBarsStale = null;
+  }
   res.json({
     suppressAllDisabled: !!SUPPRESS_ALL_DISABLED.enabled,
     suppressAllDisabledSince: SUPPRESS_ALL_DISABLED.enabled ? SUPPRESS_ALL_DISABLED.addedDate : null,
@@ -29,6 +65,9 @@ router.get('/setups/live-flags', (req, res) => {
     // placed; it's fail-closed on every server restart, so it's surfaced here as a banner.
     sierraArmed: !!killSwitch.isArmed(),
     sierraHaltedReason: killSwitch.isArmed() ? null : (killSwitch.getState().haltedReason || null),
+    priceBarsStale,
+    priceBarsLastBar,
+    priceBarsStaleMinutes,
   });
 });
 

@@ -9443,3 +9443,738 @@ Original scoping text, preserved below:
 
 
 
+
+---
+## Archive batch: 2026-10-06 (cutoff 2026-09-29, keep last 7 days)
+
+## ✅ 2026-09-28: `SUPPRESS_ALL_DISABLED` turned back off — the confusion it was meant to fix was actually 5 real bugs, all found and fixed the same night
+
+After tonight's own investigation (Live-vs-All P&L split, Declustered-vs-Collapsed split, the OFP/DirGate/BreakevenStop accuracy checks) made clear that `SUPPRESS_ALL_DISABLED` was actively costing money today (-$244 on the trades it newly promoted vs. a positive background/`SHADOW` pool), the user asked directly what the flag actually does and why it was turned on — the honest answer was: the 2026-09-25 reason ("too much confusion distinguishing live vs suppressed trades") was never actually about the flag's core effect (letting proven-negative types fire live) — it was 5 real, previously-undocumented bugs in the plumbing that reached different insert paths inconsistently, all found and fixed earlier tonight (bugs #1/#4/#5/#6 in this file's own "only one trade fired" entry). With those fixed, the flag's remaining job was purely "let `SUPPRESS`/`THIN_N` types fire real, counted trades" — which is exactly what it did, and exactly why today's numbers looked the way they did.
+
+Turned off (`server/services/setupEligibility.js`, `SUPPRESS_ALL_DISABLED.enabled = false`) per explicit user agreement with this recommendation. **`ALL_LEVELS_LIVE` was deliberately left ON** per the user's own follow-up ("I want to see all declustered levels firing... preferably in live") — a separate, narrower flag (only affects which confluence-cluster sibling competes for the real `ACTIVE` slot, already respects real `SETUP_STATUS` eligibility since its own 2026-09-25 correction) that this change doesn't touch. Verified live: `GET /api/setups/live-flags` confirms `{suppressAllDisabled:false, allLevelsLive:true}`; a direct function call confirmed `IB_BEARISH` (a real, proven-negative type) correctly reverted to `SHADOW`/`PERFORMANCE_BELOW_THRESHOLD`. `test_invariants.mjs` stable (19/94 — one fewer FAIL than the night's standing 20, but confirmed unrelated: `IB_BULLISH_BALANCE`'s stale-calibration flag self-resolved from a scheduled recalibration run between checks, not from this change). Server restart confirmed postdating the edit via process start time (15:44 ET).
+
+## ✅ 2026-09-28: DirGate is weakest during RTH Midday (10am-1pm ET) — real but modest, current negative reading is day-clustering noise
+
+User question, after DirGate came out as by far the best-performing of 6 active shadow-tag mechanisms today (N=46, net +$428): "are there certain times where DirGate isn't the best?" Dispatched to Gemini (`scratch/claude_request.md`, since overwritten by the next dispatch below — see that entry). Gemini's response had a real file-truncation artifact (opening section started mid-sentence, "ost double the value-add of RTH..." — the known `agy --print` corruption failure mode this codebase has hit before) but included the full SQL used, so every reported number was independently re-run and verified byte-exact before trusting it (all 428 flagged real rows, `is_cluster_primary` deduped): RTH N=247/net $1,329.10, Globex N=181/net $2,425.70, Open (9:30-10:00) N=27/net $815.00, **Midday (10:00-13:00) N=128/net -$420.50**, Afternoon (13:00-18:00) N=92/net $934.60.
+
+Midday's negative reading does NOT hold up as a clean "DirGate is wrong here" finding — splitting those 128 trades chronologically in half: first 64 (13 distinct dates spanning 7 weeks) netted **+$449.50**; second 64 came from only **3 dates** (2026-09-24, 09-25, 09-28 — 2 of which are the exact `SUPPRESS_ALL_DISABLED`-anomaly days documented elsewhere in this file) and netted **-$870**. Real, honest read: Midday genuinely adds less edge than the rest of the day even on the clean population ($449.50/13 days vs. Open's $815/8 days is a real gap), but the currently-negative pooled number is inflated by this week's anomalous trade volume, not a sign the mechanism inverted. Not recorded as a `RESEARCH_CLAIM` — informational-only shadow tag, no live-wiring decision pending on this.
+
+## 🔄 2026-09-27: Main-dashboard statistics audit (DeepSeek review) — in progress, hand-off before context clear
+
+User asked to have DeepSeek review every predictive pattern/statistic on the main React dashboard (Morning Prep / Dashboard / Alpha Engine — explicitly NOT quick-check.html, already covered) for accuracy, efficacy, better-stats ideas, and bugs. Explicit standing requirement for the rest of this thread: **a displayed statistic must be truly actionable, not just accurate — if it isn't, change it** (either wire a real one in, or remove it).
+
+**Inventory built** (Explore agent) — full map of every predictive/pattern component across Morning Prep (`ACDView.jsx`), Dashboard (`DashboardView.jsx`), and Alpha Engine (`AlphaEngineOverview.jsx`, actually rendered under the Backtest tab, not Dashboard/Morning Prep — a real correction to the original assumed structure). See the agent's full report for the complete component→endpoint→backend-file map; not re-copied here, re-run the same Explore task if this needs re-deriving after a clear.
+
+**DeepSeek dispatch — process lesson**: a first attempt at a 12-component single dispatch stalled (its own thinking trace shows it debating whether to spawn sub-agents mid-task, then rabbit-holing on repeated truncated re-reads of one file) — never produced a final answer despite running 30+ minutes past its own configured 15-minute timeout. **Killing the Bash-tool wrapper process did NOT kill the actual `cline` worker underneath** — it kept running headless (writing into a file I'd already deleted) and held the dispatch lockfile, causing a second, narrower re-dispatch to immediately bounce off "another run in progress." Real fix: find and kill the actual `node .../cline --auto-approve...` process by name (`ps aux | grep "cline.*auto-approve"`), not just the wrapper. Re-dispatched at 4 components instead of 12, with a 10-minute timeout — completed cleanly in ~7 min. **Lesson for future DeepSeek dispatches on this codebase: cap scope at ~4 tightly-related components per dispatch, not a dozen — this matches the same "batch it narrower" lesson already learned for the week-review passes.**
+
+**Batch 1a findings (4 components: SessionBiasPanel, DayOfWeekPlaybookCard, OvernightContextStrip's WR%/N callout, antigravityEdges.js's shared origin_status/is_cluster_primary filtering) — all verified directly against real code, not taken on DeepSeek's word alone**:
+
+1. **CRITICAL, FIXED (commit `817af85`)**: `ACDView.jsx`'s `OvernightContextStrip` had 4 completely fabricated WR% literals ("IB_BEARISH 88% WR", "bullish setups 61% WR", "high conviction (61% WR)", "Both aligned — 63% WR (N=113)") with zero connection to any query — `auction_reads` only carries `overnight_inventory`/`open_vs_prior_value`/`prior_day_profile`, no WR/N columns exist. This is the literal canonical example CLAUDE.md's own "never hand-type a WR%/N/$ literal" rule cites. IB_BEARISH specifically is a confirmed real loser under a deliberate manual-suppress override, so this wasn't just unbacked, it was actively wrong. Removed; qualitative text kept, numbers stripped rather than backfilled inline (see the real research below on what, if anything, should replace them).
+2. **HIGH, NOT YET FIXED**: `antigravityEdges.js:1454` — `baselineMap[s.setup_type] || { wr: 0.50, n: 25 }`. Any setup_type with no baseline row shows as a fabricated "WR: 50% (N=25)" on EdgeSectionsPanel — the invented N=25 clears the ≥20 "decisive" floor, so it doesn't even read as a placeholder.
+3. **GOOD NEWS, no action needed**: SessionBiasPanel's CONTINUE/REVERSE call does NOT route through the already-discredited Regime A/B/C classifier (`regimeClassificationService.js`) — genuinely separate mechanism (`SESSION_BIAS` performance_audit rows). Confirmed via import trace.
+4. **MEDIUM, NOT YET FIXED**: SessionBiasPanel uses hardcoded `STRONG_THRESHOLD=70`/`CONTEXT_THRESHOLD=65` cutoffs instead of rolling-distribution-derived ones.
+5. **LOW, NOT YET FIXED**: `DayOfWeekPlaybookCard.jsx:15-16` — hardcoded Monday (`winRate:40.0, avgPnl:-339`) and Friday (`winRate:36.4, avgPnl:374`) fallback literals, and the same two duplicated in `TeleprinterFeed.jsx:17-18`. Confirmed this only fires pre-first-load/on-error, not routinely — still technically violates the no-hand-typed-literal rule.
+6. **MEDIUM, NOT YET FIXED**: `antigravityEdges.js`'s `setupsQ` (feeding TeleprinterFeed/EdgeSectionsPanel/PermSlipAndStackBar) excludes `BACKFILL` but ALSO excludes `SHADOW` — CLAUDE.md defines `SHADOW` as real (just never shown live), so this under-represents real background-tracked activity. No `is_cluster_primary` filter either — cluster siblings show as duplicate cards, inflating PermSlipAndStackBar's stack count.
+
+**Follow-on real-data research (direct, not DeepSeek)** — checking whether anything real could actually replace the removed OvernightContextStrip literals:
+## 2026-09-25 (overnight, user asleep): month setup review + opening-burst/first-30 work + POC resolver-race fix
+
+User asked for: (1) a thorough review of every setup and all real results over the past month with critique/improvements, (2) testing how to improve the mass firing in the first 20 min of RTH, (3) fixing firing against the first-30-min trend, plus "fix bugs you find." Gemini quota was exhausted (resets ~2026-09-28), so analysis was done directly; DeepSeek did the design critique + two code reviews. Full write-up: **`docs/SETUP_REVIEW_20260925.md`**.
+
+## 2026-09-25 (ORIGINAL SCOPING, now implemented above) — temporary "disable all suppression, trade everything live" override
+
+**User's explicit, informed decision** (given via AskUserQuestion after being told plainly what it means): "so much confusion with live and suppressed trades that I want to move everything to live for the time being." Confirmed understanding both ways: the user knows this includes the 63 real `SUPPRESS` setup_types (proven negative EV from real trade history, including `IB_BULLISH`/`IB_BEARISH` which were explicitly "dumped" after testing) and the 180 `THIN_N` types, and confirmed it will lose real money on setups already shown to lose money, on purpose, temporarily. Also confirmed with the user: this does NOT touch DLL/profit-lock/cooldown or any risk-discipline gate (opposite-direction conflict, same-type refire, cross-direction fast-flip, post-win-opposite-family, opening-drive counter-trade, 9:30-9:35/4-6pm dead zones, the sibling fill gate) or `CAPITAL_EXPOSURE_OVERRIDE` (uncalibrated-stop types stay blocked regardless — a data-integrity gate, not a performance judgment). Scoped narrowly to: does a setup_type's real historical track record (SETUP_STATUS) get to gate whether it can be `ACTIVE`.
+
+**This is a continuation of the same-day `ALL_LEVELS_LIVE` correction** (see CLAUDE.md's "Where to look" entry, commit `f316e2a`) — that fix made the sibling-touch-credit path correctly RESPECT suppression (a sibling only goes ACTIVE if it clears the real `isLiveEligible()` check). This new ask is the opposite: temporarily make `isLiveEligible()`/`getCanonicalLiveStatus()` themselves stop caring about suppression at all, system-wide, not just for cluster siblings.
+
+### Implementation plan (server/services/setupEligibility.js)
+
+1. Add a new exported flag, clearly separate from `ALL_LEVELS_LIVE` (that one is level-fade-scoped and about cluster-sibling selection; this one is broader — ALL setup_types, not just `_FADE_(LONG|SHORT)`):
+   ```js
+   export const SUPPRESS_ALL_DISABLED = {
+     enabled: true, addedDate: '2026-09-25',
+     reason: 'explicit user request via AskUserQuestion, informed of the real-money risk -- ' +
+       'too much confusion distinguishing live vs suppressed trades, wants everything trading ' +
+       'live temporarily while the system is untangled. Does NOT bypass CAPITAL_EXPOSURE_OVERRIDE, ' +
+       'DLL, cooldowns, or any risk-discipline gate -- only SETUP_STATUS/DOW/time-window suppression.',
+   };
+   ```
+2. `isLiveEligible(setupType, {...})`: short-circuit near the top —
+   ```js
+   if (SUPPRESS_ALL_DISABLED.enabled) return !CAPITAL_EXPOSURE_OVERRIDE.has(setupType);
+   ```
+   (placed so an UNKNOWN setup_type — no SETUP_STATUS row at all — also becomes eligible, consistent with "trade everything"; the existing fail-closed-on-unknown behavior only applies when the flag is off).
+3. `getCanonicalLiveStatus(signalName)`: after the query but before the recommendation check, short-circuit similarly:
+   ```js
+   if (SUPPRESS_ALL_DISABLED.enabled && !CAPITAL_EXPOSURE_OVERRIDE.has(signalName)) {
+     return { status: 'ACTIVE', reason: 'SUPPRESS_ALL_DISABLED', liveN: row?.sample_size ?? 0, liveEv: row?.ev ?? null, realN: null };
+   }
+   ```
+4. `isLiveTimeWindowBlocked(setupType, etMin)`: short-circuit to `false` when the flag is enabled (bypasses e.g. `PD_VAL_FADE_LONG`'s 1pm-4pm block).
+5. **Deliberately do NOT touch `computeSuppressionSets()`** — leave it computing the real, accurate `suppressedSetups`/`dowSuppressToday` sets exactly as today. The override lives entirely in the 3 consuming functions above. This means: (a) turning the flag back off (`enabled: false`) instantly and exactly restores today's real behavior with zero drift/recompute, and (b) anything that reads `suppressedSetups`/`dowSuppressToday` directly for DISPLAY purposes (not gating) — e.g. a dashboard showing "this is suppressed" — keeps showing the true, real suppression status even while it's not being enforced live. That distinction (real status vs. enforced status) should probably be surfaced in the UI once this ships, so it's visible that a trade firing live is doing so BECAUSE of this override, not because it's actually a good setup — worth a quick display tag (e.g. `notes.override_reason` or similar on the `active_setups` row) so a future review of "why did this fire" doesn't require re-deriving that this flag was on.
+
+### Verification plan before considering it shipped
+1. `node --check` + `npx eslint` on the edited file.
+2. `node scripts/test_invariants.mjs`, compare failure count via `git stash` to baseline (currently 30 — should stay 30, since this shouldn't touch anything the invariants suite checks structurally, only live behavior).
+3. Direct functional check: confirm `isLiveEligible('IB_BULLISH', {...})` now returns `true` with the flag on (a deliberate smoke test of the most emphatically-suppressed real example in the system).
+4. Restart server, confirm process start time postdates the edit.
+5. Update CLAUDE.md's Hard Rules or "Where to look" with this flag's existence, scope, and the explicit user-confirmed risk acceptance — including a clear note that `MANUAL_SUPPRESS_OVERRIDE`-flagged types (currently `IB_BULLISH`/`IB_BEARISH`) WILL start firing live under this flag too, since the override doesn't distinguish manual-override suppression from statistically-derived suppression.
+6. Flag an `OPEN_DECISION` (or extend tonight's `all_levels_live_corrected_needs_deepseek_review_20260925`) noting this is a temporary state with no auto-expiry — someone has to remember to flip it back off. Consider whether a hard expiry (e.g. auto-revert after N days without an explicit renewal) is worth building, or whether a loud, unmissable display banner while it's on is enough. Not yet decided with the user.
+
+### Not yet done as of this write-up
+
+
+### From "✅ 2026-09-28: `PROMOTE_ALL_MODE` — the real-N≥20 promotion floor removed for most setup_types, 4 worst offenders kept suppressed, family-pairing preserved"
+
+- A family-pairing sweep (thresholds N≥5/8/10/15/20, base-level-name grouping stripping `_LONG`/`_SHORT`/`_BULLISH`/`_BEARISH`/`_UP`/`_DOWN`/`_GAP_UP`/`_GAP_DOWN`) dispatched to Gemini, independently re-verified directly (Gemini's response file was truncated — the by-now-familiar `agy --print` silent-truncation failure mode — so every number was re-derived from scratch via direct SQL reusing `REAL_TRADE_FILTER`/`computeRigor()`, not trusted from the file).
+
+
+
+
+
+
+- User explicitly rejected optimizing for "clean" family pairs only ("promote everything then. dont get hung up on promote as family") after seeing the family-threshold breakdown.
+
+
+
+
+
+
+- User then correctly pushed back on a first "promote everything" verdict built on zero intervention: "we have risk mittigation in be stop and other things maybe even DG soon... i feel like your missing the forest through the trees" — a fair catch of an analytical blind spot (the real proposal always included a live circuit breaker, and the aggregate-loss framing hadn't tested that).
+
+
+
+
+
+
+- Built and tested two real circuit-breaker simulations (consecutive-loss-based, rolling-trailing-EV-based) against the full promote-everything population — **both insufficient**: promoting literally everything, even with either breaker applied, still landed net negative relative to the current 11-type roster's real history.
+
+
+
+
+
+
+- Measured how much of the real bad P&L among net-negative setup_types would have been prevented by the *existing* shadow-tag risk-mitigation mechanisms already live in this codebase (DirGate, MomFade, StepTrail, PitchCatch, BreakevenStop, RangeSlope/VolRoll, EntryFlow, OFP — `gateStat()`/`altExitStat()` formulas in `server/routes/setups.js`) — real, substantial, but not enough to flip the aggregate to positive.
+
+
+
+
+
+
+- Isolated the specific setup_types that stay clearly net-negative **even after** applying every existing risk-mitigation mechanism's hypothetical save: `FAILED_SWEEP_REVERSAL_LONG`, `FAILED_SWEEP_REVERSAL_SHORT`, `BRACKET_BREAKOUT_SHORT`, `VWAP_RECLAIM_SHORT` — the only 4 types with real, near-zero risk-mitigation coverage backing their losses.
+
+**Given the real, honestly-shown aggregate cost of "promote everything except these 4"** (worse than the current 11-type roster's own real history — the user was shown this number directly before deciding), offered 3 explicit options via `AskUserQuestion`. **User selected: promote everything except the 4 named worst offenders**, an informed choice made with the real negative dollar cost already visible — explicitly accepting a broader, more resilient-looking population over a narrower, currently-better-performing one: "at this point i want to see an account that keeps fighting back like 'all' trades has."
+
+### Implementation (`scripts/backtest_setup_status.mjs`)
+
+1. Extended the existing `MANUAL_SUPPRESS_OVERRIDE` Map (previously just `IB_BULLISH`/`IB_BEARISH`, the already-"dumped" pair — see CLAUDE.md's "Where to look" entry) with the 4 named types, `reason: 'worst_of_the_120_real_losers_zero_risk_mitigation_coverage'` (or `near_zero_...` for one), `addedDate: '2026-09-28'`.
+2. Added `PROMOTE_ALL_MODE = { enabled: true, addedDate: '2026-09-28' }` with an extensive header comment recording the real-dollar tradeoff and the user's informed acceptance of it.
+3. Inserted a bypass block immediately before the main per-type decision tree (`let recommendation = 'ACTIVE'`), positioned **after** both the `MANUAL_SUPPRESS_OVERRIDE` check and the `DAY_TYPE_CONDITIONAL` branch (both `continue` earlier) — so those two more nuanced mechanisms stay completely untouched. Everything else short-circuits straight to `ACTIVE`.
+4. Deliberately implemented at the **source** (the `SETUP_STATUS` computation itself, which every consumer reads from) rather than as a downstream bypass flag in `setupEligibility.js` — the `SUPPRESS_ALL_DISABLED` saga just above is the direct cautionary precedent for why a downstream bypass is the wrong shape: it doesn't reach every insert path consistently and took 5 separate bug-hunts to actually enforce everywhere. A change at the source means every consumer (`computeSuppressionSets()`, `isLiveEligible()`, `getCanonicalLiveStatus()`, the Setup Reference page, the Alpha Engine overview) sees the same, single, correct answer with no plumbing to audit.
+
+### Verification
+
+
+
+
+
+
+
+- `node --check` → syntax OK. `npx eslint` → clean, zero output.
+
+
+
+
+
+
+- Ran the script for real against the live DB: **244 `SETUP_STATUS` rows written**, recommendation breakdown (dedup'd to true-latest-row-per-`signal_name`, per the standing `DISTINCT ON`-before-`WHERE` convention — an earlier ad hoc diagnostic query during this same verification violated that exact pattern and had to be redone): **241 `ACTIVE`** (up from 11), **6 `SUPPRESS`** (the 4 named types + `IB_BULLISH`/`IB_BEARISH`, confirmed unchanged), **8 `THIN_N`** (7 are literal zero-real-history types with nothing to promote — `C_REVERSAL_LONG/SHORT`, `PY_POC_FADE_SHORT`, `PY_VAL_FADE_LONG/SHORT`, `STALL_DEFENDED_LEVEL_LONG`, `TRT_SHORT_V2` — plus `OR5_LOW_FADE_LONG_GAP_DOWN`, a `DAY_TYPE_CONDITIONAL` variant correctly still gated by its own separate real-N-per-bucket mechanism, unaffected by design).
+
+
+
+
+
+
+- `SETUP_STATUS_DOW` sub-pass ran unaffected: 353 rows, 0 DOW-specific suppressions, 312 `THIN_N` — this sub-pass directly gates live `SUPPRESS`/`ACTIVE` on `computeRigor().clean` (the one deliberate rigor-gating exception documented in CLAUDE.md's "Rigor diagnostics are standing, not one-off" convention) and was correctly untouched by `PROMOTE_ALL_MODE`, which only lives in the main (non-DOW) pass.
+
+
+
+
+
+
+- Server restarted (`./restart.sh`), confirmed new process start time postdates both edited files; `GET /api/acd/setup-detection` → 200; `GET /api/setups/live-flags` → `{suppressAllDisabled:false, allLevelsLive:true}` as expected (this change doesn't touch either flag — it operates one level upstream, in the `SETUP_STATUS` data both flags' consumers read).
+
+### Post-ship verification: `test_invariants.mjs` ran clean (106→114 FAILs), a real coverage gap found and mostly closed
+
+Ran `node scripts/test_invariants.mjs` after shipping (not skipped, despite the summary above saying "not yet done" mid-session): 106 failures, 87 of them a single real category — `<type>: ACTIVE in SETUP_STATUS but no OPTIMAL_STOP row — acd.js falls back to constants`, directly caused by promoting ~230 types with no prior `OPTIMAL_STOP` calibration row. Ran `node scripts/update_optimal_stops.mjs` (145 rows upserted) to close the gap — matches CLAUDE.md's own "New setup type checklist" step 2, which this codebase already requires before any type goes live.
+
+**88 types still show the gap after running it** (verified directly against the DB, not just the checker's own output — a targeted query for 3 sample types, e.g. `A_UP_STRONG`, confirmed zero `OPTIMAL_STOP` rows exist for them). Root cause: `update_optimal_stops.mjs` has its own internal `MIN_N=20` floor (`MIN_SWEEPABLE_N`/percentile-derived per-candidate floors), independent of `SETUP_STATUS`'s own gate — it correctly refuses to fit a percentile-based stop/target distribution from fewer than 20 real trades, which is exactly the statistical floor `PROMOTE_ALL_MODE` deliberately removed from the *promotion* decision, not from *this* script's own math. **This is expected, not a bug to chase down**: these 88 types are the genuinely-thin-real-N tail (many N=0-19) that `PROMOTE_ALL_MODE` knowingly promotes anyway per the user's explicit decision.
+
+**Checked whether this is a NEW degradation and confirmed it is not**: traced the actual fallback path acd.js uses when `getOptStopForType()` returns `undefined` (`server/routes/acd.js` ~line 4577-4578): `stopPts = optStop?.stop ?? Math.round(lv.mae_p75 ?? STOP)`, `targetPts = optStop?.target ?? Math.round(lv.mfe ?? TARGET)` — this falls back to the touched LEVEL's own real historical MAE-p75/MFE first, and only to the literal `STOP`/`TARGET` constants if even that's missing. **These 88 types were already firing this exact same way as `SHADOW`** — confirmed directly for `A_UP_STRONG` (14 real `SHADOW` fires in the last 90 days, all using this identical level-based fallback, since it never had an `OPTIMAL_STOP` row before tonight either). Promoting a type from `SHADOW` to `ACTIVE` doesn't change how its stop/target is computed at all — only whether the outcome counts as `origin_status='ACTIVE'` for real-N/display purposes. So this finding is real and worth knowing, but it is not a new risk `PROMOTE_ALL_MODE` introduced — it's a pre-existing property of the level-fade fallback mechanism, now visible on 88 more types because they're now counted rather than because their execution changed.
+
+Remaining ~19 non-`OPTIMAL_STOP` failures (circuit-breaker trips on `pct_change_exceeded`/`implausible_risk_reward_skew`, a couple of stale-EV-drift flags, 2 `RESEARCH_CLAIM` unblock conditions) are the circuit breaker doing its documented job (freezing at the prior safe value rather than applying a >35% swing) — not chased further tonight; these are a known, self-protecting mechanism, not a correctness risk.
+
+### Not yet done
+
+
+
+
+
+
+
+- **The standing 3-phase DeepSeek review this higher-stakes-work thread should get was deferred**, same rationale as the `SUPPRESS_ALL_DISABLED` correction earlier tonight (market closed, no live capital exposure until Sunday 6pm ET Globex reopen) — flagged, not skipped. See `OPEN_DECISION promote_all_mode_removes_n_floor_20260928`.
+
+
+
+
+
+
+- No forward monitoring cadence has been set up yet for "did removing the floor actually work" beyond the existing weekly `SETUP_STATUS` recalibration (which will keep re-running with `PROMOTE_ALL_MODE` still enabled, so a genuinely bad newly-promoted type won't self-correct back to `SUPPRESS` — the whole point of this change is that real-N no longer gates it). The user's own expectation, stated directly, is to check tomorrow's Live-vs-All comparison.
+
+
+### From "✅ 2026-09-28: "Only one trade fired on quick-check" — 6 independent bugs found and fixed, none of them what they first looked like"
+
+- **The "not live" MAJOR_PIVOT card is correct, by design, unrelated to any of tonight's bugs.** `majorPivotDefendedBreakDetector.js`'s INSERT hardcodes `'SHADOW','SHADOW'` as a literal, unconditionally — this is a standalone detector file that never calls `isLiveEligible()`/`getCanonicalLiveStatus()`/`suppressAllDisabledOverrides()` at all, so `SUPPRESS_ALL_DISABLED` structurally cannot reach it. Deliberate: this detector's own backtest never cleared validation (real N stuck at 0-24, CI crosses both zero and the full placebo range — a genuinely disproven config, not a thin-data placeholder), so it was shipped permanently SHADOW-only regardless of any future override. No fix needed or made here — confirmed correct, not a bug.
+
+
+
+
+
+
+- **A real 5th insert site with the same hardcoded-SHADOW gap as fix #4, found by tracing why the OR5/OR10/5D_OR_MID rows never went live.** `acd.js`'s `EARLY_TOUCH_BACKFILL` insert (the loop that retroactively records a level's first real touch once the poller catches up to it, most commonly right at RTH open) also unconditionally hardcoded `status/origin_status='SHADOW'` — no `suppression_reason` column even existed on this INSERT before (always implicitly NULL). Fixed the same way: reused the same `suppressAllDisabledOverrides()` from fix #4 (no new function needed), added `suppression_reason` as a new column on this INSERT, and added 2 new trailing params (status/origin_status share one placeholder, `suppression_reason` gets its own) rather than reordering the existing `REGIME_STAMP_COLS`/`FIRE_TAG_COLS`-dependent positional math — verified the column-count/params-count arithmetic by hand before running (26+RS+FT column tokens == 26+RS+FT VALUES tokens == params array of 24+RS+FT distinct values with 2 duplicate references, matching exactly).
+
+
+
+
+
+
+- **The "late" badges (29-58min) are also NOT a bug** — separately confirmed. Ruled out a Sierra Chart data feed gap first (checked `price_bars_primary` minute-by-minute for the whole 9:20-10:40 window: zero gaps >2min, bars flowed normally) and ruled out a second stuck/crashed server (only one restart found in that window, at 9:57:14, well before the ~10:33 insert time). The real mechanism: this backfill loop only fires for a level that's currently NOT near price (`liveNear` false) — a level the live/cluster path is actively handling doesn't need backfill. The touched OR5/OR10 LOW levels sat at ~30626-30630; price ranged 30503-30679 across the delay window, opening right at the level and not clearing decisively away from it (in a `TREND DOWN` session with real chop) until right around 10:32 — exactly when the backfill finally fired. This is the mechanism working as designed under a specific, real market condition (price lingering near a level for an extended stretch), not a defect — flagged here so a future session doesn't re-investigate it as a mystery.
+
+Verified: lint/`node --check` clean, param-count arithmetic checked by hand, `test_invariants.mjs` stable at 20/94 (2 more clean re-runs, both showing only ordinary live-data drift in the diff — doc file sizes, `gated_candidates` counts, a cosmetic Map-ordering difference in `BET_CLASS_STATUS`'s printed summary), server restart confirmed via process start time (11:15 ET) postdating the edit. **Not yet observed firing live** — no candidate has passed through the `EARLY_TOUCH_BACKFILL` path since the restart as of this writing (market conditions dependent, same honest caveat as fix #4).
+
+**6. A real, self-inflicted regression IN fix #4, found live ~50 minutes after #4 shipped** (user: "This trade fired 4 times in a row," referring to `FLOOR_S3_FADE_LONG` — confirmed live: 9 real `ACTIVE` fires of the same setup_type in 6 minutes, ~once/minute, as price drifted slowly through the level). Root cause: fix #4's `auditCanPromote` promoted regardless of WHICH `suppressReason` landed in the near-level-audit branch — but `SUPPRESS_ALL_DISABLED`'s OWN already-written documentation (its header comment in `setupEligibility.js`, and the CLAUDE.md "Where to look" entry) explicitly states it does NOT bypass "any risk-discipline gate ... same-type refire ... opposite-direction conflict" alongside DLL/profit-lock/cooldown. `SAME_TYPE_REFIRE_COOLDOWN` and `CLUSTER_ALREADY_FIRED` ARE exactly that family of gate (real-time dedup discipline, not a SETUP_STATUS calibration verdict) — fix #4's "promote regardless of which reason" interpretation directly contradicted the flag's own already-documented scope, and was never checked against it before shipping. This was a real mistake, not a re-litigation of an already-settled call: the earlier "Its fake capital"/"Simulation" exchange that simplified fix #4's scope happened in the context of "should we worry about individual suppression reasons at all," not "should risk-discipline dedup gates specifically be bypassed" — the flag's own documentation on that specific question was never re-read before implementing the uniform version.
+
+Fixed by scoping promotion to only the two reasons that ARE genuinely SETUP_STATUS/SETUP_STATUS_DOW-driven (`SUPPRESSED_FADE`, `DOW_SUPPRESSED`) via a `PROMOTABLE_SUPPRESS_REASONS` Set, checked before calling `suppressAllDisabledOverrides()` — `CLUSTER_ALREADY_FIRED`/`SAME_TYPE_REFIRE_COOLDOWN`/`S2_DOUBLE_COUNTER` now always stay `SHADOW` regardless of the flag. `TREND_COUNTER_FADE` (a real backtested finding, N=484 TREND-day trades, closer in spirit to `SUPPRESSED_FADE` than to a dedup gate but not named in the flag's documented exclusion list either) and `SUPPRESSED_OTHER` (unclear provenance) were left OUT of promotion too, conservatively, pending an explicit user decision — not silently included by default the way #4's first version did. Checked whether `EARLY_TOUCH_BACKFILL` (fix #5) has the same exposure: no — that branch only has one path to promotion (a real SETUP_STATUS verdict, no multi-reason `suppressReason` variable) and is separately, structurally rate-limited to once-per-level-per-day by its own `existing`-row dedup check, so it can't repeat-fire the way this branch did.
+
+**No real dollar/capital impact from the 9 phantom-promoted rows**: all resolved `INVALIDATED` with `actual_pnl=null` (checked directly) — no real order-placement is wired to `origin_status` yet, so nothing could have executed off these regardless. The harm was purely a false "this is live" signal on quick-check.html for ~6 minutes, not a real position.
+
+Verified: `node --check` clean, `test_invariants.mjs` stable at 20/94 (4th clean before/after comparison of the night, same benign live-data-drift diff shape as every prior one), server restart confirmed via process start time (11:25 ET) postdating the edit, zero new candidates fired through the affected branch in the ~5 minutes immediately after restart (short window, not fully conclusive on its own, but the fix logic itself is a pure deterministic string-membership check with no DB dependency to second-guess). The `live_eligibility_chain_fixes_20260928_review_pending` decision now also covers this regression + its fix — a DeepSeek review of the corrected logic is doubly warranted now given this is the 2nd iteration on the same branch in one night.
+
+**Independent DeepSeek review of all 3 changes** (dispatched per the `HIGH`-priority `OPEN_DECISION`, `scratch/claude_request_deepseek.md`, ~10min turnaround, no truncation/debris in the response): confirmed diff1/diff2 fully correct (positional-parameter math verified token-by-token, no 3rd copy of `GLOBEX_PAUSED` anywhere), and found **one real, blocking finding in diff3** — a more subtle version of the exact same bug class as #6. `suppressReason` is a COLLAPSED single string from a precedence ternary (`clusterAlreadyFired -> sameTypeRecentlyFired -> _suppressedSetups -> _dowSuppressToday -> isS2DoubleCounter -> isTrendCounterFade -> SUPPRESSED_OTHER`) — a candidate that is BOTH `SETUP_STATUS`-suppressed (or DOW-suppressed) AND `S2_DOUBLE_COUNTER` (or `TREND_COUNTER_FADE`) collapses to `'SUPPRESSED_FADE'`/`'DOW_SUPPRESSED'`, which IS on the allowlist — silently promoting it past a directional risk gate the ternary never even reaches for that candidate. `CLUSTER_ALREADY_FIRED`/`SAME_TYPE_REFIRE_COOLDOWN` are unaffected (checked first, so if either is true the string can only be one of those two) — the gap was specifically the 2 directional gates sitting below the suppression checks in the ternary's precedence order. Verified directly before fixing (per the standing "audit before acting" rule, not accepted on trust): confirmed the ternary precedence in the live code, confirmed `s2Double`/`trendCounterFadeFlag` are computed once per poll at ~line 4296 as pure functions of `dir`/`dtClass`/`ibSetup` (deterministic, safe to reuse), confirmed both are in scope at the promotion check. Fixed exactly as recommended: `auditCanPromote` now also requires `!s2Double && !trendCounterFadeFlag`. Also applied DeepSeek's minor finding (hoisted `PROMOTABLE_SUPPRESS_REASONS` from a per-candidate re-allocation to module scope, matching `STOP_SWEEP_PAUSED`'s existing convention) — cost/clarity only, not a bug. **Both remaining minor findings cleaned up the same night**, per explicit user request ("I don't want things hanging around out there") rather than left as documented-but-open notes:
+
+
+
+
+
+
+- **(a) Duplicated ternary, fixed**: extracted a shared `classifySuppressionReason()` (`server/services/acdShared.js`) that both the near-level-audit branch's `suppressReason` and the winner loop's own `skipReason` now call — one precedence order, can't silently diverge the next time a reason is added to one branch and not the other. `clusterAlreadyFired`/`recentlyFired` are optional params (default `false`) since the winner-loop call site has no cluster-level concept (it's already inside the per-candidate `sortedCandidates` iteration). Verified via a real module-import test (not just lint) that both call shapes reproduce the exact original precedence output.
+
+
+
+
+
+
+- **(c) `suppression_reason=null` ambiguity, fixed**: `EARLY_TOUCH_BACKFILL` now stores `'CAPITAL_EXPOSURE_OVERRIDE'` explicitly when that's the real reason a candidate wasn't promoted (flag on, but the type is on the exposure-override list), instead of the same `null` it uses for "flag off" — matching every other insert site's real-reason reporting. Confirmed `suppression_reason`'s column type is `text` (unlimited) before shipping the new literal, no VARCHAR risk.
+
+
+
+
+
+
+- **(b) `origin_status='ACTIVE'` on a retroactive backfill row** was left as-is (a documentation-only note for a future `orderEligibility.js` design, not a bug in the current system — there's no code to change yet since that gate doesn't exist).
+
+Verified: `node --check`/lint clean on both touched files, a real module-import test confirming `classifySuppressionReason` is genuinely exported and behaves identically to the original ternaries at both call shapes, `test_invariants.mjs` stable at 20/94 (6th clean comparison tonight, same benign drift shape), server restart confirmed via process start time (12:01 ET) postdating the edit. The `live_eligibility_chain_fixes_20260928_review_pending` decision is resolved — the review is done, its one finding is fixed and verified, and both of its minor follow-ups are closed out rather than left open.
+
+All 6 fixes (plus the DeepSeek-review follow-up fix) verified independently (lint clean, `test_invariants.mjs` stable at 20/94 vs. a `git stash` baseline throughout, server restart confirmed postdating the code changes via systemd — the `./restart.sh` wrapper itself got OOM-killed mid-run on fix #1-3, exit 137, but systemd's own takeover completed cleanly and was verified directly rather than trusted from the wrapper's exit code; fixes #4 and #5's later restarts were clean, direct `./restart.sh` runs). `quick-check.html` changes are static-file edits with no restart needed (Express serves them directly) — confirmed live immediately via Playwright against `localhost:3002/quick-check`. Not yet done: a DeepSeek review of the `GLOBEX_PAUSED` removal and fixes #4/#5 specifically (all three change live-firing behavior, the higher-stakes case) — deferred since all three were fixed live at the user's explicit, immediate request; the existing `OPEN_DECISION live_eligibility_chain_fixes_20260928_review_pending` tracks this, now covers all 3. `CLAUDE.md`'s new Hard Rule ("A later override in a live-eligibility chain silently wins...") and the `SUPPRESS_ALL_DISABLED` "Where to look" entry cover #1 — this file is the canonical record for #4/#5 until a future session folds them into CLAUDE.md too.
+
+
+### From "🔄 2026-09-28: Sierra Chart order-placement connection — deeper-scoped via real docs, target account confirmed, still not started"
+
+- `server/services/sierraChart/dtcClient.js` — the DTC protocol client (connect, auth, submit orders, parse `ORDER_UPDATE`)
+
+
+
+
+
+
+- `server/services/sierraChart/orderEligibility.js` — the real-order gate, its own choke point every insert path funnels through, built on `computeSuppressionSets()` per the DeepSeek critique's finding (never `getCanonicalLiveStatus()`/`isLiveEligible()`, which honor `SUPPRESS_ALL_DISABLED`)
+
+
+
+
+
+
+- `server/services/sierraChart/killSwitch.js` — kill switch state + check
+
+
+
+
+
+
+- `server/services/sierraChart/reconciliation.js` — the new `order_placements` table logic, real-fill writeback
+
+
+
+
+
+
+- `server/routes/sierraChart.js` — thin route file only (status endpoint, manual kill-switch toggle) — no logic lives here either
+Anything hooking into the existing live-detection loop (`acd.js`) imports one top-level function from `orderEligibility.js` and calls it in one line, matching the `momentumChaseDetector.js`-style precedent.
+
+**Dashboard/control-surface scope added 2026-09-28, user-confirmed.** A dedicated top-level nav tab (`src/views/SierraChartView.jsx` or similar), not a panel folded into an existing view — the user's own framing was "a center point to interface," meaning one always-visible place, not scattered controls. Backed by the already-planned `server/routes/sierraChart.js`, no new backend architecture decision needed. Scoped fields/controls:
+
+
+
+
+
+
+- Connection & environment status — whether the DTC client is connected right now, and critically WHICH environment Sierra Chart is currently logged into (Trade Simulation Mode / prop firm sim-eval / eventually live) — arguably the single most important thing on the page given the whole staged rollout depends on always knowing which one is active.
+
+
+
+
+
+
+- Kill switch, expanded past a single toggle per the DeepSeek critique's finding that "halt new submissions" alone is insufficient: 3 separate, unmissable controls — stop new orders, cancel any working order, flatten an open position.
+
+
+
+
+
+
+- Live position/order state sourced from the BROKER's own truth, not this app's tables (a real position's reality lives with Sierra Chart/Rithmic, matches the critique's "position/order state recovery" finding).
+
+
+
+
+
+
+- Order history / audit log — every order decision, which gate allowed it, the outcome (the critique's finding #7, flagged as entirely missing from the original plan).
+
+
+
+
+
+
+- Reconciliation view — real fills (`order_placements`) next to the app's own simulated resolution (`active_setups`), side by side.
+
+
+
+
+
+
+- Rate/limit visibility — orders placed today vs. the daily cap, real P&L vs. the loss-breaker threshold.
+User's explicit call: fold this into the same DeepSeek critique pass rather than treat it as a separate review — a follow-up dispatch is queued reviewing this addition against the already-critiqued backend plan (not re-reviewing the backend from scratch).
+
+**Portability requirement added 2026-09-28, user-confirmed: the DTC client/kill-switch piece must be extricable — "plug and play" into another app if needed.** Doesn't change the locked directory layout, clarifies the internal dependency boundary within it:
+
+
+
+
+
+
+- **Genuinely portable, zero trading-journal-specific imports (the extraction seam)**: `dtcClient.js` (pure DTC protocol client, config-driven — host/port/credentials passed in, not read from this app's own config; exposes `connect()`/`submitOrder()`/`onFill()`/`onReject()` with no knowledge of `active_setups`) and `killSwitch.js` (a halt/cancel-working/flatten-open state machine acting through the DTC client, also with no reason to know this app's tables). Frontend: a generic `<SierraChartControlPanel>` — connection status + the 3 kill-switch controls + order history from the DTC client's own event log — takes data via props/config, not direct imports of trading-journal-specific hooks.
+
+
+
+
+
+
+- **Stays trading-journal-specific, consumes the portable pieces (never the reverse)**: `orderEligibility.js` (`computeSuppressionSets()`/`active_setups` logic), `reconciliation.js` (writes `order_placements`, compares against `active_setups`), the dashboard's reconciliation panel and rate/limit panel (tied to this app's own daily-loss-breaker).
+Not yet reviewed by DeepSeek for portability specifically — the dispatch below was scoped before this requirement came up; worth a dedicated look in a future pass, not blocking Stage 1.
+
+**Dashboard design critique done same day.** Full text: `scratch/deepseek_response.md` (also saved as `scratch/deepseek_response_20260928_084251.md`). Independently spot-checked before trusting — the `useSharedPollData.js:19` no-cache-mode claim and the "4-day/114,824-attempt crash loop" citation both verified exactly against the real code/docs before acting.
+
+1. **A live bug, unrelated to Sierra Chart, found and fixed the same session**: `useSharedPollData.js`/`usePollData.js` (the shared polling hooks most of the React app's own live data goes through) had the identical bare-`fetch()`-no-cache-mode bug already fixed once for `quick-check.html` 2026-09-22 — never applied to these shared utilities. Fixed both (`cache: 'no-store'`), verified clean (lint/build/live Playwright render, zero errors). See CLAUDE.md's now-updated cache-bug Convention entry for the generalized lesson.
+2. **Environment indicator must fail closed, not fail open.** "Show which environment Sierra Chart is logged into" is only as good as its source — if the dashboard reads an app-side config label instead of something Sierra Chart itself actually reports (the authenticated account name, the DTC connection's own permission response), it can display a confident, WRONG environment — worse than no indicator at all, since it reads as confirmed. Must render "UNKNOWN / cannot verify" loudly when the real signal isn't available, never assume.
+3. **The kill switch needs a dashboard/process-independent "stop new" mechanism, proven by this codebase's own history** — cited the real 4-day/114,824-attempt crash loop where every application-layer health check stayed "honestly green" throughout. A kill switch hosted only by the same Express process inherits that exact blindness. Design: "stop new" as a file-based or DB flag, read FRESH by the order-eligibility loop on every single pass (never cached in a module variable only the route mutates), **defaulting to HALTED on process restart**, settable from outside the process entirely. Cancel-working/flatten-open CANNOT be made process-independent (they need a live broker connection) — the UI must say plainly "if this app is down, flatten directly in Sierra Chart," not imply the dashboard is the only path.
+4. **Given exits stay simulated, the manual flatten button is currently the ONLY guaranteed exit path if the bar-walk-fires-a-real-close question (below) resolves "no."** DeepSeek treats this as a much heavier requirement than "emergency button" and says it needs to be tested accordingly, not treated as a rarely-used safety net.
+5. **DeepSeek's explicit recommendation on the still-open exit question**: the bar-walk exit logic should fire a real DTC close order. Its reasoning: without it, the manual flatten button becomes the *only* way a real position ever closes, converting an emergency control into the primary exit mechanism — called an unacceptable failure mode. Not yet decided by the user — a recommendation, not a resolution.
+6. **A real kill-switch race, independent of everything else**: the order-eligibility loop runs on ~15s polls. If the kill-switch check happens early in a pass and the submit happens later in the SAME pass, a "stop new" click mid-pass doesn't stop an order already past the check. The check-then-submit must be one atomic critical section inside `orderEligibility.js` itself — this is a backend design property, not something the dashboard can fix by polling faster.
+7. **Single in-process source of truth required.** `routes/sierraChart.js` and the order-eligibility loop must read the SAME kill-switch/position state, not each keep their own copy — otherwise the dashboard and the loop can act on different data at the same instant.
+8. **6 more scoped-but-underspecified dashboard fields, each mapped to which of the original backend-critique gaps it does/doesn't actually close**: the 3 kill-switch controls aren't peers (must show "request sent" vs. "broker-confirmed" separately, and state explicitly whether "flatten" implies "stop new"); the reconciliation view only closes its gap if it surfaces UNMATCHED rows, not just matches; the audit log must also log kill-switch decisions and idempotency/duplicate suppressions, not just order-fire decisions; rate/limit display must read the exact same function the backend breaker enforces, never a reimplementation.
+9. **Missing from the original dashboard scope entirely**: whether the order-eligibility gate is actually wired into all 10 standalone detector insert paths (show "gate wired N/N"); `SUPPRESS_ALL_DISABLED`/`ALL_LEVELS_LIVE` visibility (already exposed via `/api/setups/live-flags` — this page should surface them too, since a page presenting itself as "is it safe" that omits them is materially incomplete); DTC connection health beyond a boolean (heartbeat/last-`ORDER_UPDATE`-age, so a silent-but-open TCP link shows degraded, not green); a "last reconciled at" timestamp + manual reconcile trigger; reject/retry/idempotency-suppression states shown as distinct rows in the audit log.
+10. **The `useViewActive()`/views-stay-mounted convention is the wrong default for this page.** This codebase freezes a hidden view's polling to avoid starving the connection pool — but that means kill-switch/connection/position data would silently freeze the moment the user navigates to another tab, directly contradicting "one always-visible place." Needs an explicit decision: exempt this view from that gating (interval + socket push instead), or accept the freeze and show a loud "stale since <time>" indicator when not the active tab.
+11. **The kill-switch ACTION itself must be a synchronous, awaited POST that returns the authoritative backend state** — never an optimistic client-side toggle reconciled later. A kill switch that shows "armed" from a client-side guess while the write actually failed is a false-safe picture by construction.
+
+**Decisions resolved same day, past Phase 0 into implementation**: exit decision confirmed to fire a real DTC close order (matches DeepSeek's recommendation), scope confirmed to include ALL existing exit triggers (`STOP_HIT`/`TARGET_HIT`/`TIME_EXPIRED`/`TRAIL_EXIT`) plus the account-level risk gates (DLL/profit-lock/cooldown) — but those 3 were found to read from the `trades` table (the user's manually-logged real trading), NOT from anything the automated system does, so wiring them in as-is would mix manual and automated P&L into one risk decision. User confirmed (recommended option): build the automation its own separate, automation-only risk gates from real fills (`order_placements`), not the shared trades-table ones — existing DLL/profit-lock/cooldown stay exactly as they are today, untouched. **User then explicitly de-scoped the DLL-equivalent gate for the FIRST build ("let's start with no dll option") and asked to see the real pipeline fire** — not a hand-triggered test order, the actual `active_setups` detection loop resulting in a real DTC order (matches DeepSeek's own Q2 finding that a hand-driven Stage 1 test validates none of the real trigger machinery).
+
+**Connectivity confirmed**: Sierra Chart runs on the Windows host, same machine as this WSL2 dev environment (`/mnt/c/SierraChart/Data/` already used elsewhere in this codebase for the depth archive, confirms the mount). Real Windows LAN IP found (`192.168.4.178`) but ICMP ping got no response — inconclusive (Windows Firewall commonly blocks ping by default; doesn't mean the TCP path is blocked) — real reachability can't be confirmed until Sierra Chart's DTC Protocol Server is actually listening on a port. WSL2's standard NAT gateway (`172.27.192.1`) is also a candidate path, more idiomatic for WSL2-to-Windows-host TCP than the LAN IP. **User's explicit requirement: keep this nimble — "it might get moved"** — host/port are env-var-driven (`DTC_HOST`/`DTC_PORT`), never hardcoded, so either address (or a future one on a different machine entirely) is a config change, not a code change.
+
+**Built, same day** (real DTC message field names/type codes/enum values fetched directly from Sierra Chart's own `DTCProtocol.h` header and message-reference doc pages — not guessed, all verified before use):
+
+
+
+
+
+
+- `server/services/sierraChart/dtcClient.js` — the portable DTC client (zero trading-journal-specific imports, per the locked portability boundary). Implements: TCP connect, `ENCODING_REQUEST`→`LOGON_REQUEST`/`LOGON_RESPONSE` handshake, `HEARTBEAT` keepalive, `submitOrder()` (builds a real `SUBMIT_NEW_SINGLE_ORDER`), and emits `orderUpdate` events for the caller to interpret (`ORDER_STATUS`/`ORDER_UPDATE_REASON` enums exported for that purpose — this client deliberately does NOT interpret fills/rejects itself, that's the trading-journal-specific consumer's job). Verified: syntax clean, real ESM exports confirmed via direct `import()` (not just eslint — see CLAUDE.md's standing lesson on why lint alone doesn't catch a missing export), lint clean.
+
+
+
+
+
+
+- `scripts/test_dtc_connection.mjs` — a Stage 1 smoke-test script, `DTC_HOST`/`DTC_PORT`/`DTC_USERNAME`/`DTC_PASSWORD`/`DTC_TRADE_ACCOUNT` env-var driven. Defaults to connect+logon only, no order submitted, unless `--submit-test-order` is passed explicitly. Tested: fails cleanly with a clear message when env vars are unset, fails cleanly with a clear, actionable error against a closed port (`ECONNREFUSED`, correctly caught and explained).
+
+
+
+
+
+
+- **One real, explicitly-flagged unknown, not glossed over**: whether the very first bytes on a fresh connection need an `ENCODING_REQUEST` sent as plain JSON (the approach implemented, matching the documented convention that this negotiation message is always self-describing) is the standard approach per DTC's design intent, but has NOT been live-verified against a real Sierra Chart connection yet — that requires an actual connection, which doesn't exist until DTC Protocol Server + Allow Trading are enabled Sierra-Chart-side. Flagged in the code's own comment as the first place to look if the first real connection attempt fails at that step.
+
+**What's needed from the user before this can actually be tested live**: (1) enable DTC Protocol Server + the separate "Allow Trading" toggle in Sierra Chart's Global Settings, (2) confirm/set the DTC port, (3) confirm Trade Simulation Mode is on, (4) run `DTC_HOST=<ip> DTC_PORT=<port> node scripts/test_dtc_connection.mjs` and report what happens — a clean `[logon] Result=1` means the handshake assumptions held; anything else is the first real data point on what needs adjusting.
+
+**Still not built**: `orderEligibility.js` (the real-order gate wired to the live `active_setups` detection loop — the actual "system fires a real order" path), `killSwitch.js`, `reconciliation.js`, the exit-order-submission logic, the dashboard. These come after the Stage 1 connection is confirmed working — no point wiring the real trigger path to a client that hasn't proven it can log on yet. Not yet re-reviewed by DeepSeek (this implementation happened after both critique passes) — per CLAUDE.md's 3-phase workflow, a code-review pass is still owed before any of this is considered done, once there's a live-tested connection to review against.
+
+**Not started** — no code, no architecture decision yet. Automation posture still "just exploring."
+
+**Continued 2026-09-28/29, same day, into the night — Stage 1 connection proven, most of the remaining plumbing built, 1 critical bug caught and fixed by DeepSeek before any real order existed.**
+
+**Two real bugs found and fixed to get a live connection, neither guessed — both confirmed against Sierra Chart's own real docs/DTCProtocol.h or empirically**:
+1. **Protocol bootstrap bug**: `ENCODING_REQUEST`/`ENCODING_RESPONSE` must both be sent/received as raw Binary (a 16-byte struct: `Size(u16)+Type(u16)+ProtocolVersion(i32)+Encoding(i32)+ProtocolType[4]`), never JSON, and the client must WAIT for the binary response before sending `LOGON_REQUEST` — the original version sent `ENCODING_REQUEST` as JSON text and fired `LOGON_REQUEST` immediately, which is exactly what produced the earlier `ECONNRESET`. Fixed in `dtcClient.js`'s `_onData()`/`_buildEncodingRequestBinary()`/`_parseEncodingResponseBinary()`.
+2. **WSL2 networking bug**: the Windows host's real LAN IP (`192.168.4.178`) completes the TCP handshake cleanly but resets the instant data flows (a hairpin-NAT signature). The WSL2 NAT gateway IP (`172.27.192.1`, `ip route show | grep default`) works cleanly, zero code changes. Now a standing CLAUDE.md convention (not Sierra-Chart-specific — any future WSL2-to-Windows-host connection should check this first).
+
+**Result: real logon succeeded.** `Service=rithmic_v2.trading`, `TradingIsSupported=1`, `ServerName="SC DTC Server. Build=58206"` — confirming this is genuinely Rithmic-routed, not local Trade Simulation Mode (which per the earlier research can't reach DTC at all).
+
+**Account identity, resolved via 2 rounds of user confirmation**: a live `TRADE_ACCOUNTS_REQUEST` found 6 real trade accounts (`LFE050-Q68GHV22-TEST012`, `Sim1`-`Sim5`). The naming pattern strongly suggested `LFE050-Q68GHV22-TEST012` was the real prop-firm eval account and `Sim1-5` were generic Sierra Chart local sim slots — flagged explicitly rather than guessed. **User confirmed the target is `Sim1`** despite already having 8 unrelated pre-existing resting orders on it (an old "2 targets with common stop" bracket template, `MNQU5`/`MNQH6`, clearly unrelated to this build) — those are left untouched, not this app's concern.
+
+**Entry order type, resolved via explicit user decision**: always **LIMIT at the setup's own entry level**, never MARKET — matches what the app's own simulation already assumes, avoids the fill-price mismatch a 2026-09-25 cluster-sibling bug already burned this codebase on once.
+
+**Built and verified (imports/syntax clean, several pieces empirically tested against the real connection)**:
+
+
+
+
+
+- `order_placements` table (`scripts/migrate_add_order_placements_table.mjs`) — `client_order_id` UNIQUE, partial unique index `(setup_id) WHERE purpose='ENTRY'`, and (added after the DeepSeek review below) a second partial unique index `(setup_id) WHERE purpose='EXIT' AND status IN (<all non-terminal + FILLED>)` closing a real double-flatten race. `status` widened from an initial `VARCHAR(20)` to `VARCHAR(32)` after DeepSeek caught that DTC's own `PENDING_CANCEL_REPLACE` (22 chars) would have overflowed it on the very first real cancel-replace update.
+
+
+
+
+
+- `dtcClient.js` — now also implements `cancelOrder()`, `requestOpenOrders()`/`requestCurrentPositions()`/`requestTradeAccounts()` (real type codes 300/305/400, fields verified against DTCProtocol.h), and `isLive()`/`getConnectionHealth()` — a heartbeat-age-based liveness check (DeepSeek's 2nd-most-important finding: `isConnected`/`isLoggedOn` are booleans that can't detect a half-open socket; a stale connection now shows `live:false` even though the socket object still looks open).
+
+
+
+
+
+- `killSwitch.js` — file-based (`scratch/sierra_chart_kill_switch.json`), fails closed (halted) on every process boot and on any read error, atomic writes.
+
+
+
+
+
+- `orderEligibility.js` — **ENTRY-only** (explicit doc comment added after DeepSeek flagged that gating exits through this would mean halting the kill switch mid-trade blocks flattening, which is backwards). Built on `computeSuppressionSets()` directly, never `getCanonicalLiveStatus()`/`isLiveEligible()` (those honor `SUPPRESS_ALL_DISABLED`, a research override with no business gating real capital).
+
+
+
+
+
+- `reconciliation.js` — `placeEntryOrder()` (idempotent via a deterministic `E<setupId>` clientOrderId + the DB unique index), `placeExitOrder()`, `handleOrderUpdate()`, `reconcileAgainstBroker()` (a live test immediately found 8 real "unknown to this app" orders on `Sim1`, exactly the drift class it's designed to catch — worked as intended on the first real try).
+
+
+
+
+
+- `contractSymbol.js` — `resolveMnqFrontMonthSymbol(dateStr)`, a deterministic date-derived MNQ front-month resolver (DeepSeek: don't reuse `price_bars_contract_calendar`, it's NQ-scoped, volume-lagged, and can be stale/missing for "today"). Cross-checked against `acdShared.js`'s existing `isInsideNqRollWeek()` for early-roll behavior; verified against 9 hand-picked dates including both roll-week boundaries. **Also found, empirically, against real resting orders returned by `reconcileAgainstBroker`'s live test**: Sierra Chart's real order-symbol convention embeds the exchange directly into the Symbol string (`"MNQU5.CME"`) with `Exchange` left **empty**, not the separate DTC `Exchange` field — `resolveMnqFrontMonthSymbol()`'s `orderSymbol` output matches this real convention; NOT yet confirmed via an actual order submission (deferred to the first controlled real test: a deliberately unfillable LIMIT, immediately canceled, checking for `OPEN` not `REJECTED`).
+
+
+
+
+
+- `orderSweep.js` — the actual entry/exit wiring, built exactly to DeepSeek's recommended "Option C" shape: a single centralized sweep (not a hook at each of the 6+ entry insert sites / 10 standalone detectors / ~15-20 exit resolution writers this file's own header comment enumerates), called once per poll, entry pass keyed on `origin_status='ACTIVE' AND status='ACTIVE' AND fired_at` within the last 3 minutes with no `ENTRY` row yet, exit pass keyed on `status IN ('RESOLVED','EXPIRED')` with no live/filled `EXIT` row yet. Per-row try/catch with loud (`console.error`, not `.catch(() => {})`) logging — DeepSeek explicitly flagged the existing SHADOW-tagging `.catch(() => {})` convention as inadequate for real order placement. **Not yet wired into `acd.js`** — the one-line call site (`runSetupDetection()`, right after `structurallyInvalidateSetups()`) is the last step and is being held for explicit confirmation before landing, even though the kill switch defaults to halted regardless.
+
+**DeepSeek design review (dispatched as a plan-critique, not a code-review — no code existed yet for the sweep at dispatch time) — one CRITICAL, blocking bug found and fixed same session, before any real order was ever placed**: the original `placeExitOrder()` used the ENTRY order's own `side` for the "exit" market order instead of flipping it — a BUY entry would have produced a BUY "exit," **doubling the position instead of closing it**. `killSwitch.flattenPosition()` already flipped the side correctly; `placeExitOrder()` did not, despite doing conceptually the same thing. Fixed (`OPPOSITE_SIDE` lookup) and verified directly against the real diff, not just trusted. Also from the same review, all fixed same session: the exit double-flatten race (closed via the 2nd unique index above + an application-level idempotency pre-check), the `VARCHAR(20)` overflow, the zero-fill-check's honest limitation (mitigated with a live `requestCurrentPositions()` fallback before concluding "nothing to do" when the app's own DB record reads a stale zero), and the `isOrderEligible()`/exit-scoping ambiguity.
+
+**Still open, explicitly not done**:
+
+
+
+
+
+- The one-line `sweepRealOrders()` call site into `acd.js` — held pending explicit go-ahead (kill switch stays halted either way, but this is the line that makes the capability to auto-fire actually exist in the running process).
+
+
+
+
+
+- A real, controlled first-order test (deliberately unfillable LIMIT, immediately canceled) to confirm `contractSymbol.js`'s symbol-format guess against an actual `SUBMIT_NEW_SINGLE_ORDER` round-trip — never tested, only inferred from resting orders that predate this build.
+
+
+
+
+
+- A code-review pass (not just the design-critique already done) of the actual shipped diff, per the standing 3-phase discipline, once the wiring lands.
+
+
+
+
+
+- Dashboard (`src/views/SierraChartView.jsx`) — not started.
+
+
+
+
+
+- No daily-loss-limit / account-level circuit breaker (explicit user decision, deferred for this first build — the kill switch is the only account-level gate).
+
+
+
+
+
+- `dtcClient.js` has grown to ~435 lines, flagged by the repo's own size-nudge hook as a cohort outlier — judged deliberate (one cohesive "speak the DTC protocol" surface), not scope creep, but worth re-checking if it keeps growing.
+
+**Continued 2026-09-29 — real trading went live overnight, a serious real bug was found and fixed the same session, DeepSeek-reviewed both before and after.**
+
+**The kill switch was armed for real** (explicit user confirmation) and the system autonomously placed real orders overnight — first proven with a real controlled submit/cancel round-trip (`BUY LIMIT MNQZ6.CME @ 29000`, deliberately 1,466pts from market, confirmed `ACCEPTED`→`CANCELED` cleanly), then for real: `PD_VAL_FADE_LONG` (setup 127678) became the first-ever automated entry. Real trading continued across 10 distinct setups overnight (`MR1_FADE_SHORT_OVERNIGHT`, `WS1_FADE_SHORT_OVERNIGHT`, `PD_POC_FADE_LONG/SHORT`, `GLOBEX_VWAP_MAGNET_SHORT`, more `PD_VAL_FADE_LONG`), several with genuine fills.
+
+**A confirmed, serious bug was found while investigating why the user only saw "4 trades" on their Sierra Chart chart** (they were actually looking at a different chart/symbol than the trade panel's own account state — a real but harmless confusion, resolved by checking `reconcileAgainstBroker()` directly). Tracing the real order history surfaced something much more important: **`placeExitOrder()`'s fallback (added to handle a stale-DB-record edge case) asked the broker for the account's aggregate position on `MNQZ6.CME` and attributed it to whichever setup was being checked — but every setup trades the exact same single instrument, so this aggregate has zero concept of "whose position is this."** Two real, confirmed consequences: (1) two LONG `PD_VAL_FADE_LONG` fires (127678, 127686) got a BUY exit instead of SELL — the exact same-side-doubling bug an earlier DeepSeek review had already caught and fixed in isolation, reintroduced through a different path; (2) when Claude used the dashboard's own "Stop" button as an emergency halt, it flattened "quantity=2" attributed to setup 127687 — whose own entry order was `CANCELED` and never filled at all, meaning that quantity belonged to a completely different setup's real position. Root timing cause: multiple setups genuinely held concurrent real positions overnight (127682 open 00:01–02:10 ET while 127683 entered at 01:33 ET, squarely inside that window) — something the system had no rule against.
+
+**A second, contributing bug in the same trace**: `handleOrderUpdate()` applied whatever `ORDER_UPDATE` arrived last with no ordering/terminal-state protection — real example, `PD_VAL_FADE_LONG`'s entry (127678) shows `status='CANCELED'` with `InfoText="Order cancellation failed | The order is no longer working and cannot be canceled"` (i.e. Sierra Chart's own message implies it had already filled), yet nothing protected the stored `FILLED` state (if one had briefly existed) from being overwritten by this confusing follow-up message.
+
+**A third, lower-severity, fully root-caused bug**: real broker-reported fill prices (`AverageFillPrice`/`LastFillPrice`) were stored ~100x too large (e.g. `3043725` instead of `30437.25`). Root cause confirmed via a live `SECURITY_DEFINITION_FOR_SYMBOL_REQUEST` for `MNQZ6.CME`: it returns `DisplayPriceMultiplier≈0.01`, and broker-originated fill-price fields need multiplying by this factor. `Price1`/`Price2` this app sets when submitting are unaffected.
+
+**Immediate response**: kill switch halted the moment the bug was confirmed (Claude's own initiative — halting is always the safe direction and doesn't need to wait for permission the way arming does). Verified directly against the broker (not just this app's own tables) that the account was genuinely flat (0 net position across `MNQZ6.CME`/`MNQU6.CME`/`NQM6.CME`) with no orphaned real orders beyond the 8 pre-existing unrelated ones — no live unmanaged exposure at any point after the halt.
+
+**Fix, DeepSeek-design-reviewed before being built** (a second, dedicated design-critique dispatch, separate from the original pre-launch one): the aggregate position is now used ONLY as a fail-closed cross-check, never as an attribution source. Specifically:
+1. **A real DB-enforced singleton "one position open, account-wide, at a time" invariant** — `order_placements.position_open` + `idx_order_placements_one_open_position` (a unique index on the constant expression `(1)`, the standard Postgres singleton idiom), matching the user's own real trading style. `orderSweep.js`'s entry pass checks this via `isAnotherPositionOpen()` as a fast path; the DB index is the real guarantee against a race between two overlapping polls.
+2. **`getBrokerReportedPosition()` removed entirely as an attribution source.** `placeExitOrder()`'s zero-fill path is now just: cancel the still-resting entry, or do nothing — never guess from the broker's aggregate.
+3. **`checkPositionInvariant()`** (new) — the ONLY legitimate use of the aggregate now: compares the broker's real net position to what this app's own per-order fill records expect, and HALTS + flags loudly on any mismatch, run on every logon/reconnect. Proved itself immediately on the very first restart after shipping — correctly caught that the pre-fix historical records (corrupted by the bug) didn't reconcile, and halted rather than silently proceeding.
+4. **A terminal-state lattice in `handleOrderUpdate()`** — `FILLED` is absorbing (nothing can overwrite it, regardless of arrival order or timestamp); a `CANCELED`/`REJECTED` message may only be corrected by a later real `FILLED`, never the reverse; `filled_quantity` can never decrease. `LatestTransactionDateTime` (a DTC `SCDateTime`, never compared to wall-clock time) is a secondary guard for non-terminal transitions only.
+5. **`order_placements_updates`** (new, append-only) — every real `ORDER_UPDATE` is now logged in full, not just overwritten into a single `raw_last_order_update` column. This gap was WHY last night's records couldn't be forensically repaired (DeepSeek: "you cannot reconstruct the TRUE sequence from a column that only ever held the latest message").
+6. **Real `DisplayPriceMultiplier` fix** — `priceMultiplier.js` (new), a per-symbol cache fetched live via `dtcClient.requestSecurityDefinition()` (new method, DTC type 506/507), applied to broker-reported fill prices only.
+7. **Migration record brought back in sync with reality** — the EXIT double-flatten guard index (`idx_order_placements_one_live_exit_per_setup`) had been created directly against the live DB earlier but never added to the migration file; DeepSeek caught this drift. Fixed in both the original creation script (so a fresh install gets it) and folded into a new incremental migration (`migrate_order_placements_safety_fixes_20260929.mjs`) for the live DB.
+8. **Historical data**: the pre-fix rows (ids 1-18) contain real but uncertain status/side data that DeepSeek confirmed cannot be forensically reconstructed from what was stored. Explicit user decision: accept the independently-verified-flat account state and reset `checkPositionInvariant()`'s baseline to count only from that point forward (`order_placements_invariant_baseline`, one row, `baseline_order_id=18`) rather than attempt an unreliable repair.
+
+**Verified after the fix**: all modules import clean, lint clean, `test_invariants.mjs` unchanged from baseline (114/174, pre-existing and unrelated), server restarted and confirmed single-instance, `checkPositionInvariant()` now reports `match:true` on reconnect.
+
+**Code-review pass completed the same night — and it caught two CRITICAL bugs in the fix itself, both fixed and independently re-verified before anything else happened.** DeepSeek reviewed the actual shipped diff (not just the design, which it had already reviewed) per the standing "a fix needs the same discipline as the original change" rule:
+
+1. **`checkPositionInvariant()`'s expected-net formula had a sign bug** — it summed ENTRY and EXIT contributions separately and then subtracted them, but `side` already encodes the correct signed direction for both (a SELL exit closing a long is `-qty`). A completed round trip (entry +1, exit -1) computed as `1 - (-1) = 2` instead of the real `0` — meaning the fail-closed guard would have spuriously halted the system after **every single successfully closed trade**, not just on a real mismatch. Fixed to a single signed sum, no purpose split. Verified with a real synthetic round-trip insert: fixed formula correctly computes `0`.
+2. **The singleton index didn't actually enforce anything at the point that mattered.** `insertPendingOrder()` never set `position_open` at insert time (defaulted `FALSE`), and the index only fires on a `position_open=TRUE` conflict — so two concurrent ENTRY inserts for different setups both started `FALSE`, neither hit the index, and both could go on to fill for real before anything caught it. **This also invalidated the "verification" test from earlier in the session** — that test manually set `position_open=TRUE` on both synthetic inserts, which is not what the real code path does, so it proved the DB constraint mechanism works in isolation without proving the actual application flow was protected. Fixed by claiming the slot (`position_open=TRUE` for ENTRY) at insert/submission time instead of waiting for a fill confirmation, with cleanup on submission failure (`ERROR` status), on a truly-never-filled cancel/reject, and (via an explicit transaction, since it's a different row) when the matching EXIT fills. Re-verified with a real test through the ACTUAL `insertPendingOrder` code path this time — the second concurrent insert was correctly suppressed by the index via `ON CONFLICT DO NOTHING`.
+
+Three more real findings, also fixed: the terminal-state-correction path (`CANCELED/REJECTED → FILLED`) was still gated by the timestamp guard, which would have silently dropped the exact real-world correction the lattice exists for (a REJECTED cancel-attempt arriving with a *newer* timestamp than the FILLED confirmation it should be corrected by) — fixed to make terminal corrections timestamp-independent, timestamp only gates non-terminal (working→working) transitions now. `position_open` bookkeeping is now atomic with the main status/quantity write for the entry-row-updating-itself case (a `CASE` expression in one UPDATE), and wrapped in an explicit transaction for the cross-row case (EXIT fill clearing the ENTRY's flag). `filled_quantity` now uses `GREATEST()` in SQL (atomic) instead of a JS-computed max read earlier in an async handler that can race against a concurrent update. Minor: a late `FILLED` correction now clears a stale `reject_reason`; a doc comment overstating the `ClientOrderID`-matching mechanism was corrected.
+
+**Independently confirmed correct, not just asserted**: the sign convention (`Quantity` positive=long) DeepSeek confirmed via `DTCProtocol.h` — `s_PositionUpdate` has no separate side field at all, so the sign of `Quantity` is structurally the only possible carrier of direction. Still worth a one-time live confirmation against a real short fill, but this is no longer an open unknown, just an unconfirmed-in-practice fact.
+
+**Current state, re-verified after all fixes**: server restarted, single stable process confirmed, `checkPositionInvariant()` still reports `match:true` with the corrected formula, lint clean, `test_invariants.mjs` unchanged from baseline (114/174), no new server errors.
+
+**Still open, explicitly not done**:
+
+
+
+
+
+- Kill switch remains HALTED — not re-armed since the fix, pending a separate decision (deliberately kept distinct from "the fix is verified," per this session's own standing halt-vs-arm asymmetry).
+
+
+
+
+
+- A one-time live confirmation of the position sign convention against a real short fill hasn't happened yet (low priority — a wrong sign only causes extra halts, never a wrong trade).
+
+
+
+
+
+- No real fill has yet been tested against the NEW single-position gate in practice under real DTC conditions (only verified via direct SQL against the real constraint) — first genuine end-to-end test happens whenever this is next armed.
+
+
+
+
+
+- A worked lesson from this thread, worth restating: the FIRST verification of the singleton index (earlier the same session) gave false confidence because it tested the DB mechanism in isolation rather than the actual application code path that uses it — a "test that the constraint exists" is not the same claim as "test that the code that's supposed to trigger it actually does."
+
+
+---
+## Archive batch: 2026-10-07 (cutoff 2026-09-30, keep last 7 days)
+
+## ✅ 2026-09-28: `PROMOTE_ALL_MODE` — the real-N≥20 promotion floor removed for most setup_types, 4 worst offenders kept suppressed, family-pairing preserved
+
+**Same night as the `SUPPRESS_ALL_DISABLED` turn-off below, and directly downstream of it.** With that flag off, "Live" (the real, N≥20-validated 11-type roster) went back to badly trailing "All" (Live + everything still being tracked in the background) on a near-daily basis — confirmed real, not a one-off, across several days. The user's frustration built over the course of the thread ("its been 6 weeks...only 9 live setups... live is doing worse than all. its getting old", "im done seeing ALL trades killing live... it makes no sense to hinder live when those are the trades that will grow an account like i want") and culminated in a direct proposal: remove the real-N≥20 requirement (`SUPPRESS_MIN_N` in `scripts/backtest_setup_status.mjs`) for setup_types whose backtest history already looks strong, replacing it with (1) a real live consecutive-loss circuit breaker as pure downside protection and (2) an explicit, non-negotiable rule — **if one side of a LONG/SHORT family promotes, the other side must promote too**: "I can't have longs and not shorts or vice versa."
+
+**Extensive testing before any code was touched, all real-dollar, all against the true historical `active_setups` population (`REAL_TRADE_FILTER`, `is_cluster_primary` deduped):**
+## ✅ 2026-09-28: "Only one trade fired on quick-check" — 6 independent bugs found and fixed, none of them what they first looked like
+
+User reported seeing only 1 trade on quick-check.html overnight. Investigation found 6 separate, real issues stacked on top of each other — worth reading in order since each one's fix was necessary but not sufficient on its own, and #6 is a real, self-inflicted regression introduced by #4 that needs to be read together with it.
+
+**1. `GLOBEX_PAUSED` was silently overriding `SUPPRESS_ALL_DISABLED`.** `detectGlobexSetup()` (`acd.js` ~line 809) had an unconditional force-SHADOW override added 2026-09-16 on the user's own call at the time — NOT based on a proven negative-EV finding (the code comment itself says the real numbers were flat/positive for Globex then; RTH was the bigger drag). It sat after and overrode every other live-eligibility check, including the 2026-09-25 `SUPPRESS_ALL_DISABLED` override ("move everything to live for the time being") — so that override never actually reached Globex. Confirmed live: 100% of that night's 15 real Globex fires were `SHADOW`-origin, 8 explicitly tagged `GLOBEX_PAUSED`. Never logged in CLAUDE.md/OPEN_THREADS.md at the time, unlike almost everything else in this codebase. **Removed** (both here and its companion override in `globexFlushDetector.js`'s `getLiveStatus()`, added by DeepSeek review the same day in 2026-09-16 since `detectGlobexSetup()`'s pause never touched that file's separate `GLOBEX_FLUSH_*` insert path) — Globex candidates now flow through the same live-eligibility path as everything else. User's explicit call: resume live Globex firing now.
+
+**2. The Globex tab's own toggle button collapsed the section on every tap.** Fixing #1 didn't actually make the 15 fires visible — `quick-check.html`'s Session Timeline header (`#timeline-head`) has `onclick="toggleTimelineCollapse()"` on the whole row, and the Live/All/Globex toggle buttons inside it (delegated click handler, `document.addEventListener('click', ...)`) never stopped propagation. Tapping "🌙 Globex (15)" to reveal the list bubbled up into the SAME header's collapse toggle in the same click — so revealing the list and hiding it happened in one gesture, every time (a coin flip depending on the collapse state at tap time). A `stopPropagation()` added to the existing bubble-phase delegated listener didn't fix it either on the first attempt — bubbling visits `#timeline-head` (an ancestor of the buttons) BEFORE the event ever reaches `document`, so the ancestor's onclick had already fired by the time that listener ran. Fixed by moving the listener to the CAPTURE phase (3rd arg `true` to `addEventListener`), which runs top-down before the event reaches `#timeline-head` at all. Verified via Playwright: chevron now stays expanded (▾) after tapping Globex, all 15 rows render.
+
+**3. `tagFilter` (the All/DG/MF/ST row) was stuck on a stale value from a prior session, with zero visual warning.** The user's actual phone (screenshot via `tj.6claire.page`) showed "MF" selected instead of "All," narrowing 15 real fires down to the 1 that happened to carry the `momentum_against_fade_shadow` tag — this is what "only one trade" actually was. `tagFilter` persists to `localStorage` (added 2026-09-16) and was never included in the 2026-09-25 fix that stopped `performanceFilter`/`clusterView`/`timelineFilter` from doing the exact same thing (a stale stored value silently winning on every reload) — the two changes landed a day apart and nobody connected them at the time. Fixed the same way: `tagFilter` no longer reads/writes `localStorage`, hardcoded to `'all'` on every page load, in-session toggling still works. Verified via Playwright with the exact stale state (`localStorage.tagFilter='momFade'`) reproduced first, then confirmed fixed.
+
+**4. A 4th, separate gap in the same shape as #1, found from the user's own follow-up question ("why aren't all the trades firing in live") after #1 shipped.** `acd.js`'s "suppressed near-level audit" INSERT branch (the else-branch that writes a SHADOW row for any candidate that fails the main live-eligibility check — reasons `CLUSTER_ALREADY_FIRED`/`SAME_TYPE_REFIRE_COOLDOWN`/`SUPPRESSED_FADE`/`DOW_SUPPRESSED`/`S2_DOUBLE_COUNTER`/`TREND_COUNTER_FADE`/`SUPPRESSED_OTHER`) unconditionally hardcoded `status='SHADOW', origin_status='SHADOW'` regardless of `SUPPRESS_ALL_DISABLED` — unlike the main `sortedCandidates` winner path and the `CLUSTER_SIBLING_TOUCH_CREDIT` branch, both of which already respected the flag. User clarified the real stakes are low right now ("Its fake capital" / "Simulation" — no real DTC order placement is wired to `origin_status` yet, that's a separate future `orderEligibility.js` gate) and confirmed a uniform fix is fine: promote regardless of which specific reason landed here, except `CAPITAL_EXPOSURE_OVERRIDE` (the one data-integrity gate this flag never bypasses anywhere else either). Extracted to a new exported `suppressAllDisabledOverrides(setupType)` in `setupEligibility.js` (per explicit user direction, "Extract from acd" — not left inline) rather than reusing `isLiveEligible()` directly, since that function has no way to know about these non-SETUP_STATUS suppression reasons and would incorrectly promote these candidates even with the flag OFF. Verified: `node --check`/`eslint` clean on both files; a real module-import test confirmed the function is actually exported and behaves correctly (`IB_BEARISH` → promotable, `IB_BULLISH` → blocked, matching its known `CAPITAL_EXPOSURE_OVERRIDE` membership); `test_invariants.mjs` byte-identical FAIL/WARN counts (20/94) before/after via `git stash`, every diff line explained by ordinary live-data drift (doc file sizes, gate counts, unresolved-row count — nothing touching this change); server restart confirmed via process start time (10:58 ET) postdating the edit. **Not yet independently confirmed firing live** — no candidate has passed through this specific branch with `SUPPRESS_ALL_DISABLED` promotion since the restart as of this writing (only one post-restart row observed, from the unrelated cluster-sibling branch); the fix is verified by code inspection + function-level test + invariants stability, not yet by a live fired row. Watch for a `suppression_reason='SUPPRESS_ALL_DISABLED'` row on this branch going forward to close that last gap.
+
+**5. A 6th real gap (5th distinct insert site) found the same way, later the same morning, from the user's own follow-up questions after Sierra Chart restart** ("why does it say late still" / "doesn't come up on live," about a MAJOR_PIVOT_DEFENDED_BREAK_SHORT card labeled "BACKGROUND ONLY — NOT LIVE" and a batch of OR5/OR10/5D_OR_MID rows showing "⏰ Xm late" badges). Two genuinely separate findings came out of investigating this, not one:
+## 🔄 2026-09-28: Sierra Chart order-placement connection — deeper-scoped via real docs, target account confirmed, still not started
+
+User asked to scope out placing real trades via Sierra Chart from this app — a genuine escalation from everything else in this codebase, which only ever *watches* (file-based TAL/price-bar imports, one-way). Current state confirmed: **zero outbound connection exists today.**
+
+**Target account — CORRECTED same day, 2 rounds of direct user clarification.** First pass: user confirmed the target was "the prop firm's Rithmic-backed sim account," and said they personally access it by "turning Trade Simulation Mode on." Taken together this looked like a resolution of the doc contradiction below (Trade Simulation Mode reaching real Rithmic order routing) — but a direct follow-up question (does a Trade Simulation Mode fill actually register on the prop firm's own platform/evaluation tracking, or does Sierra just simulate locally against real prices) got a clear answer: **Sierra just simulates locally against real prices.** So Trade Simulation Mode is, in fact, exactly what the generic Sierra Chart docs describe — real-time Rithmic pricing, but fills never reach the prop firm's own account or evaluation tracking at all. This means there are genuinely **two distinct targets**, not one:
+1. **Trade Simulation Mode** — zero stakes, real pricing, proves the DTC/ACSIL mechanics end-to-end, but doesn't touch the prop firm's real order-routing or evaluation P&L. A good, safe first rung for proving the pipeline works at all.
+2. **The prop firm's real evaluation/funded account** (still sim capital, real Rithmic order routing, fills that count toward their platform) — what's actually needed if the end goal is ever to pass a challenge or run a funded account off this automation. How this connection differs from #1 in Sierra Chart (a separate Rithmic login, presumably) is still unconfirmed — not yet asked.
+Do not conflate the two going forward — a build that only proves out #1 has NOT proven anything about #2's real order-routing path, despite both being "zero real capital."
+
+**Real research this session** (fetched Sierra Chart's own docs directly, not guessed — `reference_sierra_chart_docs.md`'s fetch-first convention). Materially updates and partly corrects the original 2026-09-27 scoping below:
+
+1. **Sierra Chart has 3 distinct "simulation" concepts, not 1** — worth naming precisely since they have completely different technical requirements: (a) **Trade Simulation Mode** (`Trade >> Trade Simulation Mode On`) — fully local/client-side, zero broker or Rithmic connection, no account balance tracking; (b) a separate broker-hosted **"Simulated Trading Service"** with account balance tracking and server-side persistence — not researched further, not the target; (c) **the prop firm's real Rithmic-backed sim/eval account** (the confirmed target) — real order-routing mechanics, just against sim capital. Only (c) actually proves anything about the real order-routing pipeline.
+
+2. **A real, unresolved contradiction found between two Sierra Chart doc pages, not papered over**: the DTC Protocol Server page states it "supports both non-simulated and simulated trading," but the Trade Simulation Mode page separately states local Trade Simulation Mode specifically "cannot be accessed through external tools like the DTC Protocol Server." These are in tension. Doesn't block the confirmed plan (target is (c), not local sim mode) but would matter if a cheap, fully-isolated pre-test via local sim mode is ever wanted before touching the real prop account — resolve by testing directly against the real Sierra Chart install, not by trusting either doc page.
+
+3. **DTC Protocol is more tractable than originally scoped**: supports plain **JSON encoding** (not just raw binary), so a Node.js client is a realistic build target, not "implement a binary wire protocol from scratch." Sierra Chart ships a **DTC test client** for validation, and `.proto` (Protocol Buffers) definitions exist for a binary client later if wanted. Confirmed: **DTC does not route orders itself** — it relays into whichever trading service Sierra Chart is already logged into, so which account gets hit is entirely controlled by Sierra Chart's own login state, not by the DTC client. Required Sierra-Chart-side config: Global Settings → enable **DTC Protocol Server** + the separate **"Allow Trading"** toggle (data-only is a different setting) + **"Require Authentication"** for any non-localhost client + port/IP restrictions.
+
+4. **ACSIL needs correction, not just restatement**: still requires a compiled C++ DLL (MinGW remote-build or local Visual C++) loaded into Sierra Chart. Real order-submission functions exist per the docs but weren't named in what was fetched — a real gap to close before choosing this path. **Correction to the original 2026-09-27 entry**: that entry claimed a "documented (if under-specified) ability to read from a web server" for ACSIL, meant to let a study poll this app's own API — the docs fetched this session do **not** confirm that capability at all. May have been an overstatement of a different Sierra Chart feature in the original research pass. Needs re-verification before ACSIL is trusted as the "poll this app's API" path — this materially weakens the case for ACSIL over DTC versus how the original entry framed it (which leaned ACSIL as "the more standard/supported path").
+
+**Given the above, DTC now looks like the stronger candidate** (more tractable client build, explicit trading support, doesn't require compiling/loading a DLL into Sierra Chart itself) — not a final decision, but a real shift from the original entry's ACSIL lean.
+
+**Still open, unchanged from the original scoping**: Rithmic's own separate, independently-documented API (R|Trader Pro / RithmicApi) exists as an alternative to going through Sierra Chart at all — not explored, user's ask was specifically "via Sierra Chart"; how the prop firm's Rithmic sim credentials actually get configured as a Trading Service connection in Sierra Chart (prop-firm-specific onboarding, not a Sierra Chart generality); real safeguards before ANY order-placement goes live even against the sim account (a kill switch independent of this app's own logic, position/size limits, fill reconciliation — real `ORDER_UPDATE` messages need to write back into `active_setups` instead of the app continuing to simulate its own resolution, idempotency so one setup fire can never become two live orders, and handling for a dropped DTC connection or a Rithmic disconnect mid-order).
+
+**User's staged rollout plan (5 stages, Trade Simulation Mode → prop firm sim/eval → safety layer → real evaluation attempt → live capital), plus a Phase 0 DeepSeek design critique, both done same day.** Full critique: `scratch/deepseek_response.md` (also saved as `scratch/deepseek_response_20260928_081312.md`). Independently spot-checked before trusting — its `getCanonicalLiveStatus()`/`isLiveEligible()` citation verified verbatim against CLAUDE.md's own text before acting on it. Real findings, not generic advice (cites actual function/file names and real prior incidents from this codebase throughout):
+
+1. **DTC over ACSIL confirmed correct** — ACSIL's only real advantages (in-process, no network hop) don't matter for a system that fires on 15s polls/bar closes, not ticks. But DTC's real-world reliability/latency/reject/reconnect behavior is genuinely unverified (documented + has a test client is not evidence about drop behavior) — Stage 1 needs an explicit failure-injection matrix (kill the TCP link mid-order/mid-fill, send a deliberately-rejectable order, verify auth actually rejects an unauthenticated client), not just a happy-path smoke test.
+2. **Safety sequencing was inverted in the original plan — FIXED.** Kill switch, hard size/position limits, and the idempotency DB constraint must exist BEFORE Stage 2 (the first real-routed order), not "during/after" as originally scoped — they're broker-independent and cheap to build first.
+3. **Exit model was unscoped and blocking — RESOLVED by explicit user decision, 2026-09-28: no real resting protective stop, exits stay simulated** (the app's existing `resolveSetupsByPrice()` bar-walk logic decides when to exit, not a broker-side bracket order). Real, accepted consequence: between a real entry and whatever moment the app's logic decides to exit, the position has no broker-side floor — a process crash or DTC disconnect mid-trade leaves it unprotected until manual intervention. Open follow-up, not yet confirmed with the user: does the app's exit DECISION still result in a real DTC close order being sent (the only way a real position ever actually closes), or is post-entry order management out of scope entirely for now? Resolve this explicitly before Stage 1 is built, not assumed.
+4. **A real, specific collision risk with existing code, not hypothetical**: a real-order-eligibility gate must NOT reach for `getCanonicalLiveStatus()`/`isLiveEligible()` (the obvious functions to reach for by name) since they honor `SUPPRESS_ALL_DISABLED` — a real order could fire on a setup_type already proven to lose money. Must use `computeSuppressionSets()` instead, plus its own single choke point every one of the 10 standalone `INSERT INTO active_setups` detector files funnels through (several already have inconsistent live-status logic of their own). Real order state must live in a NEW table (`order_placements` or similar) keyed by `active_setup_id`, never in `active_setups.resolution`/`actual_pnl` (the app's own simulated bar-walk outcome) — conflating the two risks the exact real/synthetic-mixing bug class this codebase has hit repeatedly (`origin_status`/BACKFILL). The override-chain-ordering lesson (CLAUDE.md, added earlier the same night from the `GLOBEX_PAUSED` incident) applies directly and in both directions here: a real-order gate placed early in a chain can be silently defeated by a later force-SHADOW override; placed after a force-live path, a display-only decision could leak into real trading.
+5. **Missing from the safety layer, not yet designed**: a cancel/flatten path (the kill switch as scoped only stops NEW submissions — nothing cancels a working order or flattens an open position — flagged as the single biggest omission given exits now stay simulated per point 3); startup/position-state recovery (must reconcile against the BROKER's truth on process restart, not assume flat — this host has a documented history of supervisor pile-ups); a bounded reject/retry policy; the daily-loss breaker must read real fills from the new order table, never `active_setups.actual_pnl`; a global rate limit independent of per-row idempotency; a persisted audit log of every order decision and which gate allowed it; DTC credential/secret handling (not mentioned in the original plan at all); reusing this codebase's vetted ET timestamp conventions for any real order's `expires_at`/timing fields (a recurring naive-timestamp bug class here).
+6. **Good addition accepted into the plan**: a "Stage 1.5" — connect to the real DTC path with real Rithmic authentication, but in a mode where orders can't reach the broker. Closes the gap between Stage 1 (fully local) and Stage 2 (real routing) that the original plan left untested.
+
+**Not yet resolved**: whether the exit-decision still sends a real DTC close order (point 3's open follow-up) — needs a direct answer before Stage 1 scope is final. Nothing built — still Phase 0/design only.
+
+**First real connection test, same day: `ECONNRESET`, root cause narrowed but not confirmed.** `scripts/test_dtc_connection.mjs` against `192.168.4.178:11099` consistently fails with `ECONNRESET` right after the client sends its `LOGON_REQUEST` — re-tested after the user restarted Sierra Chart specifically to see if this would clear it; it didn't. Isolated via a raw TCP connect test (no DTC bytes at all, `/dev/tcp` against both port 11099 and 11098): the TCP handshake itself succeeds cleanly on both ports, ruling out the "Allowed Incoming IPs" setting as the cause (that would block the handshake, not reset after data arrives) and ruling out the earlier hypothesis from before this reset. `dtcClient.js` connects with plain `net.createConnection` — no TLS. The reset happening specifically once plaintext protocol bytes are sent, immediately after a clean handshake, is the textbook signature of sending plaintext to a TLS-expecting server. **Leading hypothesis: Sierra Chart's DTC Protocol Server has "Require TLS" enabled** (one of the 4 toggles in that settings dialog alongside Allow Trading/Require Authentication/Allowed Incoming IPs) — not confirmed, since it can't be checked without looking at the user's own screen. **User's own next step, explicitly deferred**: "I'll check TLS later." If confirmed on, the fix is either (a) have the user uncheck it (this traffic never leaves the local network) or (b) add TLS support to `dtcClient.js`. Don't re-diagnose this from scratch next session — the TCP-succeeds/protocol-resets isolation is solid and doesn't need re-deriving, only the "Require TLS" checkbox itself needs eyes-on confirmation.
+
+**Module layout locked in, user-confirmed 2026-09-28 (see `feedback_acdjs_scope_creep_recurs_at_wiring_step.md` memory — 3rd recurrence of "don't build this in acd.js," said preemptively this time before any code existed)** — its own directory, `acd.js` never touches it directly:
+
+### From "✅ 2026-09-29: Sierra Chart reconciliation cadence + a real broker-side stop — BUILT, both items shipped"
+
+- `handleOrderUpdate()` (`reconciliation.js`) should return whether it just applied a REAL terminal transition (a status that newly became `FILLED`, or newly became `CANCELED`/`REJECTED` — i.e. `shouldApplyStatus()` returned true AND the new status is terminal). This is close to a one-line addition since `applyStatus`/`newStatus` are already computed there.
+
+
+
+
+- The actual trigger belongs in **`connectionManager.js`**, NOT inside `handleOrderUpdate()` itself — `handleOrderUpdate` lives in the same file as the reconciliation functions, and reconciliation's own `requestOpenOrders()`/`requestCurrentPositions()` calls generate their own `ORDER_UPDATE`/`POSITION_UPDATE` messages that would otherwise re-trigger it. `connectionManager.js` already owns the one `orderUpdate` listener (currently just `handleOrderUpdate(msg, client).catch(...)`) — after that resolves, if it returned "terminal transition happened," call a new debounced/single-flight `runReconciliation(client)`.
+
+
+
+
+- `runReconciliation(client)`: a single-flight-guarded function (a reconciliation already in progress must not start a second overlapping one) that runs `reconcileAgainstBroker()` AND `checkPositionInvariant()` together, then updates `lastReconciliationReport`/`lastInvariantCheck` — the same two module-level variables `connectionManager.js` already maintains from the logon path, just also updated from this new path.
+
+
+
+
+- ALSO add a periodic `setInterval` (15 min, while `client.isLive()`) calling the same `runReconciliation(client)` as the backstop for quiet nights with no real order activity at all.
+
+
+
+
+- **Persist findings** — `lastReconciliationReport`/`lastInvariantCheck` are currently in-memory only, lost on every restart, only ever written at logon. This violates this codebase's own standing "anything that drives a decision must be persisted somewhere queryable" rule (the exact lesson the `order_placements_updates` append-only-log fix, same day, was already built to address for a different table). Write each `runReconciliation()` result to a real table (a new small append-only table, or at minimum an UPSERT "latest finding" row) — not just the module-level variable.
+
+
+
+
+- **Real, already-existing but currently-dead UI surface to wire this into**: `src/views/SierraChartView.jsx` (~line 134) already renders a "⚠ Reconciliation Mismatch" card keyed off `connection.lastReconciliationReport` — it's dead today purely because the data behind it never refreshes past logon-time. Fixing the cadence is most of what's needed to make this card actually useful; no new frontend work required, just confirm the API response shape stays the same.
+
+
+
+
+- **On a mismatch found mid-session**: do **NOT** auto-flatten on an aggregate (`checkPositionInvariant`) mismatch — keep halt-only. An aggregate disagreement carries no attribution about which setup it belongs to, and auto-acting on it is the exact category of bug (misattributed real order action) the whole `reconciliation.js` rewrite earlier this session was built to eliminate. Per-order staleness (`staleInApp`, the 2 concrete rows above) is lower-stakes than an aggregate mismatch (`unknownToApp`, a broker order this app doesn't recognize at all) — surface both on the dashboard, but only `unknownToApp`/the aggregate invariant should ever halt new entries; `staleInApp` is a flag-only bookkeeping-drift signal.
+
+
+
+
+- Also worth doing in the same pass (already a separate known item, `OPEN_THREADS.md` search "double requestCurrentPositions" if still present, or check `OPEN_DECISION` list): consolidate the two separate `requestCurrentPositions()` call sites (one in `reconcileAgainstBroker`, one in `checkPositionInvariant`) into one broker-truth snapshot feeding both, so the new per-event path doesn't inherit a 2-snapshot race that doesn't exist today at the single logon-time call site.
+
+### Item 2: A real, static broker-side stop (do before real capital touches this)
+
+**Verdict: yes, build it — a STATIC stop at the setup's own calibrated `stop_level`, submitted only after the entry fill confirms. Do NOT build dynamic stop-mirroring (`CANCEL_REPLACE_ORDER`) — explicitly deferred, likely indefinitely.**
+
+
+
+
+
+- **This is cheaper than it sounds.** `dtcClient.submitOrder` already supports `orderType: 'STOP'` (`ORDER_TYPE.STOP=3` per the real DTC protocol). `cancelOrder()` already exists. `orderSweep.js`'s `sweepEntries()` **already SELECTs `stop_level` from `active_setups`** and currently just never uses it (only `entry_zone_low` is read from that query today) — the value is already one query away.
+
+
+
+
+- **Sequencing is the whole design risk — get this exactly right:**
+  1. Only submit the real STOP order once the ENTRY order's own `ORDER_UPDATE` confirms `FILLED` (handled inside `handleOrderUpdate()`, when an ENTRY row transitions to that terminal state) — never at entry-submission time. A resting STOP with no filled position behind it is a naked order that would OPEN an unwanted position if price reaches it, the opposite of protection.
+  2. The stop needs its own tracked row (a new `purpose='STOP'` value in `order_placements`, or an equivalent column set on the entry row) with a deterministic `clientOrderId`, following the exact same idempotency/reconciliation pattern entries and exits already use — it must participate in `reconcileAgainstBroker()`/`checkPositionInvariant()` like every other real order, not be a side-channel exempt from the existing safety machinery.
+  3. **Cancel the resting stop in the same breath as any real flatten** — `placeExitOrder()`'s flatten path must also `cancelOrder()` the now-irrelevant stop (using its `server_order_id`, which only arrives via the stop's own `ORDER_UPDATE` — capture it the same way entries already do). A stop that outlives its position is itself a naked order waiting to fire later. Also cancel it from `cancelUnfilledEntry()`'s path if that's ever reachable after a stop already exists (shouldn't be, given ordering above, but check).
+  4. **Time-in-force must be GTC (`TIME_IN_FORCE.GTC=2`), not the DTC default DAY.** This app trades overnight Globex, and the entire failure mode being protected against is a multi-hour host sleep/crash — a DAY stop expires at session close, exactly removing protection during the hours it's most needed.
+
+
+
+
+- **Static vs. dynamic is not a tradeoff, it's defense-in-depth for two different failure domains** — the app's own internal exit logic (breakeven-stop/wider-target/step-trail) protects against market risk while the process is alive; the static broker-side stop protects against the process itself being dead. They don't compete. The one accepted, bounded gap: if the app has already tightened to breakeven internally and then dies, the position reverts to the wider original stop rather than the tightened one on the broker side — a real but bounded degradation (a finite loss at the calibrated stop, not an unbounded one), not worth solving with dynamic mirroring.
+
+
+
+
+- **Do not build `CANCEL_REPLACE_ORDER` (dynamic stop-mirroring) as part of this** — it would introduce a second source of truth (the broker's resting order vs. the app's internal exit state) that needs active syncing every poll, and several of the dynamic exit mechanisms this would mirror are confirmed-negative or purely observational (pitch-catch: 6 independent negative tests; see CLAUDE.md's own entry). Baking unvalidated/negative-tested logic into the catastrophic-failure-protection path is backwards. `CANCEL_REPLACE_ORDER: 204` is already defined as a DTC message-type constant in `dtcClient.js` but has never been used to send a real request — leave it that way for now.
+
+
+
+
+- **Why now, on Sim1, with no real capital at risk**: not because there's money on the line yet, but because Sim1 is exactly the environment to validate the full entry→fill→stop→(cancel|trigger)→flatten lifecycle before the first real-capital trade is also the first real execution of this exact path.
+
+
+
+
+- **The nice property this creates**: `checkPositionInvariant()` (Item 1, already exists) becomes the safety net for the static stop's own worst failure mode — if the app is dead, the stop fires and reopens/closes a position the app never recorded, then the app comes back online and the aggregate comparison (`brokerNet ≠ expectedNet`) catches the disagreement and halts new entries rather than silently proceeding. Item 1's cadence fix is what makes Item 2 safe to ship, not a separate, unrelated improvement — build Item 1 first.
+
+### Explicitly NOT in scope, don't reintroduce without a fresh decision
+
+
+
+
+
+- Auto-flattening on any reconciliation/invariant mismatch (Item 1).
+
+
+
+
+- `CANCEL_REPLACE_ORDER`/dynamic stop-mirroring (Item 2).
+
+
+
+
+- Reconstructing what actually happened to the 2 specific historical stale rows (127681/127693's exits) — no forensic trail exists, accept as unknowable. Optionally mark them with an honest status (e.g. `UNKNOWN_STALE`) instead of leaving them lying about being `OPEN` forever — a pure data-hygiene cleanup, not required before building either item above.## 2026-09-28: `breakeven_stop_live` real engagement gap found and root-caused — 526/540 nominally-eligible rows silently preempted by `wider_target_mult`
+
+User question that started this: "should we make direction gate live? does it deserve to be or can it be improved?" — led to a full rigor audit of all 9 real shadow-tag risk mechanisms (all-time, day-blocked bootstrap CI, reusing `computeRigor()`/`dayBlockedBootstrapCI()`). Only `breakeven_stop_shadow` (N=451, mean +$18.79/trade, CI [$12.29, $25.63], not day-clustered, robust across RTH Midday/Afternoon/Globex) cleared the bar — every other mechanism (DirGate, MomFade, EntryFlowLong/Short, OFP, StepTrail, RangeSlope, VolRollover) was either too thin on distinct trading days (not raw N) or directionally negative. Dispatched to Gemini first; when it hadn't produced output after ~2 minutes, ran the audit directly per user request ("just run it") — reused the exact canonical predicates from `server/routes/setups.js`'s `gateStat()`/`altExitStat()`, never reimplemented.
+
+**Then a real mistake, caught and corrected the same session.** Recommended promoting `breakeven_stop_shadow` to live — the user immediately pushed back: "Breakeven stop is live isnt it? Thought we promoted it?" First answer ("no, never implemented live") was WRONG — confused `breakeven_stop_shadow` (an older, retrospective-only classifier) with `breakeven_stop_live` (a completely separate mechanism, genuinely promoted live 2026-09-21, commit `c5a0458`, real engineering, DeepSeek-reviewed, never reverted). Confirmed via `git log`/`git blame`/live code trace, not guessed.
+
+**Real, current data on the actually-live mechanism**: 540 rows carry `breakeven_stop_eligible=true`, but only 9 have ever gotten any payload, and zero have ever resolved `BE_STOP_HIT`. Root-caused precisely (not hand-waved): `resolveSetups.js:552-553` ANDs the eligibility column with `trailWidth == null && extendTarget == null && widerTargetMult == null`, and **526 of the 540 (97.4%) also carry `wider_target_mult`**, which deliberately takes precedence per DeepSeek's own 2026-09-21 review (composing BE with an already-widened target was explicitly left untested at ship time). Real effective eligible population: 9 rows, not 540. A same-day direct classification check (reusing the exported, already-verified `computeBreakevenStopClassification()`) found the underlying order-flow-rejection signal REWARDED on 9 of 12 classifiable real trades in a single session — the condition itself is common, not rare; the population was just silently starved.
+
+**Today's hypothetical PnL, computed directly** (per user's explicit ask "how much would it have worked today"): of 12 classifiable real BE-eligible trades today, 9 were REWARDED. If BE had actually engaged on all 9, net change would have been **-$118.00** — several of those trades' real path went on to hit target profitably; BE's hypothetical breakeven-exit would have turned those wins into scratches. Real, not fabricated — computed via the exact same verified function the live walker uses, not estimated.
+
+**User also asked whether they'd been lied to** ("I kept asking if be stop was working and i was lied to it seems") after being told "brand new, hasn't had a chance to engage yet" during a prior (2026-09-22) session. Searched every stored session transcript on disk (`/home/mmoniz/.claude/projects/-home-mmoniz-trading-journal/*.jsonl`) for every prior "is BE stop working" check-in — found exactly one prior instance (2026-09-22) plus tonight's own. The 09-22 answer was factually accurate on the numbers (0 engagement, correctly reported) but incomplete on the "why" (implied "just needs time," when the real cause is structural and wouldn't resolve by waiting) — no evidence of deliberate deception found in the record, reported to the user as such rather than either dismissing the concern or overclaiming intent that isn't in the transcripts.
+
+**Not yet done**: `OPEN_DECISION breakeven_stop_wider_target_composition_validation_20260928` (HIGH) scopes the real backtest needed before deciding whether BE should be allowed to compose with `wider_target_mult` instead of deferring to it — a genuinely untested combination, needs the standing confound checklist + rigor + 3-phase Gemini/DeepSeek workflow before any live change, given it would alter exit behavior for the large majority of the real fade roster. User asked for this to be scoped and named so it survives a context clear — done, see that decision's full text for the exact methodology.
+
+
+---
+## Archive batch: 2026-10-08 (cutoff 2026-10-01, keep last 7 days)
+
+## ✅ 2026-09-29: Sierra Chart reconciliation cadence + a real broker-side stop — BUILT, both items shipped
+
+**Both Item 1 and Item 2 below are now built** (in the same session that scoped them, resumed after a `/clear`) — `server/services/sierraChart/reconciliation.js`/`connectionManager.js`/`orderSweep.js` updated, migration `scripts/migrate_sierra_chart_reconciliation_and_stop_20260929.mjs` applied (new `sierra_chart_reconciliation_log` table, `order_placements.purpose` widened to allow `'STOP'`, `idx_order_placements_one_stop_per_setup`). Verified: every module imports cleanly at runtime (not just eslint — see this file's own standing "eslint doesn't catch a missing export" convention), `test_invariants.mjs` shows zero new failures (114/165 pre-existing, unrelated to Sierra Chart), server restarted and confirmed the new code is live via `/api/sierra-chart/status`.
+
+**A real finding surfaced immediately on restart, before this was even reported done**: the connection is genuinely live against Sim1 (`DTC_HOST` is set outside the shell env this session could see — checked, wrongly concluded "not configured" at first, corrected once the actual `/status` response came back `state: LIVE`). The very first `runReconciliation()` call (fired by the new 15-min periodic backstop) found **8 real broker orders unknown to this app** — all on already-CME-expired contracts (`MNQU5.CME`, expired Sept 2025; `MNQH6.CME`, expired March 2026), `FreeFormText: "2TargetsWithCommonStop.twconfig"` on all of them — clearly old manual/ATM bracket orders on the Sim1 account predating this app, not anything this build created. Per the spec (Item 1's "only `unknownToApp`/the aggregate invariant should ever halt"), this correctly halted the kill switch — no change in actual safety posture, since the kill switch is already fail-closed on every restart regardless. **The real, forward-looking problem this exposed**: as built, the halt is unconditional on ANY nonzero `unknownToApp` count — if these 8 stale orders are never cleaned up, the kill switch will re-halt on literally the next periodic check or terminal transition every time it's armed, making the system practically unarmable. Given a direct choice (clean up the account vs. add an already-expired-contract carve-out to the halt logic vs. leave it), **user chose to cancel the 8 stale orders directly in Sierra Chart** — the app's halt logic was deliberately left strict/unconditional, no code changed in response to this. **Not yet confirmed**: whether the cleanup actually happened and `unknownToApp` now reads clean on a fresh check — the 8 ServerOrderIDs for reference if this needs re-diagnosing: `80263`, `80264` (MNQU5.CME), `106475`, `106476`, `106478`, `106479`, `106481`, `106482` (MNQH6.CME).
+
+**Read the rest of this entry for the full original spec** — it's still the accurate design reference for both items.
+
+### How this was found
+
+While investigating the ML VETO gate's real order-placement status, `GET /api/sierra-chart/status` showed a real, persistent reconciliation mismatch: 2 real `order_placements` EXIT rows (setup_id 127681/127693, both submitted 2026-09-28/29) still show `status='OPEN'`/`filled_quantity=0`, but the broker's live open-orders snapshot doesn't list them — meaning they almost certainly filled or were canceled on the broker side with the app never processing (or, at the time, never even logging) the confirming update. **No forensic trail exists for these 2 specific rows** — they predate the `order_placements_updates` append-only log added earlier the same day (2026-09-29) during the ML-gate-adjacent reconciliation.js rewrite, so `SELECT * FROM order_placements_updates WHERE client_order_id IN (...)` correctly returns 0 rows for both. Accept this as an unrecoverable historical artifact — don't spend time trying to reconstruct it. The account's real aggregate position was independently confirmed flat (`checkPositionInvariant` returned `match:true, brokerNet:0, expectedNet:0`), so there's no live position-risk hiding behind these 2 rows specifically.
+
+**Root cause of why this sat undetected**: `reconcileAgainstBroker()`/`checkPositionInvariant()` (both already exist, both already correct) only ever run ONCE, right after a fresh DTC logon (`connectionManager.js`'s `logon` handler). If the connection stays up for hours/days without dropping, neither ever re-runs — a real discrepancy can sit silently indefinitely.
+
+**A second, separate, more consequential finding surfaced while scoping the fix**: this app currently places a real LIMIT entry order and, later, a real MARKET flatten — and **nothing else**. There is no real stop-loss or bracket order resting on Sierra Chart at any point. Every risk-management decision (the setup's own stop, breakeven-stop, wider-target, step-trail) is purely internal to this Node process's own 15s price-polling loop (`resolveSetupsByPrice()`). If the process crashes, hangs, or the host sleeps — **a documented, real, recurring failure mode on this exact machine** (see CLAUDE.md's own hard rules on multi-hour WSL2 sleep outages and crash-loop episodes, both already happened, not hypothetical) — an open real position has zero protection on the broker's own side until the app comes back online.
+
+### Item 1: Reconciliation cadence (cheap, do first)
+
+**Trigger: terminal state transitions, not every message, plus a periodic backstop — not "instead of," both.**
+

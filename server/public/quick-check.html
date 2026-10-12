@@ -3563,6 +3563,17 @@ async function checkFlagsBanner() {
       color = color === '#f87171' ? color : '#facc15';
       lines.push('ALL_LEVELS_LIVE ON — every level-fade type fires live');
     }
+    // Added 2026-10-11 after a real 4-day price-feed outage went unnoticed until the user
+    // asked directly why nothing was firing. priceBarsStale===null means the check itself
+    // failed (query error) -- treated as a real warning, not "assume fine" (same visible-
+    // not-silent convention as the sierraArmed catch block above).
+    if (d.priceBarsStale === true) {
+      color = '#f87171';
+      lines.push(`PRICE DATA STALE — last NQ bar ${d.priceBarsStaleMinutes}min ago`);
+    } else if (d.priceBarsStale === null) {
+      color = color === '#f87171' ? color : '#facc15';
+      lines.push('Could not verify price data freshness');
+    }
     sierraStatus = { color, title: lines.join(' | '), armed: d.sierraArmed === false ? false : true };
   } catch (e) {
     // Visible, not silent (2026-10-05): a failed check shows as a yellow "unknown" dot.
