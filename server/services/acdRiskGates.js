@@ -311,11 +311,28 @@ export async function isOppositeDirectionOpen(direction) {
 // accumulate (same discipline as isSameSetupRefireBlocked() above, which waited for its own
 // calibration to stabilize across 9 days before being trusted).
 //
+// Per-setup-type exemption (2026-10-12) -- the gate was only ever checked POOLED across the
+// whole roster before shipping (RESEARCH_CLAIM roster_65pt_rotation_direction_gate_20261008),
+// never per setup_type, despite force-SHADOWing candidates roster-wide. A real per-type
+// breakdown (RESEARCH_CLAIM rotation_gate_per_setup_breakdown_20261012, user-requested
+// directly) found the gate works BACKWARDS, with a day-blocked delta CI excluding zero, for
+// BRACKET_BREAKOUT_LONG (AGREE $-27.29/trade vs DISAGREE $+5.40/trade, delta=-$32.69,
+// CI=[-$47.40,-$23.00]) -- it was sending this type's BETTER real candidates to SHADOW and
+// letting worse ones fire live. N=10/14 is thin (right at the floor for calling anything
+// significant), so treat this as a real-but-early finding, not an ironclad one -- revisit if
+// more data changes the picture. IB_BULLISH showed the same backwards pattern but is NOT
+// exempted here since it's already permanently SHADOW via CAPITAL_EXPOSURE_OVERRIDE +
+// MANUAL_SUPPRESS_OVERRIDE (setupEligibility.js/backtest_setup_status.mjs) -- adding it here
+// would be a no-op, and this list should only ever contain types where the exemption is the
+// thing actually keeping a real candidate from being mis-gated.
+const ROTATION_GATE_EXEMPT_TYPES = new Set(['BRACKET_BREAKOUT_LONG']);
+
 // Returns false (never blocks) if no rotation leg has formed yet this session, or during the
 // 5-6PM ET maintenance gap -- matches getCurrentRotationDirection()'s own fail-closed-to-null
 // contract (never guess, never block on an unknown reading).
-export async function isRotationDirectionConflict(direction) {
+export async function isRotationDirectionConflict(direction, setupType) {
   if (!direction) return false; // candidate itself has no resolvable direction -- can't conflict
+  if (setupType && ROTATION_GATE_EXEMPT_TYPES.has(setupType)) return false;
   const rotationDir = await getCurrentRotationDirection();
   if (rotationDir == null) return false; // no leg formed yet, or maintenance gap -- don't guess
   const tradeIsLong = direction === 'LONG';

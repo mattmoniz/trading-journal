@@ -881,7 +881,7 @@ async function detectGlobexSetup(sessionDate, io) {
       }
       // 65pt rotation-direction gate (2026-10-11) -- see isRotationDirectionConflict() header
       // (acdRiskGates.js). Same cheap-check-before-expensive-ML-VETO ordering as the gates above.
-      if (live.status !== 'SHADOW' && await isRotationDirectionConflict(c.dir)) {
+      if (live.status !== 'SHADOW' && await isRotationDirectionConflict(c.dir, c.type)) {
         live = { status: 'SHADOW', reason: 'ROTATION_DIRECTION_CONFLICT' };
       }
       // ML meta-labeling VETO gate (2026-09-29) -- see mlLiveVetoGate.js's own header for the
@@ -3170,7 +3170,7 @@ export default function createACDRouter(io) {
                 }
                 // 65pt rotation-direction gate (2026-10-11) -- see isRotationDirectionConflict()
                 // header (acdRiskGates.js).
-                if (live.status !== 'SHADOW' && await isRotationDirectionConflict(direction)) {
+                if (live.status !== 'SHADOW' && await isRotationDirectionConflict(direction, svSetupType)) {
                   live = { status: 'SHADOW', reason: 'ROTATION_DIRECTION_CONFLICT' };
                 }
                 // ML meta-labeling VETO gate (2026-09-29, window extended 2026-10-04 to cover
@@ -4670,7 +4670,7 @@ export default function createACDRouter(io) {
                           && !(await isOpeningDriveCounterTrade(sibDirStr)).blocked
                           // 65pt rotation-direction gate (2026-10-11) -- see
                           // isRotationDirectionConflict() header (acdRiskGates.js).
-                          && !(await isRotationDirectionConflict(sibDirStr));
+                          && !(await isRotationDirectionConflict(sibDirStr, candType));
                         // ML meta-labeling VETO gate (2026-09-29) -- see mlLiveVetoGate.js's
                         // header. Last check, same "only run once every other gate already
                         // passed" convention as every other site. sibLevel is this sibling's
@@ -6541,7 +6541,7 @@ export default function createACDRouter(io) {
         // (acdRiskGates.js). Same short-circuit pattern as the directional gates above.
         const rotationDirectionConflict = !crossDirectionCooldownMin && !postWinOppBlocked && !oppositeDirectionOpen
           && !sameTypeRefireBlocked && !openingDriveCounter && rthDir
-          ? await isRotationDirectionConflict(rthDir)
+          ? await isRotationDirectionConflict(rthDir, active.type)
           : false;
         // Per-setup live time window (2026-09-25) -- see LIVE_TIME_WINDOW_OVERRIDE in
         // setupEligibility.js (PD_VAL_FADE_LONG after 13:00 ET). Pure lookup, no query.
@@ -6988,7 +6988,7 @@ export default function createACDRouter(io) {
             // reasoning that drove every other gate's coverage here.
             const shadowRotationDirectionConflict = shadowIsLive && !shadowCrossDirectionCooldownMin && !shadowPostWinBlocked
               && !shadowOppositeDirectionOpen && !shadowSameTypeRefireBlocked && !shadowOpeningDriveCounter
-              && shadow.direction && await isRotationDirectionConflict(shadow.direction);
+              && shadow.direction && await isRotationDirectionConflict(shadow.direction, shadow.type);
             // FIXED 2026-09-25 (OPEN_DECISION live_time_window_blocked_etmin_staleness_20260925) --
             // same firedEtMin fix as the main active-slot site above; this loop's INSERT also
             // stamps fired_at from firedAtTs (the triggering bar's time), not NOW().
@@ -7504,7 +7504,14 @@ export default function createACDRouter(io) {
         const weekday = WEEKDAYS[new Date(Date.UTC(y, mo - 1, d)).getUTCDay()];
         const dateLabel = `${weekday} ${mo}/${d}`;
         const time = s.fired_at_str.slice(11, 16);
-        const outcome = s.resolution || 'expired';
+        // FIXED 2026-10-12 (user-caught live: a genuinely still-open ACTIVE trade showed
+        // "(expired, ...)" in the HA-facing text): `resolution` is null for EVERY still-open
+        // trade by definition -- the query above (status='ACTIVE' OR today's non-SHADOW/
+        // non-ACTIVE rows) guarantees any row reaching this line with resolution==null has
+        // status='ACTIVE', i.e. genuinely open, never actually expired. 'expired' was never a
+        // real fallback for a resolved-but-missing-resolution-value row -- it just mislabeled
+        // every open position.
+        const outcome = s.resolution || 'open';
         const pnl = s.actual_pnl != null ? `, $${parseFloat(s.actual_pnl).toFixed(2)}` : '';
         const bar6 = s.bar6_checkpoint ? `, bar6:${s.bar6_checkpoint}` : '';
         const exitRec = s.bar6_exit_recommended ? ', EXIT NOW recommended' : '';
