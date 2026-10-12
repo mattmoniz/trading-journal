@@ -50,6 +50,7 @@ import { cacheGet, cacheSet } from '../lib/cache.js';
 import { detectSignalEvents } from './pocRotationService.js';
 import { dropToTimeline, computeFireTags, FIRE_TAG_COLS, fireTagValues } from '../routes/acd.js';
 import { getBetClass } from '../config/setupTypes.js';
+import { isOppositeDirectionOpen } from './acdRiskGates.js';
 
 const THETA_CACHE_KEY = 'pocRotationJoin_theta';
 const THETA_CACHE_TTL = 12 * 60 * 60 * 1000; // 12hr -- full-history median bar range moves negligibly intraday
@@ -151,7 +152,23 @@ export async function detectPocRotationJoin(io) {
       const fireSession = (entryEtMin >= 570 && entryEtMin < 960) ? 'RTH' : 'GLOBEX';
 
       if (!liveStatusCache.has(setupType)) liveStatusCache.set(setupType, await getLiveStatus(setupType));
-      const { status, reason } = liveStatusCache.get(setupType);
+      let { status, reason } = liveStatusCache.get(setupType);
+
+      // Entry-side directional-conflict gate, added 2026-10-11 alongside getLiveStatus()
+      // above. LONG and SHORT here come from the SAME underlying 65pt leg detector
+      // (detectSignalEvents(65,...), identical call to rotation65ptGateShadow.js's own) --
+      // a SHORT firing IS the rotation flipping, not a reaction to it, so
+      // isRotationDirectionConflict() would be circular here and is deliberately NOT used.
+      // closeOnRotationFlip() (acd.js, setup_type-agnostic) already closes a stale open
+      // opposite-direction position on its own next poll once the flip is detected, but
+      // that's exit-side cleanup -- this is the entry-side half, preventing a brief window
+      // where a new opposite-direction position could open before the old one closes.
+      // force-SHADOW, never skip the insert -- same convention as every other directional
+      // gate in this codebase (isOppositeDirectionOpen's own call sites in acd.js).
+      if (status === 'ACTIVE' && await isOppositeDirectionOpen(long ? 'LONG' : 'SHORT')) {
+        status = 'SHADOW';
+        reason = 'OPPOSITE_DIRECTION_OPEN';
+      }
 
       const fireTags = await computeFireTags(sessionDate, fireSession, entryEtMin);
       const ins = await query(`
