@@ -13,6 +13,7 @@ import { SUPPRESS_ALL_DISABLED, ALL_LEVELS_LIVE } from '../services/setupEligibi
 import { killSwitch } from '../services/sierraChart/orderEligibility.js';
 import { gateSignalConfirmation } from '../services/rigorDiagnostics.js';
 import { isGlobexWeekClosed } from './acd.js';
+import { etNaiveTimestampToMs } from '../services/acdShared.js';
 
 const router = express.Router();
 
@@ -37,12 +38,18 @@ router.get('/setups/live-flags', async (req, res) => {
   let priceBarsLastBar = null;
   let priceBarsStaleMinutes = null;
   try {
-    const r = await query(`SELECT MAX(ts) AS last_bar, NOW() AS now_utc FROM price_bars_primary WHERE symbol='NQ'`);
+    // ts is `timestamp without time zone`, storing naive ET wall-clock digits (this
+    // codebase's standing convention) -- MUST go through etNaiveTimestampToMs() before
+    // comparing against Date.now() (genuinely UTC), or every fresh bar reads as ~4-5h stale
+    // (EDT/EST-dependent). Found live 2026-10-11 in this exact code, the same failure shape
+    // already documented for majorPivotDefendedBreakDetector.js/stallDefendedLevelDetector.js
+    // (acdShared.js's own header comment on this function) -- caught before shipping by
+    // noticing a "stale" reading that didn't match the file's own real, current mtime.
+    const r = await query(`SELECT MAX(ts)::text AS last_bar FROM price_bars_primary WHERE symbol='NQ'`);
     const lastBar = r.rows[0]?.last_bar;
-    const nowUtc = r.rows[0]?.now_utc;
-    if (lastBar && nowUtc) {
+    if (lastBar) {
       priceBarsLastBar = lastBar;
-      priceBarsStaleMinutes = Math.round((new Date(nowUtc) - new Date(lastBar)) / 60000);
+      priceBarsStaleMinutes = Math.round((Date.now() - etNaiveTimestampToMs(lastBar)) / 60000);
       // Only flag during hours fresh bars should actually exist -- never during the real
       // Globex weekly close/daily maintenance gap (isGlobexWeekClosed, the same CME-week
       // schedule server/index.js's own autonomous poller already gates on).

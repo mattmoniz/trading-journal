@@ -60,6 +60,27 @@ const T1_PLACEHOLDER_DIST = 1000; // informational-only, see header -- never che
 
 let _cache = { sessionKey: null, lastProcessedEntryTs: null };
 
+// Live-eligibility check, added 2026-10-11 -- this setup_type had NO dynamic re-check at
+// all until now (status was hardcoded 'SHADOW' unconditionally, regardless of real N/EV,
+// since the detector first shipped 2026-09-01 -- the "real N=0 today" comment it replaced
+// went stale weeks ago while real data kept accumulating underneath it, unused). Found
+// live: 144 real trades (74 LONG/70 SHORT), both directions clearly positive real EV
+// ($13.24/$7.17 per trade), spread across 30/27 distinct trading days (not day-clustered).
+// Matches globexFlushDetector.js's own getLiveStatus() pattern exactly, per this file's own
+// header comment pointing at that precedent ("add one once real fires start accumulating").
+async function getLiveStatus(setupType) {
+  const { rows } = await query(`
+    SELECT COUNT(*) as n, AVG(actual_pnl)::float as ev
+    FROM active_setups
+    WHERE setup_type = $1 AND origin_status IN ('ACTIVE','SHADOW')
+      AND resolution IN ('TARGET_HIT','STOP_HIT','TIME_EXPIRED') AND actual_pnl IS NOT NULL
+  `, [setupType]);
+  const n = +rows[0].n, ev = rows[0].ev != null ? +rows[0].ev : null;
+  if (n < 20) return { status: 'SHADOW', reason: 'NEW_SIGNAL_UNDER_LIVE_EVALUATION', liveN: n, liveEv: ev };
+  if (ev != null && ev < -5) return { status: 'SHADOW', reason: 'PERFORMANCE_BELOW_THRESHOLD', liveN: n, liveEv: ev };
+  return { status: 'ACTIVE', reason: null, liveN: n, liveEv: ev };
+}
+
 export async function getTheta() {
   const cached = cacheGet(THETA_CACHE_KEY);
   if (cached != null) return cached;
@@ -107,6 +128,7 @@ export async function detectPocRotationJoin(io) {
     const { all_signal } = detectSignalEvents(65, 'standard', theta, [{ t: sessionDate, bars }], 'fixed');
     if (!all_signal.length) return;
 
+    const liveStatusCache = new Map(); // memoized per setupType within this one poll
     for (const event of all_signal) {
       if (event.entry_idx == null) continue;
       const entryBar = bars[event.entry_idx];
@@ -128,12 +150,8 @@ export async function detectPocRotationJoin(io) {
       })();
       const fireSession = (entryEtMin >= 570 && entryEtMin < 960) ? 'RTH' : 'GLOBEX';
 
-      // Real N=0 today -- always SHADOW per the New Setup Type checklist (N<20 real
-      // resolved trades). No getLiveStatus()-style live re-check exists yet (checklist
-      // item 7) -- add one once real fires start accumulating, matching
-      // globexFlushDetector.js's own getLiveStatus() pattern.
-      const status = 'SHADOW';
-      const reason = 'NEW_SIGNAL_UNDER_LIVE_EVALUATION';
+      if (!liveStatusCache.has(setupType)) liveStatusCache.set(setupType, await getLiveStatus(setupType));
+      const { status, reason } = liveStatusCache.get(setupType);
 
       const fireTags = await computeFireTags(sessionDate, fireSession, entryEtMin);
       const ins = await query(`

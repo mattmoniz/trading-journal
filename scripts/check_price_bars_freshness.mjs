@@ -21,6 +21,7 @@
 import { query } from '../server/db.js';
 import pool from '../server/db.js';
 import { isGlobexWeekClosed } from '../server/routes/acd.js';
+import { etNaiveTimestampToMs } from '../server/services/acdShared.js';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -37,14 +38,18 @@ function logAlert(message) {
 }
 
 async function run() {
-  const r = await query(`SELECT MAX(ts) AS last_bar, NOW() AS now_utc FROM price_bars_primary WHERE symbol='NQ'`);
+  // ts is naive ET wall-clock (timestamp without time zone) -- must go through
+  // etNaiveTimestampToMs() before comparing to Date.now(), same fix as setups.js's
+  // live-flags endpoint. A raw new Date(lastBar) vs new Date(nowUtc) diff reads every
+  // fresh bar as ~4-5h stale (EDT/EST-dependent) -- caught 2026-10-11 before this ever ran
+  // unattended in cron.
+  const r = await query(`SELECT MAX(ts)::text AS last_bar FROM price_bars_primary WHERE symbol='NQ'`);
   const lastBar = r.rows[0]?.last_bar;
-  const nowUtc = r.rows[0]?.now_utc;
-  if (!lastBar || !nowUtc) {
+  if (!lastBar) {
     await pool.end();
     return;
   }
-  const staleMinutes = Math.round((new Date(nowUtc) - new Date(lastBar)) / 60000);
+  const staleMinutes = Math.round((Date.now() - etNaiveTimestampToMs(lastBar)) / 60000);
   const nowET = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
   if (!isGlobexWeekClosed(nowET) && staleMinutes > STALE_MINUTES) {
     console.error(`PRICE_BARS_STALE: last NQ bar ${staleMinutes}min old (${lastBar})`);
