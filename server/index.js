@@ -1177,6 +1177,19 @@ httpServer.listen(PORT, () => {
         // is still only a partial (9:30-11:00) average and would freeze that partial value
         // into the same column a full-session read later expects.
         execSync(`node scripts/compute_levels.js ${today} --category=CURRENT`, { cwd: process.cwd(), timeout: 60000 });
+        // --category=OPENS (2026-10-12, OPEN_DECISION daily_open_level_prices_stale_since_
+        // 20260831): DAILY_OPEN needs a bar at exactly 9:30:00 ET for TODAY, which neither of
+        // the two existing crons (Sunday 9:30PM for the upcoming Monday, 8AM Mon-Fri for
+        // today) can ever see -- both run before today's own RTH open exists, so DAILY_OPEN
+        // silently never populated past 2026-08-31 (last populated by a since-stopped manual
+        // run). By 11AM the open bar is long closed and the OPENS-category values (DAILY_OPEN/
+        // WEEKLY_OPEN/MONTHLY_OPEN) are each a single already-fixed bar's open price, not a
+        // running average like RTH_VWAP -- safe to re-run any time after the bar exists,
+        // unlike the CURRENT-category scoping two lines up, which exists specifically to avoid
+        // freezing a partial RTH_VWAP value (see that comment). A separate execSync, not a
+        // combined --category flag, to avoid touching compute_levels.js's single-category CLI
+        // filter and risk changing behavior for any other caller of that flag.
+        execSync(`node scripts/compute_levels.js ${today} --category=OPENS`, { cwd: process.cwd(), timeout: 60000 });
         return { count: 1 };
       });
     } catch (err) { console.error('[compute_levels_post_ib] Cron error:', err.message); }
