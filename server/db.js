@@ -1,7 +1,19 @@
 import pg from 'pg';
 import dotenv from 'dotenv';
+import path from 'path';
+import { fileURLToPath } from 'url';
 
-dotenv.config();
+// Resolve .env by this file's own location, not process.cwd() -- a bare `node some_script.mjs`
+// cron entry (no `cd` first) runs with cwd=$HOME, not the repo root, so the default
+// dotenv.config() silently finds nothing and DB_PASSWORD ends up undefined. Found 2026-10-13:
+// 3 cron scripts (catchup_price_bars.mjs, check_price_bars_freshness.mjs,
+// check_order_lifecycle_health.mjs) had been failing every single run since 2026-10-11 with
+// "SASL: SCRAM-SERVER-FIRST-MESSAGE: client password must be a string" -- registered, firing
+// on schedule, silently useless the whole time. Every shell-script cron entry already avoids
+// this by `cd`-ing to the repo first; this fixes it at the source so no future bare-node
+// script needs to remember to do the same.
+const __repoRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
+dotenv.config({ path: path.join(__repoRoot, '.env') });
 
 // CORRECTED 2026-08-19 (OPEN_DECISION db_naive_timestamp_columns_actually_store_et_not_utc,
 // RESOLVED): the comment below was WRONG and sat uncorrected in committed code for months --
