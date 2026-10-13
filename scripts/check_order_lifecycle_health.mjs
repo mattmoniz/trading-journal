@@ -192,15 +192,40 @@ async function checkReconciliation() {
   return 0;
 }
 
+// Persists the latest run's state so GET /api/setups/today-summary (the endpoint feeding the
+// Home Assistant "Session Timeline" card -- the page the user actually watches trades on) can
+// surface an unresolved issue there, without that endpoint re-deriving any of this file's own
+// SQL (same "share modules instead of reimplementing" convention already used by this file's
+// own bigMoveLine/sigmaLine-style signals in acd.js). ONLY counts checks 2-5 (the alert-only
+// ones) -- MISSING_ORDER is excluded on purpose, since it self-resolves within
+// AUTO_RESOLVE_MISSING_ORDER_BUFFER_MIN and showing it on the HA page would just be noise about
+// something this script already fixed on its own.
+// signal_name='LATEST' singleton row, same convention as GARCH_VOL_SCALE/MOMENTUM_CHASE_
+// WIDTH_CALIB's own LATEST rows (volatilityRegime.js / momentumChaseDetector.js).
+async function persistHealthStatus({ stuckUnfilled, canceledNoResubmit, phantomActive, reconciliationNotClean }) {
+  const total = stuckUnfilled + canceledNoResubmit + phantomActive + (reconciliationNotClean ? 1 : 0);
+  const notes = JSON.stringify({
+    stuckUnfilled, canceledNoResubmit, phantomActive, reconciliationNotClean,
+    checkedAt: new Date().toISOString(),
+  });
+  await query(`
+    INSERT INTO performance_audit (run_date, window_days, signal_type, signal_name, sample_size, notes)
+    VALUES (CURRENT_DATE, 0, 'ORDER_LIFECYCLE_HEALTH', 'LATEST', $1, $2)
+    ON CONFLICT (run_date, window_days, signal_type, signal_name) DO UPDATE SET
+      sample_size = EXCLUDED.sample_size, notes = EXCLUDED.notes
+  `, [total, notes]).catch((err) => console.error('[check_order_lifecycle_health] failed to persist status:', err.message));
+}
+
 async function run() {
-  const counts = await Promise.all([
+  const [missing, stuckUnfilled, canceledNoResubmit, phantomActive, reconciliationNotCleanCount] = await Promise.all([
     checkMissingOrders(),
     checkStuckUnfilled(),
     checkCanceledNoResubmit(),
     checkPhantomActive(),
     checkReconciliation(),
   ]);
-  const total = counts.reduce((a, b) => a + b, 0);
+  await persistHealthStatus({ stuckUnfilled, canceledNoResubmit, phantomActive, reconciliationNotClean: reconciliationNotCleanCount > 0 });
+  const total = missing + stuckUnfilled + canceledNoResubmit + phantomActive + reconciliationNotCleanCount;
   if (total === 0) console.log('[check_order_lifecycle_health] clean -- no anomalies found.');
   await pool.end();
 }

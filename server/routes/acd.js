@@ -7653,7 +7653,40 @@ export default function createACDRouter(io) {
         }
       } catch (_) { /* informational only, never block the response */ }
 
-      const summaryLines = [bigMoveLine, sigmaLine, widerTargetHeadlineLine, widerTargetLiveLine].filter(Boolean).concat(lines);
+      // Order-lifecycle watcher status (2026-10-13) -- same try/catch-and-null-on-failure
+      // convention as bigMoveLine/sigmaLine above, reading the LATEST row
+      // check_order_lifecycle_health.mjs persists every 5min rather than re-deriving any of
+      // that script's own SQL here. User's explicit request: surface this on the SAME page
+      // they already watch trades on, no new Home Assistant sensor/automation needed. Stays
+      // null (no line) when clean, same "stay hidden unless there's something to say"
+      // convention as every other line in this array -- only speaks up when there's something
+      // to report, including the watcher itself going quiet (a stale row is itself worth
+      // surfacing, not silently treated as "clean").
+      let orderLifecycleLine = null;
+      try {
+        const olhQ = await query(`
+          SELECT sample_size, notes, created_at::text FROM performance_audit
+          WHERE signal_type='ORDER_LIFECYCLE_HEALTH' AND signal_name='LATEST'
+          ORDER BY created_at DESC LIMIT 1
+        `);
+        const row = olhQ.rows[0];
+        if (row) {
+          const n = JSON.parse(row.notes || '{}');
+          const ageMin = n.checkedAt ? (Date.now() - new Date(n.checkedAt).getTime()) / 60000 : Infinity;
+          if (ageMin > 15) {
+            orderLifecycleLine = `⚠ Order-lifecycle watcher hasn't reported in ${Math.round(ageMin)}min (expected every 5min) -- check the cron, don't assume clean.`;
+          } else if (row.sample_size > 0) {
+            const parts = [];
+            if (n.stuckUnfilled) parts.push(`${n.stuckUnfilled} stuck unfilled`);
+            if (n.canceledNoResubmit) parts.push(`${n.canceledNoResubmit} canceled-no-resubmit`);
+            if (n.phantomActive) parts.push(`${n.phantomActive} phantom-active`);
+            if (n.reconciliationNotClean) parts.push('reconciliation not clean');
+            orderLifecycleLine = `⚠ Order lifecycle issue: ${parts.join(', ')} -- see scratch/server_errors.jsonl`;
+          }
+        }
+      } catch (_) { /* informational only, never block the response */ }
+
+      const summaryLines = [orderLifecycleLine, bigMoveLine, sigmaLine, widerTargetHeadlineLine, widerTargetLiveLine].filter(Boolean).concat(lines);
       // widerTargetHeadlineLine/widerTargetLiveLine also returned as their own structured
       // fields (2026-08-17), not just baked into summary_text -- HA's REST sensor only reads
       // summary_text (unaffected, additive change), but quick-check.html needs real fields to
