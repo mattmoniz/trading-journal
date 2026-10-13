@@ -528,19 +528,113 @@ Extended `scratch/test_market_entry_20261013.mjs` to 7 cases (added: DB `price1`
 confirmed dropped from scope) -- all 7 pass. Residue/real-position check re-run clean (setup_id
 134421 untouched).
 
-**Not yet done:**
-1. **Server has NOT been restarted** -- per the standing restart-disarms-the-kill-switch rule,
-   this needs the user told explicitly before it happens, not treated as a silent follow-on step.
-2. Separately, the real broker-side mismatch from the earlier manual "Reverse" incident (setup
-   134421, kill switch currently halted/disarmed) still needs the user's own resolution before a
-   restart/re-arm makes sense regardless of this code being ready -- same caveat as the entry
-   above.
-3. This fix round's own diff was NOT sent back to DeepSeek for a second review pass (matching this
-   codebase's own "2 correction attempts then Claude takes over" convention is about Gemini/
-   DeepSeek being WRONG twice, not about every follow-up fix needing a fresh dispatch -- both
-   findings here were independently verified against the real code directly, not just trusted).
+**RESOLVED, same session -- restarted, live, verified clean.** User gave the explicit
+go-ahead ("Yea restart"). `./restart.sh` timed out once under an EXTERNAL 100s Bash-tool
+timeout (not the script's own logic) -- per the standing rule, verified directly with
+`ps -ef` afterward rather than assumed: zero duplicate processes, the server was simply
+fully stopped (systemd `inactive (dead)`, no node/nodemon running at all), not a dangerous
+duplicate-supervisor state. Re-ran via `run_in_background: true` with no external
+timeout; completed cleanly -- single `nodemon`/`node server/index.js` pair, kill switch
+armed (`auto-rearm-on-simulation-boot`), reconciliation clean (`brokerPositionCount:0`,
+`clean:true`). Confirmed the new code is actually live (not just "server is up"): the ML
+tab's `resolved_at_str` column (added in the equity-curve fix below) is present in a live
+`/api/ml-silo/range-trades` response, which only happens on a genuine process restart since
+that file is server-side JS, not a static asset. `node scripts/test_invariants.mjs`
+unchanged (139/166) post-restart; no new `scratch/server_errors.jsonl` entries since.
+
+**Separately, a real, previously-undiagnosed root cause for the "1 trade still without
+broker P&L" DLL block was found and flagged, not just patched around -- CORRECTED after a
+second, deeper pass the same session (the first pass below got the mechanism half right and
+mischaracterized the other half; read this version, not an earlier description).** Traced
+directly from the raw broker messages in `order_placements_updates` and
+`journalctl`/`checkPositionInvariant()`'s own logged output (not guessed): Sierra Chart's
+"Reverse and Cancel" command (12:54:42pm ET) canceled the resting stop order
+(`client_order_id=S134421`) normally, then submitted a MARKET flatten + a new bracket pair
+per Sierra's own documented Reverse mechanism (fetched, not assumed) -- but those 3
+resulting orders carried an EMPTY `ClientOrderID` (`""`), so this app's LIVE event-stream
+handler (`handleOrderUpdate()`) never received them at all, not even as an unattributed
+`UNOWNED:` entry (confirmed: zero `UNOWNED:` rows in `order_placements_updates` that day).
+They only ever surfaced via the SEPARATE periodic reconciliation snapshot path
+(`checkPositionInvariant()`, which polls broker state rather than consuming the live push
+stream) -- **and that path caught the mismatch and halted the kill switch 4 SECONDS after
+the Reverse action** (`UNKNOWN-TO-APP MISMATCH (TERMINAL_TRANSITION)`, logged at 12:54:46).
+Detection was fast and visible (`quick-check.html`'s `checkFlagsBanner()`, 30s poll, shows
+"SIERRA CHART DISARMED" with the halt reason) -- an EARLIER draft of this entry wrongly
+claimed the reconciliation backstop "didn't catch this in real time," based on a LATER,
+unrelated `lastInvariantCheck: {checked:false, reason:"no broker response"}` reading that
+was conflated with the original incident; that claim is retracted. **The real, still-open
+gap is RECOVERY, not detection**: `checkPositionInvariant()`'s own mismatch report already
+contained the broker's real average fill price (30767.25 -- the exact number later used in
+the manual reconstruction), but nothing automatically turns "a confidently-attributable
+unknown-to-app fill" into a `broker_pnl`/`active_setups.status` correction -- it just halts
+and waits for a human to read the log and hand-write the fix, which is why this sat broken
+for hours despite being flagged in seconds. Flagged as `OPEN_DECISION
+manual_sierra_action_no_broker_pnl_visibility_20261013` (HIGH, text updated with the
+corrected mechanism) -- two real follow-ups, neither built yet: (1) auto-reconciling an
+unknown-to-app fill against `broker_pnl`/`active_setups` when it can be confidently matched
+to the single currently-open real position, instead of requiring a manual reconstruction
+every time (explicit user request to look into this, not yet started -- a real-P&L-writing
+change, needs the user's sign-off on the approach before building, not just proceeding); (2)
+WHY Reverse's orders carry an empty `ClientOrderID` at the DTC level is understood only via
+Sierra's own Trade Window documentation (what Reverse mechanically does), not via official
+documentation of the DTC-visibility consequence itself -- treat as a strong, evidence-based
+inference (confirmed against real traffic), not a verified protocol guarantee. **Both
+findings (and the general "manual Sierra Chart actions can bypass this app's live event
+visibility" lesson) are now also recorded in [docs/SIERRA_CHART_NOTES.md](SIERRA_CHART_NOTES.md)**
+-- a new running notebook for this exact purpose, added the same session per direct user
+request ("I feel like you need to keep a notebook of how you need to interact with sierra
+chart dtc" -> broadened to "a sierra chart notes file for anything you need").
+
+**One small, separate loose end, not yet chased:** of the 15 trades that resolved in a
+batch at RTH close the same day (the equity-curve-ordering bug below), one real-eligible
+(`origin_status='ACTIVE'`) cluster-sibling row (`C_PAIRED_LONG`, id 134731,
+`is_cluster_primary=false`, fired 15:58:00) got no `gated_candidates` skip logged at all --
+unlike its sibling at 134708, which was correctly logged as blocked by the DLL gate. Not
+investigated further this session; flagged in conversation, not yet in `flag_decision.mjs`.
+
+This fix round's own diff was NOT sent back to DeepSeek for a second review pass (matching
+this codebase's own "2 correction attempts then Claude takes over" convention is about
+Gemini/DeepSeek being WRONG twice, not about every follow-up fix needing a fresh dispatch --
+both findings here were independently verified against the real code directly, not just
+trusted).
 
 **If a future session picks this up cold:** read this entry in full (it now contains the
 complete before/after), then `scratch/deepseek_response.md` if more of DeepSeek's own reasoning
 is needed (it currently holds the Phase 2 review only -- the Phase 0 critique was overwritten,
 its conclusions are already folded into this entry and the earlier one above it).
+
+## 2026-10-13 (continued): equity curve/maxDD was sorted by fire time, not resolve time -- fixed
+
+**RESOLVED, same session.** User-caught live: quick-check.html's Net P&L chart showed negative
+most of the day, then jumped to +$419 on a single refresh with no warning -- "the chart did not
+accurately reflect what I saw all day... and it suddenly changes." Root-caused, not assumed:
+15 trades fired between 10:05am-3:58pm but all resolved in one `TIME_EXPIRED` batch at RTH close
+(4:00:00-4:00:22pm, +$649.50 net) -- `getDecidedRows()`'s cumulative curve was sorted by
+`fired_at_str` (when each trade STARTED), not `resolved_at_str` (when its P&L actually became
+known), so the moment those 15 trades resolved, they were spliced into the MIDDLE of the
+already-drawn curve at their original fire-time slots -- retroactively shifting every later point
+and rewriting hours of already-displayed chart shape with no real-time event to explain it. This
+also silently corrupted `maxDD` (computed by walking the same mis-ordered sequence peak-to-trough)
+-- a real risk-management number, not just a cosmetic chart issue.
+
+Fixed in `getDecidedRows()` (sort key: `resolved_at_str || fired_at_str`, falls back for ~578
+all-time pre-2026-07-20 rows that predate `resolved_at` being reliably populated -- 0 for any date
+this sort actually matters for live) and the equity curve's x-axis time labels to match. Found and
+fixed the SAME bug shape in the ML tab's `computeMlRangeStats()`/`renderMlSiloRangeEquityChart()`
+(mlSiloService.js's `getRangeTrades()` needed `resolved_at_str` added to its SELECT -- it didn't
+have the column at all). Committed `2e8821d`. Verified: `node --check` on the extracted inline
+script (clean -- no Playwright/browser tool was available this session, said explicitly rather than
+claiming an interactive check was done), live page confirmed serving the edit immediately
+(`quick-check.html` is a static file, no restart needed), `/api/ml-silo/range-trades` confirmed
+returning `resolved_at_str` post-restart, `test_invariants.mjs` unchanged (139/166), no new
+`CLIENT_ERROR`/`SERVER_ERROR` entries since.
+
+**Of the $649.50 batch itself, a direct follow-up question ("if those fired trades actually
+traded we would have been up +$649?") was checked against the real data, not assumed: NO.**
+13 of 15 were `SHADOW`-origin (never real alerts, background-tracked only, $596.50 of the total)
+-- not money that was ever going to trade regardless of anything else. Only 2 were
+`origin_status='ACTIVE'` ($53 combined), and NEITHER got a real order placed: one (+$55.50,
+`OR10_HIGH_FADE_LONG`) was explicitly blocked by the DLL-gate incident (see the entry above --
+skip logged at 15:54, before the 16:27 fix); the other (-$2.50, `C_PAIRED_LONG` cluster sibling)
+has no logged skip reason at all, the small loose end flagged above. The real, honest "cost of
+today's incident" figure is +$55.50, not +$649.50.
