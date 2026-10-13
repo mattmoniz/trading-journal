@@ -13,7 +13,8 @@
 // this codebase's own verification discipline for extractions touching a hot path.
 import { query } from '../db.js';
 import { getLatestBars } from './priceRetrieval.js';
-import { getCached, setCached } from './acdShared.js';
+import { getCached, setCached, nextTradingDay } from './acdShared.js';
+import { getPriorDayRthRange } from './queries.js';
 
 export async function computeMarketPulse() {
   // FIXED 2026-08-24 (DeepSeek quick-check.html audit): was a hardcoded `etOffset = -4`
@@ -32,7 +33,7 @@ export async function computeMarketPulse() {
     etNow.getDay() >= 1 && etNow.getDay() <= 5;
 
   // Current price + session bars + live setup + ACD state
-  const [priceQ, sessionQ, rthBarsQ, setupQ, acdQ] = await Promise.all([
+  const [priceQ, sessionQ, rthBarsQ, setupQ, acdQ, priorDay, globexOpenQ] = await Promise.all([
     getLatestBars('NQ', { limit: 1, columns: 'close::float' }, 'trend-watch.currentPrice').then(rows => ({ rows })),
     query(`SELECT MAX(high)::float as h, MIN(low)::float as l FROM price_bars_primary
            WHERE symbol='NQ' AND ts::date=$1
@@ -47,6 +48,31 @@ export async function computeMarketPulse() {
            ORDER BY fired_at DESC LIMIT 1`, [todayET]),
     query(`SELECT a_up_fired, a_down_fired, c_up_confirmed, c_down_confirmed, day_type
            FROM acd_daily_log WHERE trade_date=$1 LIMIT 1`, [todayET]),
+    // FIXED 2026-10-12, found while reasoning through Globex-hours correctness (not yet
+    // observed live -- caught before it could bite): raw todayET does NOT roll forward at
+    // 6PM ET the way this codebase's other session-date logic does (nextTradingDay(), used
+    // throughout acd.js/acdShared.js for exactly this). Passing bare todayET here would make
+    // netChangeOnDay reference YESTERDAY's RTH close during tonight's 6pm-midnight Globex
+    // window, when today's own RTH close (which just happened) is the correct "prior day"
+    // reference for the session that's now underway.
+    getPriorDayRthRange(etNow.getHours() >= 18 ? nextTradingDay(etNow) : todayET),
+    // Current continuous session's opening price (2026-10-12, "net change since beginning of
+    // Globex" chip, user request) -- same real-gap-detection session-boundary query acd.js's
+    // bigMoveSignal already uses (finds the actual >45min data gap in the trailing 30h, not a
+    // hardcoded "6pm yesterday" assumption, so it's correct around holidays/early closes too).
+    // Reused verbatim rather than re-deriving a weaker hardcoded-time version.
+    query(`
+      WITH recent AS (
+        SELECT ts, close::float,
+               ts - LAG(ts) OVER (ORDER BY ts) AS gap
+        FROM price_bars_primary
+        WHERE symbol='NQ' AND ts >= (SELECT MAX(ts) FROM price_bars_primary WHERE symbol='NQ') - interval '30 hours'
+      ),
+      session_start AS (
+        SELECT COALESCE(MAX(ts), (SELECT MIN(ts) FROM recent)) AS start_ts FROM recent WHERE gap > interval '45 minutes'
+      )
+      SELECT close FROM recent, session_start WHERE ts = start_ts
+    `).catch(() => ({ rows: [] })),
   ]);
 
   const currentPrice = priceQ.rows[0]?.close ?? null;
@@ -56,6 +82,19 @@ export async function computeMarketPulse() {
   const sessionOpen = bars[0]?.close ?? null;
   const sessionRange = sessionHigh && sessionLow ? +(sessionHigh - sessionLow).toFixed(1) : null;
   const ptsFromOpen = currentPrice && sessionOpen ? +(currentPrice - sessionOpen).toFixed(1) : null;
+  // netChangeOnDay: close-to-close daily net change (vs. prior RTH session's close), matching
+  // the conventional "daily change" most charting platforms (incl. Sierra Chart) show by
+  // default -- DISTINCT from ptsFromOpen above, which is change since TODAY's own RTH open and
+  // can differ substantially (confirmed live 2026-10-12: -141pt from today's open vs. -233pt
+  // from yesterday's close, the same moment). Added for quick-check.html's NQ chip per direct
+  // user request; MarketPulseBar.jsx's in-app chip intentionally keeps using ptsFromOpen.
+  const netChangeOnDay = currentPrice && priorDay.pdClose ? +(currentPrice - priorDay.pdClose).toFixed(1) : null;
+  // netChangeSinceGlobexOpen: change since the CURRENT continuous session actually opened
+  // (the real gap-detected boundary above), distinct from both ptsFromOpen (today's RTH open
+  // only) and netChangeOnDay (prior RTH close) -- this is the one the user actually wants
+  // displayed on quick-check.html's NQ chip (2026-10-12).
+  const globexOpenPrice = globexOpenQ.rows[0]?.close ?? null;
+  const netChangeSinceGlobexOpen = currentPrice && globexOpenPrice ? +(currentPrice - globexOpenPrice).toFixed(1) : null;
 
   // Cumulative delta
   const sessionDelta = bars.reduce((s, b) => s + (b.ask_vol - b.bid_vol), 0);
@@ -218,6 +257,8 @@ export async function computeMarketPulse() {
     sessionLow,
     sessionRange,
     ptsFromOpen,
+    netChangeOnDay,
+    netChangeSinceGlobexOpen,
     sessionDelta,
     deltaSign,
     deltaClass,

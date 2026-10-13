@@ -24,6 +24,8 @@ import { stepStepTrail } from './stepTrailWalker.js';
 import { stepT1FloorRunner, t1FloorPnlFromResolution } from './t1FloorRunnerWalker.js';
 import { getCurrentPrice } from './priceRetrieval.js';
 import { stepBreakevenStop } from './breakevenStopWalker.js';
+import { stepPocBreakevenHold } from './pocBreakevenHoldWalker.js';
+import { STOP_POINTS as POC_STOP_POINTS, ARM_AT_MINUTES as POC_ARM_AT_MINUTES } from './pocRotationJoinDetector.js';
 import { detectPostEntryExitSignals } from '../../scripts/pilot_exits_extended.mjs';
 import { getCached, setCached, getGlobalCalib, DAY_CACHE_TTL, getTouchQualityCalib, getTouchQualityBaseline, dropToTimeline } from './acdShared.js';
 
@@ -214,42 +216,59 @@ export async function resolveSetupsByPrice(io) {
     const PNL_PER_POINT = LIVE_INSTRUMENT.dollarsPerPoint;
     const COMMISSION = LIVE_INSTRUMENT.commissionPerRoundTrip;
 
-  // Custom resolution for POC_ROTATION_JOIN_LONG/SHORT — Time60_Stop20 exit (see
-  // server/services/pocRotationJoinDetector.js header): 20pt stop, checked bar-by-bar
-  // since fired_at (unlike ABSORPTION_LONG/COIL_SURGE below, which only check a current-
-  // price snapshot — this construction's validated backtest exit is a real bar-walk, so
-  // a snapshot-only check could miss an intrabar stop touch), OR a 60-minute time limit
-  // with mark-to-market at the last available bar's close. t1_level is an unreachable
-  // informational placeholder (never checked) — this is a genuinely target-less exit
-  // shape, deliberately NOT routed through the shared generic bar-walk further below
-  // (WIDER_TARGET/trail/extend logic) per this session's standing caution about editing
-  // resolveSetupsByPrice()'s complex shared path without its own review.
+  // Custom resolution for POC_ROTATION_JOIN_LONG/SHORT — breakeven-hold exit, REVISED
+  // 2026-10-11 (replaces the original Time60_Stop20 design, wired LIVE on explicit user
+  // direction -- see pocBreakevenHoldWalker.js's header for the backing research and the
+  // honest risk this carries without the usual SHADOW-first validation period). 100pt stop
+  // until the trade survives ARM_AT_MINUTES, then the stop snaps to breakeven and the trade
+  // keeps holding -- past the old 60-minute cutoff -- until either the breakeven stop is
+  // hit, or the real exit boundary arrives: the NEXT real POC_ROTATION_JOIN event of EITHER
+  // direction (any setup_type, matched on fired_at), or row.expires_at (now a 24h cap, not
+  // a 60min one), whichever is earlier. t1_level remains an unreachable informational
+  // placeholder (never checked) -- still a genuinely target-less exit shape, deliberately
+  // NOT routed through the shared generic bar-walk further below, same reasoning as before.
     if (row.setup_type.startsWith('POC_ROTATION_JOIN')) {
-      const stop = row.stop_level;
-      if (entry == null || stop == null) continue;
+      const stop = POC_STOP_POINTS; // 100pt, imported directly from pocRotationJoinDetector.js -- the same constant it inserts row.stop_level with, never a hand-typed duplicate
+      if (entry == null) continue;
       const long = row.setup_type.endsWith('_LONG');
+
+      // Real exit boundary: the next real POC_ROTATION_JOIN event (either direction) that
+      // has ACTUALLY fired by now, or the 24h cap -- whichever is earlier. This is
+      // necessarily computed fresh each poll, since "the next event" can't be known at
+      // insert time; a trade with no qualifying next-event yet simply holds to the 24h cap
+      // for now, and this query will start returning one the moment a new real event fires.
+      const nextEventQ = await query(`
+        SELECT fired_at FROM active_setups
+        WHERE setup_type LIKE 'POC_ROTATION_JOIN%' AND id != $1 AND fired_at > $2
+        ORDER BY fired_at ASC LIMIT 1
+      `, [row.id, row.fired_at]);
+      const nextEventAt = nextEventQ.rows[0]?.fired_at ?? null;
+      const exitBoundary = (nextEventAt && nextEventAt < row.expires_at) ? nextEventAt : row.expires_at;
+
       const barsSinceFired = await query(`
         SELECT ts::text as ts, high::float, low::float, close::float
         FROM price_bars_primary WHERE symbol='NQ' AND ts > $1 AND ts <= $2 ORDER BY ts ASC
-      `, [row.fired_at, nowEt]);
+      `, [row.fired_at, nowEt < exitBoundary ? nowEt : exitBoundary]);
+
       let resolution = null, priceAtRes = null, resolvedAt = null, method = null;
+      let walkState = { barsElapsed: 0, armed: false };
       for (const bar of barsSinceFired.rows) {
-        const stopHit = long ? bar.low <= stop : bar.high >= stop;
-        if (stopHit) { resolution = 'STOP_HIT'; method = 'PRICE_CLEAN'; priceAtRes = stop; resolvedAt = bar.ts; break; }
+        const step = stepPocBreakevenHold(walkState, bar, { entry, long, stop, armAtBars: POC_ARM_AT_MINUTES }); // 1-min bars, so minutes == bar count
+        walkState = step.state;
+        if (step.resolution) {
+          resolution = step.resolution.resolution; method = step.resolution.method;
+          priceAtRes = step.resolution.priceAtRes; resolvedAt = bar.ts;
+          break;
+        }
       }
-      // TIMEOUT_EXIT, not MARK_TO_MARKET (2026-09-15, OPEN_DECISION
-      // real_trade_filter_mtm_exclusion_undercounts_20260914, DeepSeek design-critiqued):
-      // this Time60_Stop20 exit's 60-minute mark-to-market IS the designed win condition,
-      // not an accident of running out of session time -- REAL_TRADE_FILTER's MARK_TO_MARKET
-      // exclusion was built to guard against the latter (see setupExpiry.js/the generic
-      // session-end force-close below), and was silently excluding every real MTM win here,
-      // pinning real_n below the STOP_HIT-only count. TIMEOUT_EXIT matches the codebase's own
-      // existing precedent (EXTEND_TIME_EXPIRED/TRAIL_TIME_EXPIRED) for "give a designed
-      // timeout its own method string" -- no REAL_TRADE_FILTER SQL change needed, it's simply
-      // not in the exclusion list.
-      if (!resolution && row.expires_at && nowEt >= row.expires_at && barsSinceFired.rows.length > 0) {
+      // TIMEOUT_EXIT-style method (not MARK_TO_MARKET -- see the 2026-09-15 precedent this
+      // branch already followed before this revision): reaching the real exit boundary
+      // without stopping out is a designed outcome of this exit shape, not an accident of
+      // running out of session time, so it must NOT land in REAL_TRADE_FILTER's
+      // MARK_TO_MARKET/RECOVERY_MTM exclusion list.
+      if (!resolution && nowEt >= exitBoundary && barsSinceFired.rows.length > 0) {
         const lastBar = barsSinceFired.rows[barsSinceFired.rows.length - 1];
-        resolution = 'TIME_EXPIRED'; method = 'TIMEOUT_EXIT'; priceAtRes = lastBar.close; resolvedAt = lastBar.ts;
+        resolution = 'TIME_EXPIRED'; method = 'POC_BEHOLD_TIMEOUT'; priceAtRes = lastBar.close; resolvedAt = lastBar.ts;
       }
       if (resolution) {
         const pnl = long ? (priceAtRes - entry) * PNL_PER_POINT - COMMISSION : (entry - priceAtRes) * PNL_PER_POINT - COMMISSION;

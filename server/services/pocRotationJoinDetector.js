@@ -55,8 +55,21 @@ import { isOppositeDirectionOpen } from './acdRiskGates.js';
 const THETA_CACHE_KEY = 'pocRotationJoin_theta';
 const THETA_CACHE_TTL = 12 * 60 * 60 * 1000; // 12hr -- full-history median bar range moves negligibly intraday
 const MIN_SESSION_BARS = 40; // matches rthFlushDetector's floor -- not enough bars yet to trust leg detection
-const TIME_LIMIT_MINUTES = 60; // Time60_Stop20's validated exit -- 1-min bars, so 60 bars == 60 minutes
-const STOP_POINTS = 20;
+// REVISED 2026-10-11, wired LIVE (replaces the original Time60_Stop20 exit, not additive) --
+// see server/services/pocBreakevenHoldWalker.js's own header for the full backing research
+// and the honest risk this carries (shipped without independent review, on explicit user
+// direction, not the usual SHADOW-first path this codebase's comparable mechanisms take).
+// ARM_AT_MINUTES is the breakeven-arm checkpoint (unchanged from the original Time60's own
+// 60-minute mark) -- no longer the hard exit boundary, just where the stop snaps to
+// breakeven. EXPIRES_CAP_HOURS is the new true outer bound (expires_at), replacing the old
+// flat 60-minute expiry -- the real exit boundary is MIN(next real POC_ROTATION_JOIN event
+// of either direction, this cap), computed live in resolveSetups.js since the "next event"
+// half can't be known at insert time.
+// Exported so resolveSetups.js's resolution branch reads the SAME constants this detector
+// inserts with, rather than a hand-typed duplicate that could silently drift out of sync.
+export const ARM_AT_MINUTES = 60;
+const EXPIRES_CAP_HOURS = 24;
+export const STOP_POINTS = 100; // was 20 -- validated wider-stop construction, see the walker's header
 const T1_PLACEHOLDER_DIST = 1000; // informational-only, see header -- never checked for resolution
 
 let _cache = { sessionKey: null, lastProcessedEntryTs: null };
@@ -142,7 +155,7 @@ export async function detectPocRotationJoin(io) {
       const t1Placeholder = long ? entryPx + T1_PLACEHOLDER_DIST : entryPx - T1_PLACEHOLDER_DIST;
       const firedAt = entryBar.ts;
       const expiresAtDate = new Date(entryBar.ts.replace(' ', 'T') + 'Z');
-      expiresAtDate.setUTCMinutes(expiresAtDate.getUTCMinutes() + TIME_LIMIT_MINUTES);
+      expiresAtDate.setUTCHours(expiresAtDate.getUTCHours() + EXPIRES_CAP_HOURS);
       const expiresAt = expiresAtDate.toISOString().slice(0, 19).replace('T', ' ');
 
       const entryEtMin = (() => {

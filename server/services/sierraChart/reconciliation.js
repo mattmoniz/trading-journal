@@ -645,13 +645,34 @@ export function getBrokerSnapshot(dtcClient, { collectWindowMs = 4000 } = {}) {
   });
 }
 
+/** Strips a trailing ".EXCHANGE" off this app's combined symbol identity (e.g.
+ * "MNQZ26.CME" -> "MNQZ26"), mirroring dtcClient.js's _splitSymbolForWire() split point
+ * (last '.'). Matching-only -- never used to rebuild or store a symbol anywhere. */
+function _bareSymbol(symbol) {
+  if (typeof symbol !== 'string') return symbol;
+  const dot = symbol.lastIndexOf('.');
+  return dot === -1 ? symbol : symbol.slice(0, dot);
+}
+
 /** Extract the broker's reported position for one symbol out of a getBrokerSnapshot()'s
  * `positionMessages` -- null if the broker never mentioned this symbol at all within the
  * collection window (unknown, NOT "flat" -- a real NoPositions message for this symbol is
- * what means flat, and resolves to 0 below). Preserves the exact matching semantics of
- * the pre-2026-09-29 getBrokerPositionForSymbol() this replaces. */
+ * what means flat, and resolves to 0 below).
+ *
+ * FIXED 2026-10-08: confirmed live that a real DTC POSITION_UPDATE for this account reports
+ * Symbol="MNQZ26" with Exchange="" (blank) -- the exchange is NOT embedded in Symbol here,
+ * unlike what the pre-2026-10-07 order-SUBMISSION code assumed (see dtcClient.js's
+ * _splitSymbolForWire header). This app's own symbol identity everywhere else (DB storage,
+ * `params.symbol` passed in here) is the combined "MNQZ26.CME" form, so an exact `p.Symbol
+ * === symbol` match silently failed against a REAL, matching position -- REFUSED_BROKER_
+ * MISMATCH on a legitimate flatten, and the position-invariant check below reading
+ * `checked: false` ("no broker response") even though the broker responded fine. Falls back
+ * to a bare-symbol match (exact match tried first, in case some account DOES echo the
+ * combined form) -- this does not weaken the guard's intent (still refuses on a genuine
+ * quantity/side mismatch), it only fixes which broker message counts as "this symbol". */
 function extractPositionForSymbol(positionMessages, symbol) {
-  const msg = positionMessages.find((p) => p.Symbol === symbol);
+  const bare = _bareSymbol(symbol);
+  const msg = positionMessages.find((p) => p.Symbol === symbol || p.Symbol === bare);
   if (!msg) return null;
   return msg.NoPositions ? 0 : msg.Quantity;
 }

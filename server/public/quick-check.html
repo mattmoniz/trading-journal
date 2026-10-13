@@ -1212,22 +1212,28 @@ function renderPulseBar(pulse, setupData, ctx, build, rotBadge, volPile) {
   const col1 = [];
   const col2 = [];
 
-  const fromOpenStr = pulse.ptsFromOpen != null ? fmtPct(pulse.ptsFromOpen.toFixed(0)) + 'pt' : '—';
-  // KEEP IN SYNC with MarketPulseBar.jsx's fromOpenClr/moveColor/deltaColor/rvolColor -- same
-  // rangeClass/deltaClass/rvolSigma -> color mappings, duplicated because this is a standalone
-  // page that can't import that module. Token names below deliberately match C.muted/C.dim
-  // usage there, NOT this file's own --muted/--dim naming intuition -- verify against
-  // MarketPulseBar.jsx directly before changing either.
-  const fromOpenClr = pulse.ptsFromOpen == null ? 'var(--muted)' : pulse.ptsFromOpen > 0 ? 'var(--green)' : pulse.ptsFromOpen < 0 ? 'var(--red)' : 'var(--muted)';
+  // CHANGED 2026-10-12, user request (refined twice same day: first to netChangeOnDay/prior-
+  // RTH-close, then to this -- "net change since beginning of Globex"): was pulse.ptsFromOpen
+  // (change since TODAY's own RTH open) -- now pulse.netChangeSinceGlobexOpen (change since the
+  // CURRENT continuous session's real gap-detected open, same boundary logic as acd.js's
+  // bigMoveSignal). netChangeOnDay (prior-RTH-close) is still computed server-side and
+  // available in the API response if wanted elsewhere, just not displayed in this chip.
+  // MarketPulseBar.jsx's in-app chip intentionally keeps ptsFromOpen -- this is a deliberate,
+  // page-specific divergence, not a KEEP-IN-SYNC violation to "fix" later.
+  const fromOpenStr = pulse.netChangeSinceGlobexOpen != null ? fmtPct(pulse.netChangeSinceGlobexOpen.toFixed(0)) + 'pt' : '—';
+  // KEEP IN SYNC with MarketPulseBar.jsx's moveColor/rvolColor -- same rangeClass/rvolSigma ->
+  // color mappings, duplicated because this is a standalone page that can't import that
+  // module. Token names below deliberately match C.muted/C.dim usage there, NOT this file's
+  // own --muted/--dim naming intuition -- verify against MarketPulseBar.jsx directly before
+  // changing either. (CumΔ chip removed 2026-10-12 per user request -- deltaColor/deltaClass
+  // no longer apply here. fromOpenClr below now colors netChangeSinceGlobexOpen, not
+  // ptsFromOpen -- see the fromOpenStr comment just above.)
+  const fromOpenClr = pulse.netChangeSinceGlobexOpen == null ? 'var(--muted)' : pulse.netChangeSinceGlobexOpen > 0 ? 'var(--green)' : pulse.netChangeSinceGlobexOpen < 0 ? 'var(--red)' : 'var(--muted)';
   col1.push(chip('NQ', (pulse.currentPrice ? pulse.currentPrice.toFixed(2) : '—') + '<span id="sierra-dot-slot">' + sierraDotHtml() + '</span>', fromOpenStr, fromOpenClr, 'var(--text)'));
 
   const moveColor = pulse.rangeClass === 'EXTENDED' ? 'var(--red)' : pulse.rangeClass === 'QUIET' ? 'var(--muted)' : 'var(--amber)';
   const rangeLabel = pulse.rangeClass === 'EXTENDED' ? 'BIG' : pulse.rangeClass === 'QUIET' ? 'QUIET' : 'NORMAL';
   col1.push(chip('Range', pulse.sessionRange ? pulse.sessionRange.toFixed(0) + 'pt' : '—', rangeLabel, moveColor, moveColor));
-
-  const deltaColor = pulse.deltaClass === 'HIGH' ? (pulse.deltaSign === 'BUYING' ? 'var(--green)' : 'var(--red)') : 'var(--dim)';
-  const deltaArrow = pulse.deltaSign === 'BUYING' ? '▲' : pulse.deltaSign === 'SELLING' ? '▼' : '—';
-  col1.push(chip('CumΔ', pulse.sessionDelta != null ? deltaArrow + ' ' + Math.abs(pulse.sessionDelta).toLocaleString() : '—', pulse.deltaClass !== 'NORMAL' ? pulse.deltaClass : '', deltaColor, deltaColor));
 
   if (pulse.rvol != null) {
     const rvolColor = pulse.rvolSigma >= 2 ? 'var(--red)' : pulse.rvolSigma >= 1 ? 'var(--amber)' : pulse.rvolSigma < -0.5 ? 'var(--muted)' : 'var(--dim)';
@@ -1763,25 +1769,28 @@ function renderTimeline() {
 
   // Globex-watch rows -- computed regardless of globexWatch's current state (cheap, and the
   // toggle button below needs the count either way) but NEVER folded into `resolved`/
-  // `rangeStats` -- those stay Live/All-driven and untouched, per the user's explicit ask.
+  // `rangeStats` -- those are two independent row lists, each with their own Live/All split.
   // Base filters mirror `resolved` (session-scoped, resolved, not stale-priced, cluster-view-
-  // scoped) but deliberately NOT the liveAllFilter live/all restriction -- Globex's
-  // GLOBEX_PAUSED force-SHADOW override was removed 2026-09-28 (acd.js), but this tab still
-  // deliberately shows both ACTIVE and SHADOW Globex rows regardless -- a real Globex fire is
-  // worth seeing here either way, not just once it clears the live-eligibility bar.
+  // scoped). REVERSED 2026-10-11 (was deliberately exempt from liveAllFilter since
+  // 2026-09-22, "a real Globex fire is worth seeing here either way") -- user found this
+  // exact asymmetry (main timeline respects Live/All, Globex Watch never did) was the root
+  // cause of repeated confusion about whether a shown Globex row was real or just logged, and
+  // asked for it to match. Now filters the same way `resolved` does.
   // FIXED 2026-09-22 (user-caught live: "I don't see a globex trade" -- two real Globex
   // fires from minutes earlier, both still genuinely open, were invisible here): this used
   // to explicitly EXCLUDE still-open (SHADOW/ACTIVE status) rows -- the opposite of the
   // "show open trades inline with an amber badge" fix already applied to the main timeline
   // (`resolved`, below) the same day. That fix was never carried over to this separate,
   // parallel filter chain. Now includes open rows here too, same rowHtml() amber-badge
-  // rendering either way.
+  // rendering either way -- an open row still passes the liveAllFilter check below as long as
+  // its origin_status is ACTIVE (open SHADOW rows are correctly still hidden under 'live').
   const globexRows = scoped
     .filter(s => !s.stale_entry_price_basis)
     .filter(s => !s.late_fill_past_expiry_basis)
     .filter(s => s.fired_at_str)
     .filter(s => !isRthAdjacent(s))
     .filter(s => clusterView === 'declustered' || s.is_cluster_primary !== false)
+    .filter(s => liveAllFilter === 'all' || s.origin_status === 'ACTIVE')
     .sort((a, b) => (b.fired_at_str || '').localeCompare(a.fired_at_str || ''));
   const displayRows = globexWatch ? globexRows : resolved;
 
@@ -1837,8 +1846,13 @@ function renderTimeline() {
   renderEquityCurve('timeline-equity', displayRows, 'today', true);
 
   if (displayRows.length === 0) {
-    const emptyMsg = globexWatch ? 'No Globex trades fired yet this session' :
-      liveAllFilter === 'live' ? 'No live trades fired yet this session' : 'Nothing fired yet this session';
+    // globexWatch's own empty message is now liveAllFilter-aware too (2026-10-11, alongside
+    // globexRows itself respecting Live/All) -- previously always said "No Globex trades
+    // fired," which would have been misleading once some fired as SHADOW but got filtered
+    // out under 'live'.
+    const emptyMsg = globexWatch
+      ? (liveAllFilter === 'live' ? 'No live Globex trades fired yet this session' : 'No Globex trades fired yet this session')
+      : (liveAllFilter === 'live' ? 'No live trades fired yet this session' : 'Nothing fired yet this session');
     $('timeline-list').innerHTML = '<div class="loading">' + emptyMsg + '</div>';
     return;
   }

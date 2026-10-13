@@ -145,16 +145,29 @@ export async function getPriorWeekRange(date) {
 // requirement now lives INSIDE the subquery that picks the date, so it can only ever pick a
 // date that genuinely has RTH bars, same fix shape as that convention's own >=/ASC pattern.
 export async function getPriorDayRthRange(date) {
+  // pdClose added 2026-10-12 (marketPulse.js's "net change on the day" chip, user request) --
+  // reuses this function's own already-correct prior-trading-day resolution (the inner
+  // MAX(ts::date) subquery, which already handles the Monday-after-holiday case per the
+  // standing hard rule) rather than writing a second copy of that date logic. The close is
+  // the last RTH bar's close (et_min closest to 959, i.e. ~3:59pm ET), matching the
+  // conventional close-to-close "daily net change" most charting platforms use.
   const r = await query(`
-    SELECT MAX(high)::float as hi, MIN(low)::float as lo FROM price_bars_primary
-    WHERE symbol='NQ' AND ts::date = (
-      SELECT MAX(ts::date) FROM price_bars_primary
+    WITH pd AS (
+      SELECT MAX(ts::date) as d FROM price_bars_primary
       WHERE symbol='NQ' AND ts::date < $1
         AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 959
     )
-    AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 959
+    SELECT
+      MAX(high)::float as hi, MIN(low)::float as lo,
+      (SELECT close::float FROM price_bars_primary, pd
+       WHERE symbol='NQ' AND ts::date = pd.d
+         AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 959
+       ORDER BY ts DESC LIMIT 1) as close
+    FROM price_bars_primary, pd
+    WHERE symbol='NQ' AND ts::date = pd.d
+      AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 959
   `, [date]).catch(() => ({ rows: [] }));
-  return { pdHigh: r.rows[0]?.hi ?? null, pdLow: r.rows[0]?.lo ?? null };
+  return { pdHigh: r.rows[0]?.hi ?? null, pdLow: r.rows[0]?.lo ?? null, pdClose: r.rows[0]?.close ?? null };
 }
 
 // ── Structural state derivation ──────────────────────────────────────────────

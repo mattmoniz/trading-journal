@@ -1980,20 +1980,32 @@ async function main() {
     {
       // OPEN_DECISION real_trade_filter_mtm_exclusion_undercounts_20260914 (DeepSeek
       // design-critiqued, fixed 2026-09-15): resolveSetups.js's POC_ROTATION_JOIN and
-      // IB_LOW_PNR branches now write resolution_method='TIMEOUT_EXIT' for their designed
+      // IB_LOW_PNR branches write a designed-timeout resolution_method for their designed
       // 60min/hold-to-close exit, instead of reusing 'MARK_TO_MARKET' (the generic
       // session-end force-close every other setup_type's incomplete positions get, which
       // REAL_TRADE_FILTER deliberately still excludes). This check is DeepSeek's own
       // required-before-ship verification item 6 -- catches a future edit accidentally
-      // widening TIMEOUT_EXIT to a setup_type it wasn't designed for, or a regression that
-      // reverts one of these two branches back to MARK_TO_MARKET.
+      // widening a timeout label to a setup_type it wasn't designed for, or a regression
+      // that reverts one of these two branches back to MARK_TO_MARKET.
+      // POC_ROTATION_JOIN's own label changed 2026-10-11 (TIMEOUT_EXIT -> POC_BEHOLD_TIMEOUT)
+      // alongside the breakeven-hold exit revision -- IB_LOW_PNR_SHORT is unaffected, still
+      // 'TIMEOUT_EXIT'. Both labels are checked here since either is a legitimate
+      // designed-timeout marker, just scoped to different setup_types below.
       const TIMEOUT_EXIT_TYPES = ['POC_ROTATION_JOIN_LONG', 'POC_ROTATION_JOIN_SHORT', 'IB_LOW_PNR_SHORT'];
-      const teRows = await client.query(`SELECT DISTINCT setup_type FROM active_setups WHERE resolution_method = 'TIMEOUT_EXIT'`);
-      const unexpectedTeTypes = teRows.rows.map(r => r.setup_type).filter(t => !TIMEOUT_EXIT_TYPES.includes(t));
+      // POC_ROTATION_JOIN accepts EITHER label: historical rows resolved before the
+      // 2026-10-11 breakeven-hold revision legitimately carry the old 'TIMEOUT_EXIT', new
+      // rows carry 'POC_BEHOLD_TIMEOUT' -- both are the real, correct label for their own
+      // fired_at era, not a drift bug.
+      const DESIGNED_TIMEOUT_METHODS_BY_TYPE = {
+        POC_ROTATION_JOIN_LONG: ['TIMEOUT_EXIT', 'POC_BEHOLD_TIMEOUT'], POC_ROTATION_JOIN_SHORT: ['TIMEOUT_EXIT', 'POC_BEHOLD_TIMEOUT'],
+        IB_LOW_PNR_SHORT: ['TIMEOUT_EXIT'],
+      };
+      const teRows = await client.query(`SELECT DISTINCT setup_type, resolution_method FROM active_setups WHERE resolution_method IN ('TIMEOUT_EXIT', 'POC_BEHOLD_TIMEOUT')`);
+      const unexpectedTeTypes = teRows.rows.filter(r => !(DESIGNED_TIMEOUT_METHODS_BY_TYPE[r.setup_type] || []).includes(r.resolution_method)).map(r => `${r.setup_type}:${r.resolution_method}`);
       if (unexpectedTeTypes.length > 0) {
-        fail(`[26] resolution_method='TIMEOUT_EXIT' found on setup_type(s) outside the expected ${JSON.stringify(TIMEOUT_EXIT_TYPES)}: ${unexpectedTeTypes.join(', ')} -- either a new setup_type legitimately earned a designed-timeout exit (update TIMEOUT_EXIT_TYPES here) or something is writing this label without the exit design to back it up.`);
+        fail(`[26] a designed-timeout resolution_method was found on an unexpected setup_type/method pairing: ${unexpectedTeTypes.join(', ')} -- expected mapping is ${JSON.stringify(DESIGNED_TIMEOUT_METHODS_BY_TYPE)} -- either a new setup_type legitimately earned a designed-timeout exit (update the mapping here) or something is writing this label without the exit design to back it up.`);
       } else {
-        ok(`[26] resolution_method='TIMEOUT_EXIT' only appears on ${JSON.stringify(TIMEOUT_EXIT_TYPES)}`);
+        ok(`[26] designed-timeout resolution_method only appears per its expected mapping: ${JSON.stringify(DESIGNED_TIMEOUT_METHODS_BY_TYPE)}`);
       }
 
       const staleMtmRows = await client.query(`
@@ -2002,7 +2014,7 @@ async function main() {
         GROUP BY setup_type
       `, [TIMEOUT_EXIT_TYPES]);
       if (staleMtmRows.rows.length > 0) {
-        fail(`[26] ${TIMEOUT_EXIT_TYPES.join('/')} still have MARK_TO_MARKET rows (should all be TIMEOUT_EXIT after the 2026-09-15 backfill): ${JSON.stringify(staleMtmRows.rows)} -- either a new fire slipped through with the old label (check resolveSetups.js hasn't reverted) or a new historical row needs the same backfill scripts/backfill_timeout_exit_relabel_20260915.mjs applied.`);
+        fail(`[26] ${TIMEOUT_EXIT_TYPES.join('/')} still have MARK_TO_MARKET rows (should all be a designed-timeout label after the 2026-09-15 backfill): ${JSON.stringify(staleMtmRows.rows)} -- either a new fire slipped through with the old label (check resolveSetups.js hasn't reverted) or a new historical row needs the same backfill scripts/backfill_timeout_exit_relabel_20260915.mjs applied.`);
       } else {
         ok('[26] no MARK_TO_MARKET rows remain for POC_ROTATION_JOIN/IB_LOW_PNR_SHORT');
       }
@@ -2014,10 +2026,13 @@ async function main() {
       // inline, and a loose anchor matched THAT occurrence first, understating the real distance
       // to the branch's own method= line by ~9000 chars and producing a false FAIL (caught before
       // this check was trusted, not after).
-      if (!/if \(row\.setup_type\.startsWith\('POC_ROTATION_JOIN'\)\) \{[\s\S]{0,2000}?method = 'TIMEOUT_EXIT'/.test(resolveSetupsSrc)) {
-        fail("[26] resolveSetups.js's POC_ROTATION_JOIN branch no longer writes method = 'TIMEOUT_EXIT' within ~2000 chars of its own 'if (row.setup_type.startsWith(...)) {' line -- confirm the branch wasn't refactored back to MARK_TO_MARKET or moved far enough that this check's proximity window needs updating.");
+      // Window widened to 3500 chars 2026-10-11 (was 2000) -- the branch legitimately grew
+      // with the breakeven-hold exit revision (next-event query, boundary computation, the
+      // bar-walk loop itself), confirmed distance ~2644 chars at the time of this change.
+      if (!/if \(row\.setup_type\.startsWith\('POC_ROTATION_JOIN'\)\) \{[\s\S]{0,3500}?method = 'POC_BEHOLD_TIMEOUT'/.test(resolveSetupsSrc)) {
+        fail("[26] resolveSetups.js's POC_ROTATION_JOIN branch no longer writes method = 'POC_BEHOLD_TIMEOUT' within ~3500 chars of its own 'if (row.setup_type.startsWith(...)) {' line -- confirm the branch wasn't refactored back to MARK_TO_MARKET or moved far enough that this check's proximity window needs updating.");
       } else {
-        ok("[26] resolveSetups.js's POC_ROTATION_JOIN branch still writes TIMEOUT_EXIT");
+        ok("[26] resolveSetups.js's POC_ROTATION_JOIN branch still writes POC_BEHOLD_TIMEOUT");
       }
       if (!/if \(row\.setup_type\.startsWith\('IB_LOW_PNR'\)\) \{[\s\S]{0,2000}?method = 'TIMEOUT_EXIT'/.test(resolveSetupsSrc)) {
         fail("[26] resolveSetups.js's IB_LOW_PNR branch no longer writes method = 'TIMEOUT_EXIT' within ~2000 chars of its own 'if (row.setup_type.startsWith(...)) {' line -- confirm the branch wasn't refactored back to MARK_TO_MARKET or moved far enough that this check's proximity window needs updating.");
