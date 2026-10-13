@@ -338,3 +338,79 @@ revisited, it needs a live A/B on the response format first, not a blind copy of
 fix.
 
 
+
+## 2026-10-13: Multi-position-stacking build -- shipped, NOT yet live, DeepSeek review drafted not dispatched
+
+Per explicit user directive ("Yea build it and raise to 10"): the DeepSeek-reviewed design to
+allow multiple same-direction real positions (direction-aware, opposite-direction still blocked,
+capped at MAX_CONCURRENT_POSITIONS=10 -- the user's own override of DeepSeek's recommended cap
+of 2, matching the broker's real Trade Position Limit) is built, unit-tested, and committed as
+`575e27f`. See that commit and `checkEntryGates()`/`brokerExitDecision()`'s own header comments
+in `server/services/sierraChart/reconciliation.js` for the full design.
+
+**Status at session pause, exact next steps:**
+1. The `position_slot` schema migration was run manually by the user (the sandbox's auto-mode
+   classifier denied it as a schema-altering Bash action) -- independently verified afterward
+   (information_schema + a direct read of the one real open position, correctly backfilled to
+   slot=1). Done, not pending.
+2. The entry-gate rewrite itself (`checkEntryGates()` replacing `isAnotherPositionOpen()` at
+   both real insert sites; `brokerExitDecision()` relaxed to sign+magnitude-floor) is committed.
+   Verified: lint clean, both files import cleanly under real ESM, `test_invariants.mjs`
+   byte-identical (138/166) before/after via `git stash`, `brokerExitDecision()` unit-tested
+   against 7 cases including the original misattribution-bug shape, `checkEntryGates()`
+   exercised against the real live DB state.
+3. **A DeepSeek code-review request for the actual diff was DRAFTED (`scratch/claude_request_
+   deepseek.md`, the diff itself exported to `/tmp/stacking_diff_for_review.txt`) but NOT YET
+   DISPATCHED** -- the session paused before calling `invoke_gemini.sh`'s DeepSeek sibling
+   (`scripts/invoke_deepseek.sh`). This review is the real next step, before restarting live --
+   matches this codebase's own standing "a fix applied in response to a review finding needs the
+   same discipline as the original change" rule, since the original DeepSeek pass only reviewed
+   the PLAN, not this actual code.
+4. **The server has NOT been restarted** -- the old strict 0-or-1-position singleton is still
+   what's actually running live. Per the standing restart rule, a restart disarms the kill
+   switch; `DTC_AUTO_REARM_SAFE=true` is set on the active Sim1 profile, so it should auto-rearm
+   on its own once a fresh post-restart reconciliation comes back clean -- but the restart itself
+   should only happen after the DeepSeek review above, and the user should be told it's
+   happening (per the standing restart-disarms rule), not treated as a silent follow-up.
+5. Three real follow-on gaps from the same review, deliberately NOT built in this pass, flagged
+   as `OPEN_DECISION`s (`node scripts/flag_decision.mjs --list` to see full text):
+   - `dual_account_position_snapshot_blind_spot_20261013` (HIGH) -- confirmed, not just
+     theorized: `getBrokerSnapshot()` never even requests the Globex account's positions at all
+     (`requestCurrentPositions()` defaults to `this._tradeAccount` only), so
+     `checkPositionInvariant()`/`brokerExitDecision()` are structurally blind to any real Globex
+     position. Predates this build but is more consequential now that RTH+Globex positions can
+     coexist under stacking.
+   - `dll_gate_blind_to_open_exposure_20261013` (MEDIUM-HIGH) -- `evaluateDailyLossLimit()` only
+     sums realized broker P&L; has zero visibility into unrealized exposure across up to 10
+     stacked open positions.
+   - `same_setup_type_stacking_rule_undecided_20261013` (MEDIUM) -- no same-setup-type-specific
+     cap exists at the real-order layer; governed only by whatever the upstream simulated-layer
+     refire gate already filters before a candidate reaches ACTIVE.
+
+**If a future session picks this thread up cold: read `575e27f`'s diff and `scratch/claude_
+request_deepseek.md` first, then either dispatch that review as-is or re-derive whether it's
+still accurate against any code that's changed since.**
+
+**UPDATE, same session: the DeepSeek review above WAS dispatched and came back.** Found 2 real
+issues (verified independently before accepting, not taken on faith): (1) `sweepExits()` hardcoded
+`tradeAccount: dtcClient.tradeAccount` for every exit instead of reusing the entry's own stored
+account -- a Globex-originated exit was being submitted to the wrong account; (2) the new slot
+index only enforces capacity, not direction (the old singleton index was a true table-wide "at
+most one, ever" constraint that made opposite-direction coexistence structurally impossible as a
+side effect -- the new one doesn't have an equivalent). Both fixed, committed as `d150292`
+(verified: lint clean, both files import under real ESM, `test_invariants.mjs` byte-identical
+138/166, and a new real-DB test exercising the actual SQL against two borrowed-inert setup_ids).
+A third, minor issue (the escalation UPDATE could throw a real exception on a rare slot race
+instead of returning "no slot") was fixed in the same commit.
+
+The `dual_account_position_snapshot_blind_spot_20261013` decision was updated with DeepSeek's
+sharper assessment -- the SUBMISSION-routing half is now fixed by `d150292`, but the pre-exit
+SAFETY GUARD (`brokerExitDecision()`/`checkPositionInvariant()`, fed by `getBrokerSnapshot()`)
+remains account-blind, which DeepSeek thinks should be a near-term priority, not an indefinitely-
+deferred item, since it's a live misattribution risk on the exit path, not just a halt risk.
+
+**Status: both rounds of fixes committed (`575e27f`, `d150292`). Server NOT YET restarted** --
+still pending, and separately, the real broker-side mismatch from the earlier manual "Reverse"
+incident (setup 134421, kill switch currently halted/disarmed, real broker position short 1 that
+this app has no record of) needs the user's own resolution before a restart/re-arm makes sense
+regardless of this code being ready.
