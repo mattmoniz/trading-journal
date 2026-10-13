@@ -3339,14 +3339,25 @@ export default function createACDRouter(io) {
         return res.json({ setup: null, sessionClosed: true, openStandalonePosition });
       }
 
-      // Globex window: 6 PM–8:30 AM ET — fire level fades against PD VAH/VAL/POC only.
+      // Globex window: 6 PM–9:30 AM ET — fire level fades against PD VAH/VAL/POC only.
       // FIXED 2026-08-20 (detector_fires_during_weekend_globex_closure): this used to be a bare
       // time-of-day check with no day-of-week gate, so any ungated caller (a browser left open
       // over the weekend) could trip it during a real Globex closure -- see isGlobexWeekClosed()'s
       // comment above for the full incident. The server's own autonomous poller already skips
       // calling this endpoint at all during closed hours (server/index.js), but other callers
       // (frontend polls) don't -- gating here makes the endpoint itself safe regardless of caller.
-      const inGlobex = !isGlobexWeekClosed(nowET) && (etHour >= 18 || etMin < 8 * 60 + 30);
+      // EXTENDED 2026-10-13 (8:30am -> 9:30am): the old 8:30 cutoff left a real, acknowledged
+      // ~59-minute dead window (8:30-9:29 AM ET) where NEITHER this branch nor the RTH main
+      // engine could fire anything -- Globex mode had already turned off, and the RTH engine's
+      // own allRthBarsRow gate has no real bars to work with until the market actually opens at
+      // 9:30. Found 2026-08-28 (docs/KNOWN_ISSUES.md #15) and left alone at the time ("confirmed
+      // NOT reachable in practice" -- true, but only because nothing could fire there, not
+      // because the gap didn't exist). globexFlushDetector.js and STACK_VOL_BREAK_LIVE's own
+      // computeStackVolSignal() both already independently use 9:30am as their Globex/RTH
+      // boundary -- this brings the main dispatch in line with that precedent instead of being
+      // the one place still stuck on the old cutoff. `etMin < 570` (strict) so 9:30:00 itself is
+      // already RTH, matching computeStackVolSignal()'s own `bar.tod < 570` convention.
+      const inGlobex = !isGlobexWeekClosed(nowET) && (etHour >= 18 || etMin < 9 * 60 + 30);
       if (inGlobex) {
         const sessionDate = etHour >= 18 ? nextTradingDay(nowET) : todayET;
         const globexSetup = await detectGlobexSetup(sessionDate, io);
@@ -3374,7 +3385,8 @@ export default function createACDRouter(io) {
       // (daily-loss-limit-driven) — this one is purely time-of-day.
       const noNewEntries = inNewEntryDeadZone || inRthOpenDeadZone;
 
-      // RTH detection — same as before (8:30 AM–5 PM ET)
+      // RTH detection — this branch now starts at 9:30 AM ET (was 8:30), runs through 5 PM —
+      // see the inGlobex comment above for why the boundary moved.
       const isRTH = true; // already gated above
 
       // ── Fetch all data sources in parallel + day-cached derived values ────────
