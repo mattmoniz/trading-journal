@@ -136,6 +136,17 @@
   .sweep-watch-tag { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: var(--amber); background: rgba(245,158,11,0.15); padding: 2px 7px; border-radius: 4px; flex-shrink: 0; }
   .sweep-watch-note { font-size: 11px; color: var(--dim); margin-top: 6px; line-height: 1.5; }
 
+  /* Order-lifecycle watcher banner (2026-10-13) -- real-order safety-net alerts
+     (check_order_lifecycle_health.mjs), red not amber since this is a live-order issue, not a
+     background-only observation. Same "stay hidden unless there's something to say" convention
+     as #sweep-watch -- display:none by default, .visible toggles it on. Dismiss comes from
+     getOrderLifecycleAlertState()'s shared server-side state (orderLifecycleAlert.js), not
+     localStorage -- dismissing here also suppresses the line on the Home Assistant page, since
+     the user wants one alert concept shown in two places. */
+  #order-lifecycle-banner { display: none; border: 1.5px solid rgba(248,113,113,0.5); border-radius: 8px; padding: 12px 14px; background: rgba(248,113,113,0.08); margin-bottom: 14px; }
+  #order-lifecycle-banner.visible { display: block; }
+  .ol-banner-tag { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: var(--red); background: rgba(248,113,113,0.15); padding: 2px 7px; border-radius: 4px; flex-shrink: 0; }
+
   /* Session timeline -- .tab-head/.tab-body added 2026-09-29 (Shadow/Blocked tabs) so those
      panels share this exact styling via a class instead of duplicating the #timeline-head ID
      (IDs must be unique in the DOM; getElementById() would silently always resolve to the
@@ -333,6 +344,7 @@
 <div id="pulse-bar"><div id="pulse-col-1" class="pulse-col"></div><div id="pulse-col-2" class="pulse-col"></div></div>
 
 <div class="wrap">
+  <div id="order-lifecycle-banner"></div>
   <div id="info-chips-row">
     <div id="vol-regime-card" onclick="openVolRegimeHistoryModal()"></div>
     <div id="pulse-reading-card"></div>
@@ -3557,9 +3569,53 @@ async function armSierraChart(ev) {
   }
   checkFlagsBanner();
 }
+// Order-lifecycle watcher banner (2026-10-13) -- reads the same /api/setups/live-flags
+// response checkFlagsBanner() already fetches (no second request). Dismiss POSTs the
+// signature it was just shown back to the server (orderLifecycleAlert.js verifies it still
+// matches the CURRENT state before honoring it) -- a dismiss here also suppresses the line on
+// the user's Home Assistant Session Timeline card, since both surfaces read the same shared
+// state. Optimistically hides immediately on click rather than waiting for the next 5min poll.
+function renderOrderLifecycleBanner(d) {
+  const el = $('order-lifecycle-banner');
+  if (!el) return;
+  if (!d.orderLifecycleMessage) { el.className = ''; el.textContent = ''; return; }
+  el.textContent = '';
+  const head = document.createElement('div');
+  head.className = 'setup-head';
+  const tag = document.createElement('span');
+  tag.className = 'ol-banner-tag';
+  tag.textContent = 'ORDER LIFECYCLE';
+  const msgSpan = document.createElement('span');
+  msgSpan.style.flex = '1';
+  msgSpan.style.fontSize = '12px';
+  msgSpan.style.color = 'var(--text)';
+  msgSpan.textContent = d.orderLifecycleMessage;
+  head.appendChild(tag);
+  head.appendChild(msgSpan);
+  const closeBtn = document.createElement('button');
+  closeBtn.textContent = '×';
+  closeBtn.setAttribute('aria-label', 'Dismiss');
+  closeBtn.style.cssText = 'background:none;border:none;color:var(--dim);font-size:18px;line-height:1;padding:0 2px;cursor:pointer;flex-shrink:0;';
+  closeBtn.onclick = async () => {
+    try {
+      const res = await fetch('/api/setups/order-lifecycle-dismiss', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ signature: d.orderLifecycleSignature }),
+      }).then(r => r.json());
+      if (res.ok) { el.className = ''; el.textContent = ''; }
+      else alert('Could not dismiss: ' + (res.reason || 'unknown error') + ' -- refreshing.');
+    } catch (_) { alert('Could not reach the server to dismiss -- try again.'); }
+    checkFlagsBanner();
+  };
+  head.appendChild(closeBtn);
+  el.appendChild(head);
+  el.className = 'visible';
+}
+
 async function checkFlagsBanner() {
   try {
     const d = await fetch('/api/setups/live-flags', { cache: 'no-store' }).then(r => r.json());
+    renderOrderLifecycleBanner(d);
     const lines = [];
     let color = '#4ade80';
     if (d.sierraArmed === false) {

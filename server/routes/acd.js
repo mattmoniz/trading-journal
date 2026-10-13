@@ -25,6 +25,7 @@ import { cacheGet, cacheSet } from '../lib/cache.js';
 import { getCached, setCached, getGlobalCalib, DAY_CACHE_TTL, getTouchQualityCalib, getTouchQualityBaseline, dropToTimeline, lookupRunnerTrailWidth, fmtETStr, computeSessionEndCapStr, getOptStopForType, tagClusterBatch, claimClusterRole, isFirstTradingDayAfterGap, isPdPriorDayType, isInNewEntryDeadZone, nextTradingDay, resolveRangeDates, getOpenStandalonePosition, isBreakevenStopEligible, isInRthOpenDeadZone, classifySuppressionReason } from '../services/acdShared.js';
 import { getLatestBars, getCurrentPrice } from '../services/priceRetrieval.js';
 import { isOpeningDriveCounterTrade, OPENING_DRIVE_GATE } from '../services/openingDriveGate.js';
+import { getOrderLifecycleAlertState } from '../services/orderLifecycleAlert.js';
 import {
   isCrossDirectionFastFlip, isPostWinOppositeFamilyBlocked, isOppositeDirectionOpen,
   isSameSetupRefireBlocked, RTH_SESSION_FIRED_AT_SQL, isDirectionLossBlocked,
@@ -7654,35 +7655,18 @@ export default function createACDRouter(io) {
       } catch (_) { /* informational only, never block the response */ }
 
       // Order-lifecycle watcher status (2026-10-13) -- same try/catch-and-null-on-failure
-      // convention as bigMoveLine/sigmaLine above, reading the LATEST row
-      // check_order_lifecycle_health.mjs persists every 5min rather than re-deriving any of
-      // that script's own SQL here. User's explicit request: surface this on the SAME page
-      // they already watch trades on, no new Home Assistant sensor/automation needed. Stays
-      // null (no line) when clean, same "stay hidden unless there's something to say"
-      // convention as every other line in this array -- only speaks up when there's something
-      // to report, including the watcher itself going quiet (a stale row is itself worth
-      // surfacing, not silently treated as "clean").
+      // convention as bigMoveLine/sigmaLine above. Reads the ONE shared helper
+      // (orderLifecycleAlert.js) that both this endpoint and /api/setups/live-flags (quick-
+      // check.html's banner) call, so a dismiss from either surface is honored by both --
+      // user's explicit request, since they want one alert concept shown in two places, not
+      // two independently-tracked dismiss states. Stays null (no line) when clean or
+      // currently dismissed, same "stay hidden unless there's something to say" convention as
+      // every other line in this array.
       let orderLifecycleLine = null;
       try {
-        const olhQ = await query(`
-          SELECT sample_size, notes, created_at::text FROM performance_audit
-          WHERE signal_type='ORDER_LIFECYCLE_HEALTH' AND signal_name='LATEST'
-          ORDER BY created_at DESC LIMIT 1
-        `);
-        const row = olhQ.rows[0];
-        if (row) {
-          const n = JSON.parse(row.notes || '{}');
-          const ageMin = n.checkedAt ? (Date.now() - new Date(n.checkedAt).getTime()) / 60000 : Infinity;
-          if (ageMin > 15) {
-            orderLifecycleLine = `⚠ Order-lifecycle watcher hasn't reported in ${Math.round(ageMin)}min (expected every 5min) -- check the cron, don't assume clean.`;
-          } else if (row.sample_size > 0) {
-            const parts = [];
-            if (n.stuckUnfilled) parts.push(`${n.stuckUnfilled} stuck unfilled`);
-            if (n.canceledNoResubmit) parts.push(`${n.canceledNoResubmit} canceled-no-resubmit`);
-            if (n.phantomActive) parts.push(`${n.phantomActive} phantom-active`);
-            if (n.reconciliationNotClean) parts.push('reconciliation not clean');
-            orderLifecycleLine = `⚠ Order lifecycle issue: ${parts.join(', ')} -- see scratch/server_errors.jsonl`;
-          }
+        const olState = await getOrderLifecycleAlertState();
+        if (olState.message) {
+          orderLifecycleLine = `⚠ ${olState.message}${olState.stale ? '' : ' -- see scratch/server_errors.jsonl, or dismiss on quick-check.html'}`;
         }
       } catch (_) { /* informational only, never block the response */ }
 

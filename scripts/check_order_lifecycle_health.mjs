@@ -129,6 +129,10 @@ async function autoResolveMissingOrders() {
   return r.rows.length;
 }
 
+// Each check below now returns { count, ids } (or { count, detail } for reconciliation)
+// instead of a bare count -- the ids/detail feed persistHealthStatus()'s signature, which is
+// what lets a dismissal distinguish "the exact same problem" from "something changed, show it
+// again" (see that function's own header for why).
 async function checkStuckUnfilled() {
   const r = await query(`
     SELECT e.id, e.setup_id, a.setup_type, e.submitted_at::text
@@ -140,7 +144,7 @@ async function checkStuckUnfilled() {
   for (const row of r.rows) {
     logAlert(`ORDER_LIFECYCLE: STUCK_UNFILLED -- order_placements id=${row.id} (setup_id=${row.setup_id}, ${row.setup_type}) submitted_at=${row.submitted_at} is still OPEN past the escalation timeout. escalateUnfilledEntriesToMarket() should have canceled this already but hasn't.`);
   }
-  return r.rows.length;
+  return { count: r.rows.length, ids: r.rows.map(row => row.id) };
 }
 
 async function checkCanceledNoResubmit() {
@@ -159,7 +163,7 @@ async function checkCanceledNoResubmit() {
   for (const row of r.rows) {
     logAlert(`ORDER_LIFECYCLE: CANCELED_NO_RESUBMIT -- order_placements id=${row.id} (setup_id=${row.setup_id}, ${row.setup_type}) CANCELED at ${row.last_update_at}, setup still status='ACTIVE', no market-escalation resubmit since. Either the escalation logic failed to act, or the broker canceled it for a reason outside the app's own escalation flow (e.g. an account/symbol issue) and nothing has followed up.`);
   }
-  return r.rows.length;
+  return { count: r.rows.length, ids: r.rows.map(row => row.id) };
 }
 
 async function checkPhantomActive() {
@@ -175,37 +179,55 @@ async function checkPhantomActive() {
   for (const row of r.rows) {
     logAlert(`ORDER_LIFECYCLE: PHANTOM_ACTIVE -- active_setups id=${row.id} (${row.setup_type}) is still status='ACTIVE' with resolution=NULL, but its real order is ${row.order_status} (zero fill) since ${row.order_last_update}. This should be structurally impossible after the 2026-10-13 resolver fill-gate fix -- if this fires, that fix has a gap, not just a one-off stray row.`);
   }
-  return r.rows.length;
+  return { count: r.rows.length, ids: r.rows.map(row => row.id) };
 }
 
 async function checkReconciliation() {
   try {
     const res = await fetch(`${APP_BASE_URL}/api/sierra-chart/status`);
-    if (!res.ok) return 0;
+    if (!res.ok) return { count: 0, detail: null };
     const j = await res.json();
     const report = j?.connection?.lastReconciliationReport;
     if (report && report.clean === false) {
       logAlert(`ORDER_LIFECYCLE: RECONCILIATION_NOT_CLEAN -- the live broker-truth reconciliation report is not clean (checkedAt=${report.checkedAt}).`, JSON.stringify({ unknownToApp: report.unknownToApp, staleInApp: report.staleInApp }).slice(0, 300));
-      return 1;
+      return { count: 1, detail: { unknownToApp: report.unknownToApp, staleInApp: report.staleInApp } };
     }
   } catch (_) { /* server not reachable -- a different check (price-bars freshness, uptime monitoring) already covers "is the server even up" */ }
-  return 0;
+  return { count: 0, detail: null };
 }
 
 // Persists the latest run's state so GET /api/setups/today-summary (the endpoint feeding the
-// Home Assistant "Session Timeline" card -- the page the user actually watches trades on) can
-// surface an unresolved issue there, without that endpoint re-deriving any of this file's own
-// SQL (same "share modules instead of reimplementing" convention already used by this file's
-// own bigMoveLine/sigmaLine-style signals in acd.js). ONLY counts checks 2-5 (the alert-only
-// ones) -- MISSING_ORDER is excluded on purpose, since it self-resolves within
-// AUTO_RESOLVE_MISSING_ORDER_BUFFER_MIN and showing it on the HA page would just be noise about
-// something this script already fixed on its own.
+// Home Assistant "Session Timeline" card -- the page the user actually watches trades on) and
+// quick-check.html's own banner can surface an unresolved issue, without either re-deriving
+// any of this file's own SQL (same "share modules instead of reimplementing" convention
+// already used by this file's own bigMoveLine/sigmaLine-style signals in acd.js). ONLY counts
+// checks 2-5 (the alert-only ones) -- MISSING_ORDER is excluded on purpose, since it
+// self-resolves within AUTO_RESOLVE_MISSING_ORDER_BUFFER_MIN and showing it would just be
+// noise about something this script already fixed on its own.
 // signal_name='LATEST' singleton row, same convention as GARCH_VOL_SCALE/MOMENTUM_CHASE_
 // WIDTH_CALIB's own LATEST rows (volatilityRegime.js / momentumChaseDetector.js).
-async function persistHealthStatus({ stuckUnfilled, canceledNoResubmit, phantomActive, reconciliationNotClean }) {
+//
+// `signature` (2026-10-13, user request: a manual dismiss on quick-check.html/the HA page that
+// re-surfaces if the SAME problem persists past a window, or immediately if a DIFFERENT row
+// trips the same check) -- a stable JSON fingerprint of the exact ids/detail causing each
+// category, not just counts. server/services/orderLifecycleAlert.js's dismiss logic compares a
+// stored dismissal's signature against this one; any change here (a new/different row, a new
+// reconciliation detail) makes them stop matching and the alert shows again immediately,
+// independent of the time-based re-surface. Sorted ids so the same SET of rows always
+// produces the same signature regardless of query result ordering.
+function buildSignature({ stuckUnfilledIds, canceledNoResubmitIds, phantomActiveIds, reconciliationDetail }) {
+  return JSON.stringify({
+    s: [...stuckUnfilledIds].sort((a, b) => a - b),
+    c: [...canceledNoResubmitIds].sort((a, b) => a - b),
+    p: [...phantomActiveIds].sort((a, b) => a - b),
+    r: reconciliationDetail,
+  });
+}
+
+async function persistHealthStatus({ stuckUnfilled, canceledNoResubmit, phantomActive, reconciliationNotClean, signature }) {
   const total = stuckUnfilled + canceledNoResubmit + phantomActive + (reconciliationNotClean ? 1 : 0);
   const notes = JSON.stringify({
-    stuckUnfilled, canceledNoResubmit, phantomActive, reconciliationNotClean,
+    stuckUnfilled, canceledNoResubmit, phantomActive, reconciliationNotClean, signature,
     checkedAt: new Date().toISOString(),
   });
   await query(`
@@ -217,15 +239,22 @@ async function persistHealthStatus({ stuckUnfilled, canceledNoResubmit, phantomA
 }
 
 async function run() {
-  const [missing, stuckUnfilled, canceledNoResubmit, phantomActive, reconciliationNotCleanCount] = await Promise.all([
+  const [missing, stuckUnfilledR, canceledNoResubmitR, phantomActiveR, reconciliationR] = await Promise.all([
     checkMissingOrders(),
     checkStuckUnfilled(),
     checkCanceledNoResubmit(),
     checkPhantomActive(),
     checkReconciliation(),
   ]);
-  await persistHealthStatus({ stuckUnfilled, canceledNoResubmit, phantomActive, reconciliationNotClean: reconciliationNotCleanCount > 0 });
-  const total = missing + stuckUnfilled + canceledNoResubmit + phantomActive + reconciliationNotCleanCount;
+  const signature = buildSignature({
+    stuckUnfilledIds: stuckUnfilledR.ids, canceledNoResubmitIds: canceledNoResubmitR.ids,
+    phantomActiveIds: phantomActiveR.ids, reconciliationDetail: reconciliationR.detail,
+  });
+  await persistHealthStatus({
+    stuckUnfilled: stuckUnfilledR.count, canceledNoResubmit: canceledNoResubmitR.count,
+    phantomActive: phantomActiveR.count, reconciliationNotClean: reconciliationR.count > 0, signature,
+  });
+  const total = missing + stuckUnfilledR.count + canceledNoResubmitR.count + phantomActiveR.count + reconciliationR.count;
   if (total === 0) console.log('[check_order_lifecycle_health] clean -- no anomalies found.');
   await pool.end();
 }

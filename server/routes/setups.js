@@ -14,6 +14,7 @@ import { killSwitch } from '../services/sierraChart/orderEligibility.js';
 import { gateSignalConfirmation } from '../services/rigorDiagnostics.js';
 import { isGlobexWeekClosed } from './acd.js';
 import { etNaiveTimestampToMs } from '../services/acdShared.js';
+import { getOrderLifecycleAlertState, dismissOrderLifecycleAlert } from '../services/orderLifecycleAlert.js';
 
 const router = express.Router();
 
@@ -64,6 +65,14 @@ router.get('/setups/live-flags', async (req, res) => {
     // never "assume fine."
     priceBarsStale = null;
   }
+  // Order-lifecycle watcher status (2026-10-13) -- same shared helper
+  // GET /api/setups/today-summary reads, so a dismiss from either this page or the HA page is
+  // honored by both (one alert concept, two display surfaces, not two independent ones).
+  let orderLifecycle = { hasIssue: false, stale: false, message: null, signature: null };
+  try {
+    orderLifecycle = await getOrderLifecycleAlertState();
+  } catch (_) { /* fail visible via the catch-all below, not silently "clean" */ }
+
   res.json({
     suppressAllDisabled: !!SUPPRESS_ALL_DISABLED.enabled,
     suppressAllDisabledSince: SUPPRESS_ALL_DISABLED.enabled ? SUPPRESS_ALL_DISABLED.addedDate : null,
@@ -75,7 +84,23 @@ router.get('/setups/live-flags', async (req, res) => {
     priceBarsStale,
     priceBarsLastBar,
     priceBarsStaleMinutes,
+    orderLifecycleMessage: orderLifecycle.message,
+    orderLifecycleSignature: orderLifecycle.signature,
   });
+});
+
+// POST /api/setups/order-lifecycle-dismiss -- user-facing dismiss button on quick-check.html's
+// banner (2026-10-13). Body: { signature } -- must match the CURRENT alert's signature (the
+// one the client just saw), verified server-side in dismissOrderLifecycleAlert() rather than
+// trusted blindly, so a stale client can't dismiss a problem that's since changed into a
+// different one without realizing it.
+router.post('/setups/order-lifecycle-dismiss', async (req, res) => {
+  try {
+    const result = await dismissOrderLifecycleAlert(req.body?.signature);
+    res.json(result);
+  } catch (e) {
+    res.status(500).json({ ok: false, reason: e.message });
+  }
 });
 
 // Fallback medians from Key Level Analysis when sessions < 3
