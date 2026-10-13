@@ -25,7 +25,7 @@
 import { query } from '../../db.js';
 import { isOrderEligible } from './orderEligibility.js';
 import { evaluateDailyLossLimit } from './dllGate.js';
-import { placeEntryOrder, placeBracketEntryOrder, placeExitOrder, placeMarketEscalationEntryOrder, isAnotherPositionOpen } from './reconciliation.js';
+import { placeEntryOrder, placeBracketEntryOrder, placeExitOrder, placeMarketEscalationEntryOrder, checkEntryGates } from './reconciliation.js';
 import { resolveMnqFrontMonthSymbolFromEnv } from './contractSymbol.js';
 import { resolveDirection } from '../../config/setupTypes.js';
 import { getCurrentPrice } from '../priceRetrieval.js';
@@ -126,18 +126,20 @@ async function sweepEntries(dtcClient) {
       const direction = resolveDirection(row);
       const tradeAccount = selectTradeAccount({ isRth: row.is_rth, rthAccount: dtcClient.tradeAccount, globexAccount: process.env.DTC_GLOBEX_TRADE_ACCOUNT || 'Sim2' });
       if (!direction) { console.error(`[sierraChart.orderSweep] setup_id=${row.id} (${row.setup_type}): direction unresolvable (name/price disagreement or missing levels) -- skipping entry, not guessing.`); await recordEntrySkip(row, 'direction unresolvable'); continue; }
+      const side = DIRECTION_TO_SIDE[direction]; // computed early -- needed by checkEntryGates() below
       const elig = await isOrderEligible(row.setup_type, row.id);
       if (!elig.eligible) { await recordEntrySkip(row, elig.reason); continue; } // not an error -- most rows will legitimately be ineligible (kill switch off, suppressed, etc.)
       // Daily loss limit (item 7). Fails closed when DTC_DLL_LIMIT_USD is unset.
       const dll = await evaluateDailyLossLimit(tradeAccount);
       if (dll.blocked) { console.log(`[sierraChart.orderSweep] setup_id=${row.id} (${row.setup_type}): entry blocked by daily loss limit -- ${dll.reason}`); await recordEntrySkip(row, `daily loss limit: ${dll.reason}`); continue; }
-      // Single-position-at-a-time invariant (2026-09-29, DeepSeek review after a real
-      // misattribution bug -- see reconciliation.js's header). This app-level check is
-      // just a fast path; the real guarantee is idx_order_placements_one_open_position.
-      if (await isAnotherPositionOpen(row.id)) { console.log(`[sierraChart.orderSweep] setup_id=${row.id} (${row.setup_type}): another real position is already open -- skipping entry (one position at a time).`); await recordEntrySkip(row, 'another real position already open'); continue; }
+      // Multi-position-stacking build (2026-10-13, DeepSeek-reviewed, user cap override to 10
+      // -- replaces the old strict singleton check, see reconciliation.js's checkEntryGates()
+      // header for the full design). This app-level check is just a fast path with a readable
+      // skip reason; the real guarantee against overflow is idx_order_placements_position_slot.
+      const gate = await checkEntryGates(side);
+      if (gate.blocked) { console.log(`[sierraChart.orderSweep] setup_id=${row.id} (${row.setup_type}): entry blocked -- ${gate.reason}.`); await recordEntrySkip(row, gate.reason); continue; }
       if (row.entry_zone_low == null) { console.error(`[sierraChart.orderSweep] setup_id=${row.id}: no entry_zone_low, cannot place LIMIT entry -- skipping.`); await recordEntrySkip(row, 'no entry_zone_low'); continue; }
       const contract = resolveMnqFrontMonthSymbolFromEnv(row.trade_date);
-      const side = DIRECTION_TO_SIDE[direction];
       // Native-OCO bracket (2026-10-07 build): off by default (SIERRA_USE_OCO_BRACKET unset).
       // The stop+target link has not round-tripped a fill against a venue that actually rests
       // orders -- Sim1 fills at market, so it can confirm the broker accepts/links the three

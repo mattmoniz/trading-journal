@@ -70,6 +70,19 @@ const ORDER_STATUS_NAME = {
   9: 'REJECTED', 10: 'PARTIALLY_FILLED',
 };
 
+// Multi-position-stacking build (2026-10-13, DeepSeek-reviewed plan, user cap override to 10 --
+// see docs/OPEN_THREADS.md's 2026-10-13 entry for the full design/review). Replaces the prior
+// strict 0-or-1-position-ever singleton (the original idx_order_placements_one_open_position)
+// with up to MAX_CONCURRENT_POSITIONS real positions open at once, each claiming its own
+// numbered "slot" via the new idx_order_placements_position_slot partial unique index (on
+// position_slot WHERE purpose='ENTRY' AND position_open=TRUE). Same-direction stacking is
+// allowed; opposite-direction is still blocked (checkEntryGates() below). The migration that
+// added this column/index (position_slot SMALLINT, backfilling the one real open position at
+// the time to slot=1) was run manually by the user after the sandbox's auto-mode classifier
+// denied it as a schema-altering Bash action -- verified independently afterward (information_
+// schema + a direct read of the open row) before building against it.
+export const MAX_CONCURRENT_POSITIONS = 10;
+
 async function insertPendingOrder({ setupId, purpose, clientOrderId, symbol, exchange, side, orderType, quantity, price1, price2, tradeAccount, environmentService }, onConflictDoNothing) {
   const conflictClause = onConflictDoNothing ? 'ON CONFLICT DO NOTHING' : '';
   // position_open is claimed HERE, at insert/submission time, not deferred until a fill
@@ -83,13 +96,43 @@ async function insertPendingOrder({ setupId, purpose, clientOrderId, symbol, exc
   // violation against ANY unique index on this table, including this new one, matching
   // this codebase's own standing convention for active_setups' touch-instant dedup.
   const positionOpen = purpose === 'ENTRY';
+  if (purpose !== 'ENTRY') {
+    // Non-ENTRY purposes (STOP/TARGET/EXIT) never claim a position_slot -- position_open is
+    // always FALSE for them (the column's value on a non-ENTRY row is never read anywhere),
+    // so there's nothing to atomically pick here.
+    return query(`
+      INSERT INTO order_placements
+        (setup_id, purpose, client_order_id, symbol, exchange, side, order_type, quantity, price1, price2, trade_account, environment_service, status, position_open)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'PENDING_SUBMIT',$13)
+      ${conflictClause}
+      RETURNING id
+    `, [setupId, purpose, clientOrderId, symbol, exchange, side, orderType, quantity, price1 ?? null, price2 ?? null, tradeAccount ?? null, environmentService ?? null, positionOpen]);
+  }
+  // ENTRY: claim the lowest free slot in 1..MAX_CONCURRENT_POSITIONS ATOMICALLY in the same
+  // statement as the insert itself, so there's no separate SELECT-then-INSERT gap for two
+  // overlapping polls to race through. If every slot is taken, avail.slot is NULL and the
+  // WHERE clause filters the row out entirely -- zero rows returned, the exact same
+  // "nothing inserted" convention this function's callers (placeEntryOrder's own docstring)
+  // already treat as a benign idempotency short-circuit, now also covering "at capacity" and
+  // not just "a duplicate for this exact setup." checkEntryGates() below is the fast-path
+  // pre-check callers use to skip with a readable reason before even reaching this point --
+  // this query is the actual, airtight guarantee against overflow, same relationship the old
+  // isAnotherPositionOpen()/idx_order_placements_one_open_position pair had.
   return query(`
+    WITH avail AS (
+      SELECT MIN(s) AS slot FROM generate_series(1, $13::int) s
+      WHERE s NOT IN (
+        SELECT position_slot FROM order_placements
+        WHERE purpose = 'ENTRY' AND position_open = TRUE AND position_slot IS NOT NULL
+      )
+    )
     INSERT INTO order_placements
-      (setup_id, purpose, client_order_id, symbol, exchange, side, order_type, quantity, price1, price2, trade_account, environment_service, status, position_open)
-    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'PENDING_SUBMIT',$13)
+      (setup_id, purpose, client_order_id, symbol, exchange, side, order_type, quantity, price1, price2, trade_account, environment_service, status, position_open, position_slot)
+    SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'PENDING_SUBMIT',TRUE, avail.slot
+    FROM avail WHERE avail.slot IS NOT NULL
     ${conflictClause}
     RETURNING id
-  `, [setupId, purpose, clientOrderId, symbol, exchange, side, orderType, quantity, price1 ?? null, price2 ?? null, tradeAccount ?? null, environmentService ?? null, positionOpen]);
+  `, [setupId, purpose, clientOrderId, symbol, exchange, side, orderType, quantity, price1 ?? null, price2 ?? null, tradeAccount ?? null, environmentService ?? null, MAX_CONCURRENT_POSITIONS]);
 }
 
 async function submitAndRecord(dtcClient, id, { symbol, exchange, side, orderType, quantity, price1, price2, timeInForce, clientOrderId }) {
@@ -154,12 +197,16 @@ export function marketEscalationClientOrderId(setupId) { return `E${setupId}M`; 
  * UPDATE, submitting against the SAME row id, so "one ENTRY row per setup_id" stays
  * literally true at the DB level and the unique index is never touched or threatened.
  *
- * Also now explicitly checks isAnotherPositionOpen() before resubmitting and LOGS LOUDLY if
- * blocked, rather than silently no-op'ing (DeepSeek finding #2): handleOrderUpdate() frees
- * the account-wide position_open singleton the instant the original LIMIT's cancel
- * confirms, so another setup's entry can legitimately claim that slot in the gap before this
- * resubmit runs -- a real, expected scenario under the single-position-at-a-time invariant,
- * not a bug, but one that must never fail silently.
+ * Also now explicitly checks the real entry gates (checkEntryGates(), 2026-10-13 multi-
+ * position-stacking build -- originally isAnotherPositionOpen()) before resubmitting and
+ * LOGS LOUDLY if blocked, rather than silently no-op'ing (DeepSeek finding #2):
+ * handleOrderUpdate() frees this row's own claimed slot the instant the original LIMIT's
+ * cancel confirms, so another setup's entry can legitimately claim a slot (or an opposite-
+ * direction conflict can arise) in the gap before this resubmit runs -- a real, expected
+ * scenario under the position-gate rules, not a bug, but one that must never fail silently.
+ * The UPDATE below re-derives a fresh position_slot atomically (the same lowest-free-slot
+ * pick insertPendingOrder() uses) rather than trusting this row's OLD slot value is still
+ * free -- it may not be, since it was genuinely released back into the pool on cancel.
  *
  * Deliberately a SEPARATE function from placeEntryOrder, not a parameterized variant of it
  * -- placeEntryOrder's own docstring is an explicit, deliberate contract every OTHER caller
@@ -179,8 +226,9 @@ export function marketEscalationClientOrderId(setupId) { return `E${setupId}M`; 
  * (another poll already claimed it -- a benign race, not an error).
  */
 export async function placeMarketEscalationEntryOrder(dtcClient, { orderId, setupId, symbol, exchange, side, quantity, tradeAccount, environmentService }) {
-  if (await isAnotherPositionOpen(setupId)) {
-    console.log(`[sierraChart.reconciliation] market-escalation resubmit BLOCKED for setup_id=${setupId}: another real position is already open (the singleton slot was freed when the original LIMIT's cancel confirmed, and a different setup claimed it first). Will retry next poll if it frees up again.`);
+  const gate = await checkEntryGates(side);
+  if (gate.blocked) {
+    console.log(`[sierraChart.reconciliation] market-escalation resubmit BLOCKED for setup_id=${setupId}: ${gate.reason} (this row's own slot was freed when the original LIMIT's cancel confirmed). Will retry next poll if it frees up again.`);
     return null;
   }
   const clientOrderId = marketEscalationClientOrderId(setupId);
@@ -189,16 +237,27 @@ export async function placeMarketEscalationEntryOrder(dtcClient, { orderId, setu
   // new one -- see this function's own header for why. WHERE status='CANCELED' is the real
   // idempotency guard: if some other path already moved this row again (or it's no longer
   // CANCELED for any reason), this UPDATE matches zero rows and we correctly return null
-  // rather than resubmit against a row whose state we no longer understand.
+  // rather than resubmit against a row whose state we no longer understand. avail.slot IS
+  // NOT NULL is the SAME capacity backstop insertPendingOrder() uses -- if checkEntryGates()
+  // above raced against another poll claiming the last slot, this UPDATE itself matches zero
+  // rows rather than violate idx_order_placements_position_slot.
   const updateQ = await query(`
-    UPDATE order_placements
+    WITH avail AS (
+      SELECT MIN(s) AS slot FROM generate_series(1, $3::int) s
+      WHERE s NOT IN (
+        SELECT position_slot FROM order_placements
+        WHERE purpose = 'ENTRY' AND position_open = TRUE AND position_slot IS NOT NULL
+      )
+    )
+    UPDATE order_placements op
     SET client_order_id = $2, order_type = 'MARKET', price1 = 0, price2 = NULL,
-        status = 'PENDING_SUBMIT', position_open = TRUE, filled_quantity = NULL,
-        avg_fill_price = NULL, server_order_id = NULL, reject_reason = NULL,
+        status = 'PENDING_SUBMIT', position_open = TRUE, position_slot = avail.slot,
+        filled_quantity = NULL, avg_fill_price = NULL, server_order_id = NULL, reject_reason = NULL,
         submitted_at = now(), last_update_at = now()
-    WHERE id = $1 AND purpose = 'ENTRY' AND status = 'CANCELED'
-    RETURNING id
-  `, [orderId, clientOrderId]);
+    FROM avail
+    WHERE op.id = $1 AND op.purpose = 'ENTRY' AND op.status = 'CANCELED' AND avail.slot IS NOT NULL
+    RETURNING op.id
+  `, [orderId, clientOrderId, MAX_CONCURRENT_POSITIONS]);
   if (updateQ.rows.length === 0) return null;
   await submitAndRecord(dtcClient, orderId, { ...fullParams, clientOrderId });
   return { id: orderId, clientOrderId };
@@ -680,17 +739,33 @@ export async function getRealFilledQuantity(setupId) {
 }
 
 /**
- * App-level fast-path check for the DB-enforced singleton "one real position open,
- * account-wide, at a time" invariant (idx_order_placements_one_open_position is the real
- * guarantee against a race between two overlapping polls -- this just avoids a wasted
- * insert attempt when it's obviously already taken).
+ * App-level fast-path check for the two real order-level entry gates that replaced the old
+ * strict singleton (isAnotherPositionOpen, 2026-10-13 multi-position-stacking build):
+ *   1. Direction conflict -- a new entry whose side opposes any currently-open real position's
+ *      side is blocked. Same-direction stacking is allowed (a real single account can hold
+ *      several same-direction positions on this one instrument fine); opposite-direction isn't
+ *      (they'd just net against each other, and the existing simulated-layer equivalent,
+ *      isOppositeDirectionOpen() in acdRiskGates.js, already encodes the same real-money
+ *      reasoning for the ACTIVE/SHADOW decision upstream of this real-order layer -- this is
+ *      the real-order-level twin of that rule, reading order_placements.side directly rather
+ *      than the simulated active_setups table, since the two can legitimately disagree
+ *      whenever something else blocks the simulated layer from acting on its own verdict).
+ *   2. Capacity -- at most MAX_CONCURRENT_POSITIONS real positions open at once.
+ * Both are just a fast path with a readable skip reason -- the REAL guarantee against overflow
+ * is idx_order_placements_position_slot (checked atomically inside insertPendingOrder()/
+ * placeMarketEscalationEntryOrder() above), which can never be fooled by a stale read here. A
+ * direction-conflict race between this check and the real insert is possible in principle (two
+ * overlapping polls), same residual risk the old singleton's own fast-path check always had --
+ * not re-litigated here, since this app's real polling cadence has never produced that race in
+ * practice for the equivalent checks already living in this file.
  */
-export async function isAnotherPositionOpen(excludeSetupId) {
-  const r = await query(
-    `SELECT 1 FROM order_placements WHERE purpose = 'ENTRY' AND position_open = TRUE AND setup_id != $1 LIMIT 1`,
-    [excludeSetupId]
-  );
-  return r.rows.length > 0;
+export async function checkEntryGates(side) {
+  const opposite = side === 'BUY' ? 'SELL' : 'BUY';
+  const r = await query(`SELECT side FROM order_placements WHERE purpose = 'ENTRY' AND position_open = TRUE`);
+  const openSides = r.rows.map((row) => row.side);
+  if (openSides.includes(opposite)) return { blocked: true, reason: 'opposite-direction real position already open' };
+  if (openSides.length >= MAX_CONCURRENT_POSITIONS) return { blocked: true, reason: `max concurrent positions reached (${MAX_CONCURRENT_POSITIONS})` };
+  return { blocked: false, reason: null };
 }
 
 /**
@@ -762,17 +837,36 @@ function extractPositionForSymbol(positionMessages, symbol) {
 }
 
 /**
- * Pure guard for placeExitOrder (2026-10-07). A market exit is only allowed when the broker's
- * signed position on the symbol is exactly the open quantity this setup's own fills imply: the
- * entry side's sign times the filled quantity. Unknown (null) or flat (0) or the wrong size all
- * refuse, so an exit can never open a new position. Exported for the offline test.
+ * Pure guard for placeExitOrder (2026-10-07; RELAXED 2026-10-13 for multi-position-stacking --
+ * see docs/OPEN_THREADS.md's 2026-10-13 entry). Originally required the broker's signed
+ * position to EXACTLY equal this one setup's own expected open (sign * filledQuantity) --
+ * correct under the old 0-or-1-position-ever singleton, where this setup's fill was always
+ * the ENTIRE broker position. With same-direction stacking now allowed, the broker's
+ * aggregate can legitimately include OTHER same-direction setups' open quantity too -- exact
+ * equality would wrongly REFUSE a perfectly valid exit the instant a second same-direction
+ * position is also open (N real positions all signed the same way sum to N*quantity, not
+ * this one setup's 1*quantity). Relaxed to the two things that must still ALWAYS hold,
+ * regardless of how many other same-direction positions are open:
+ *   1. SIGN: the broker's position must agree with this setup's own entry direction -- a
+ *      flat/zero or WRONG-SIGN broker position is exactly the original misattribution risk
+ *      this file exists to prevent (see the file header), unaffected by stacking.
+ *   2. MAGNITUDE FLOOR: the broker's |position| must be AT LEAST this setup's own filled
+ *      quantity -- every contract this setup itself filled is necessarily still counted in
+ *      the broker's aggregate until something closes it, so the broker can never
+ *      legitimately report LESS than that (a genuine missed-fill/data-integrity problem,
+ *      not "other positions are also open," and still refused here exactly as before).
+ * It can legitimately report MORE (other same-direction positions contributing to the same
+ * signed aggregate) -- that's the one case this relaxation newly allows through. Exported
+ * for the offline test.
  */
 export function brokerExitDecision({ brokerQty, entrySide, filledQuantity }) {
   if (brokerQty == null) return { ok: false, reason: 'broker reported no position for this symbol (unknown, not flat)' };
   const sign = entrySide === 'BUY' ? 1 : entrySide === 'SELL' ? -1 : null;
   if (sign == null || !(filledQuantity > 0)) return { ok: false, reason: `invalid entry side "${entrySide}" or quantity ${filledQuantity}` };
-  const expected = sign * filledQuantity;
-  if (Number(brokerQty) !== expected) return { ok: false, reason: `broker net position ${brokerQty} does not equal this setup's expected open ${expected}` };
+  const brokerQtyNum = Number(brokerQty);
+  const brokerSign = brokerQtyNum > 0 ? 1 : brokerQtyNum < 0 ? -1 : 0;
+  if (brokerSign !== sign) return { ok: false, reason: `broker net position ${brokerQty} sign does not match this setup's entry side ${entrySide}` };
+  if (Math.abs(brokerQtyNum) < filledQuantity) return { ok: false, reason: `broker net position ${brokerQty} is smaller in magnitude than this setup's own expected open ${sign * filledQuantity}` };
   return { ok: true, reason: null };
 }
 
