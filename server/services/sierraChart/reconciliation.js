@@ -108,16 +108,29 @@ async function insertPendingOrder({ setupId, purpose, clientOrderId, symbol, exc
       RETURNING id
     `, [setupId, purpose, clientOrderId, symbol, exchange, side, orderType, quantity, price1 ?? null, price2 ?? null, tradeAccount ?? null, environmentService ?? null, positionOpen]);
   }
-  // ENTRY: claim the lowest free slot in 1..MAX_CONCURRENT_POSITIONS ATOMICALLY in the same
-  // statement as the insert itself, so there's no separate SELECT-then-INSERT gap for two
-  // overlapping polls to race through. If every slot is taken, avail.slot is NULL and the
-  // WHERE clause filters the row out entirely -- zero rows returned, the exact same
-  // "nothing inserted" convention this function's callers (placeEntryOrder's own docstring)
-  // already treat as a benign idempotency short-circuit, now also covering "at capacity" and
-  // not just "a duplicate for this exact setup." checkEntryGates() below is the fast-path
-  // pre-check callers use to skip with a readable reason before even reaching this point --
-  // this query is the actual, airtight guarantee against overflow, same relationship the old
-  // isAnotherPositionOpen()/idx_order_placements_one_open_position pair had.
+  // ENTRY: claim the lowest free slot in 1..MAX_CONCURRENT_POSITIONS, AND verify no
+  // opposite-direction real position is open, BOTH atomically in the same statement as the
+  // insert itself, so there's no separate SELECT-then-INSERT gap for two overlapping polls
+  // to race through. If every slot is taken OR a direction conflict exists, the row is
+  // filtered out entirely -- zero rows returned, the exact same "nothing inserted"
+  // convention this function's callers (placeEntryOrder's own docstring) already treat as a
+  // benign idempotency short-circuit, now also covering "at capacity"/"direction conflict"
+  // and not just "a duplicate for this exact setup." checkEntryGates() below is the
+  // fast-path pre-check callers use to skip with a readable reason before even reaching
+  // this point. The CAPACITY half of this is airtight (idx_order_placements_position_slot
+  // is a real unique index, so a concurrent writer either wins the slot or loses via ON
+  // CONFLICT DO NOTHING -- Q1 of DeepSeek's 2026-10-13 code review). The DIRECTION half is
+  // narrowed to this one statement's own snapshot but NOT given an equivalent DB-level
+  // backstop (Q3/Gap B of the same review, a genuine finding, not fully closed): unlike the
+  // old idx_order_placements_one_open_position (a true table-wide "at most one, ever"
+  // index, which made opposite-direction coexistence structurally impossible as a side
+  // effect), there is no unique index expressing "every open ENTRY row shares the same
+  // side" -- two truly concurrent transactions, each under their own READ COMMITTED
+  // snapshot, could in principle both see "no conflict" and both insert. Accepted as a
+  // residual, narrowed risk rather than built out further: this app has exactly one process
+  // placing real orders, sequentially, from one 15s poll's own await chain (verified no
+  // other code path inserts a real ENTRY) -- a genuine two-writer race would need two
+  // overlapping poll/escalation cycles, which this architecture doesn't produce today.
   return query(`
     WITH avail AS (
       SELECT MIN(s) AS slot FROM generate_series(1, $13::int) s
@@ -125,11 +138,18 @@ async function insertPendingOrder({ setupId, purpose, clientOrderId, symbol, exc
         SELECT position_slot FROM order_placements
         WHERE purpose = 'ENTRY' AND position_open = TRUE AND position_slot IS NOT NULL
       )
+    ),
+    direction_ok AS (
+      SELECT NOT EXISTS (
+        SELECT 1 FROM order_placements
+        WHERE purpose = 'ENTRY' AND position_open = TRUE AND side != $6
+      ) AS ok
     )
     INSERT INTO order_placements
       (setup_id, purpose, client_order_id, symbol, exchange, side, order_type, quantity, price1, price2, trade_account, environment_service, status, position_open, position_slot)
     SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'PENDING_SUBMIT',TRUE, avail.slot
-    FROM avail WHERE avail.slot IS NOT NULL
+    FROM avail, direction_ok
+    WHERE avail.slot IS NOT NULL AND direction_ok.ok
     ${conflictClause}
     RETURNING id
   `, [setupId, purpose, clientOrderId, symbol, exchange, side, orderType, quantity, price1 ?? null, price2 ?? null, tradeAccount ?? null, environmentService ?? null, MAX_CONCURRENT_POSITIONS]);
@@ -238,26 +258,55 @@ export async function placeMarketEscalationEntryOrder(dtcClient, { orderId, setu
   // idempotency guard: if some other path already moved this row again (or it's no longer
   // CANCELED for any reason), this UPDATE matches zero rows and we correctly return null
   // rather than resubmit against a row whose state we no longer understand. avail.slot IS
-  // NOT NULL is the SAME capacity backstop insertPendingOrder() uses -- if checkEntryGates()
-  // above raced against another poll claiming the last slot, this UPDATE itself matches zero
-  // rows rather than violate idx_order_placements_position_slot.
-  const updateQ = await query(`
-    WITH avail AS (
-      SELECT MIN(s) AS slot FROM generate_series(1, $3::int) s
-      WHERE s NOT IN (
-        SELECT position_slot FROM order_placements
-        WHERE purpose = 'ENTRY' AND position_open = TRUE AND position_slot IS NOT NULL
+  // NOT NULL / direction_ok.ok are the SAME capacity + direction checks insertPendingOrder()
+  // uses -- if checkEntryGates() above raced against another poll claiming the last slot or
+  // opening an opposite-direction position, this UPDATE matches zero rows rather than
+  // violate idx_order_placements_position_slot or (per direction_ok, folded in the same way
+  // and with the same narrowed-not-eliminated caveat -- see that CTE's own comment in
+  // insertPendingOrder() above) silently open two opposing positions.
+  //
+  // FIXED 2026-10-13 (DeepSeek code review, Q3/Gap A): an UPDATE has no ON CONFLICT clause
+  // (unlike insertPendingOrder()'s fresh-INSERT path, which catches the equivalent race via
+  // a bare ON CONFLICT DO NOTHING) -- if a concurrent transaction commits a claim on the
+  // SAME slot number between this statement's own CTE snapshot and its actual index write,
+  // Postgres raises a real duplicate-key exception (23505) here instead of just matching
+  // zero rows. Caught explicitly below and treated as the identical benign "lost the race,
+  // retry next poll" outcome -- without this, the exact same race this function already
+  // tolerates everywhere else would instead surface as a scary, misleading console.error on
+  // what's actually expected, harmless behavior (the row stays CANCELED and retries fine).
+  let updateQ;
+  try {
+    updateQ = await query(`
+      WITH avail AS (
+        SELECT MIN(s) AS slot FROM generate_series(1, $3::int) s
+        WHERE s NOT IN (
+          SELECT position_slot FROM order_placements
+          WHERE purpose = 'ENTRY' AND position_open = TRUE AND position_slot IS NOT NULL
+        )
+      ),
+      direction_ok AS (
+        SELECT NOT EXISTS (
+          SELECT 1 FROM order_placements
+          WHERE purpose = 'ENTRY' AND position_open = TRUE AND side != $4
+        ) AS ok
       )
-    )
-    UPDATE order_placements op
-    SET client_order_id = $2, order_type = 'MARKET', price1 = 0, price2 = NULL,
-        status = 'PENDING_SUBMIT', position_open = TRUE, position_slot = avail.slot,
-        filled_quantity = NULL, avg_fill_price = NULL, server_order_id = NULL, reject_reason = NULL,
-        submitted_at = now(), last_update_at = now()
-    FROM avail
-    WHERE op.id = $1 AND op.purpose = 'ENTRY' AND op.status = 'CANCELED' AND avail.slot IS NOT NULL
-    RETURNING op.id
-  `, [orderId, clientOrderId, MAX_CONCURRENT_POSITIONS]);
+      UPDATE order_placements op
+      SET client_order_id = $2, order_type = 'MARKET', price1 = 0, price2 = NULL,
+          status = 'PENDING_SUBMIT', position_open = TRUE, position_slot = avail.slot,
+          filled_quantity = NULL, avg_fill_price = NULL, server_order_id = NULL, reject_reason = NULL,
+          submitted_at = now(), last_update_at = now()
+      FROM avail, direction_ok
+      WHERE op.id = $1 AND op.purpose = 'ENTRY' AND op.status = 'CANCELED'
+        AND avail.slot IS NOT NULL AND direction_ok.ok
+      RETURNING op.id
+    `, [orderId, clientOrderId, MAX_CONCURRENT_POSITIONS, side]);
+  } catch (err) {
+    if (err.code === '23505') {
+      console.log(`[sierraChart.reconciliation] market-escalation resubmit for setup_id=${setupId}: lost a race for the slot claim against another concurrent order -- will retry next poll.`);
+      return null;
+    }
+    throw err;
+  }
   if (updateQ.rows.length === 0) return null;
   await submitAndRecord(dtcClient, orderId, { ...fullParams, clientOrderId });
   return { id: orderId, clientOrderId };
@@ -751,13 +800,17 @@ export async function getRealFilledQuantity(setupId) {
  *      than the simulated active_setups table, since the two can legitimately disagree
  *      whenever something else blocks the simulated layer from acting on its own verdict).
  *   2. Capacity -- at most MAX_CONCURRENT_POSITIONS real positions open at once.
- * Both are just a fast path with a readable skip reason -- the REAL guarantee against overflow
- * is idx_order_placements_position_slot (checked atomically inside insertPendingOrder()/
- * placeMarketEscalationEntryOrder() above), which can never be fooled by a stale read here. A
- * direction-conflict race between this check and the real insert is possible in principle (two
- * overlapping polls), same residual risk the old singleton's own fast-path check always had --
- * not re-litigated here, since this app's real polling cadence has never produced that race in
- * practice for the equivalent checks already living in this file.
+ * Both are just a fast path with a readable skip reason -- the REAL checks happen atomically
+ * inside insertPendingOrder()/placeMarketEscalationEntryOrder() above (both the `avail`
+ * capacity CTE and, as of DeepSeek's 2026-10-13 code review of this same build, a
+ * `direction_ok` CTE folded into that SAME statement), which can never be fooled by a stale
+ * read here. CAPACITY is airtight (idx_order_placements_position_slot is a real unique
+ * index -- a concurrent writer either wins the slot or loses via ON CONFLICT DO NOTHING).
+ * DIRECTION is narrowed to the claiming statement's own snapshot but, UNLIKE capacity, has
+ * no equivalent unique-index backstop (there is no DB-level way to express "every open ENTRY
+ * row shares one side" as a constraint) -- see insertPendingOrder()'s own comment on
+ * direction_ok for the honest residual risk and why it's accepted rather than built out
+ * further for this app's actual (single-process, sequential-poll) concurrency model.
  */
 export async function checkEntryGates(side) {
   const opposite = side === 'BUY' ? 'SELL' : 'BUY';

@@ -288,8 +288,21 @@ async function escalateUnfilledEntriesToMarket(dtcClient) {
 }
 
 async function sweepExits(dtcClient) {
+  // Reuse the entry's own recorded symbol/exchange/trade_account/environment_service
+  // (FIXED 2026-10-13, DeepSeek code review of the same-day stacking build, Q2): this
+  // used to hardcode `tradeAccount: dtcClient.tradeAccount` (the RTH account) and re-derive
+  // `symbol` from `row.trade_date` instead, regardless of which account/symbol the entry
+  // actually filled on -- selectTradeAccount() routes RTH vs Globex entries to two
+  // different accounts specifically so the two sessions keep separate P&L, so a Globex-
+  // originated setup's exit was being submitted to the WRONG account entirely. This
+  // predates today's stacking build (it was always wrong, just rarely consequential under
+  // the old 0-or-1-position-ever singleton, where a Globex-only open position was the
+  // uncommon case) -- stacking makes RTH+Globex coexistence routine, turning a latent bug
+  // into a live one. Matches placeMarketEscalationEntryOrder()'s own existing precedent
+  // (its own header comment: "these were already correctly decided once, at the original
+  // submission" -- reuse, don't re-derive).
   const rows = await query(`
-    SELECT a.id, a.setup_type, a.trade_date
+    SELECT a.id, a.setup_type, e.symbol, e.exchange, e.trade_account, e.environment_service
     FROM active_setups a
     JOIN order_placements e ON e.setup_id = a.id AND e.purpose = 'ENTRY'
     WHERE a.origin_status = 'ACTIVE' AND a.status IN ('RESOLVED','EXPIRED')
@@ -301,13 +314,12 @@ async function sweepExits(dtcClient) {
   `);
   for (const row of rows.rows) {
     try {
-      const contract = resolveMnqFrontMonthSymbolFromEnv(row.trade_date);
       const result = await placeExitOrder(dtcClient, {
         setupId: row.id,
-        symbol: contract.orderSymbol,
-        exchange: '',
-        tradeAccount: dtcClient.tradeAccount,
-        environmentService: dtcClient.lastKnownService ?? null,
+        symbol: row.symbol,
+        exchange: row.exchange,
+        tradeAccount: row.trade_account,
+        environmentService: row.environment_service,
       });
       // FLATTENED/CANCELED_UNFILLED_ENTRY/ALREADY_EXITING/NOTHING_TO_DO are all
       // legitimate outcomes -- only a thrown error is worth logging loudly here.
