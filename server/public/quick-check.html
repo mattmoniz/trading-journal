@@ -3680,7 +3680,12 @@ setInterval(loadModelsTab, 300000);
 // which tab is visible" convention rather than gating on pageTab==='ml'.
 setInterval(() => loadMlTabRange(mlTabRange), 300000);
 setInterval(loadPulseReading, 60000);
-setInterval(checkFlagsBanner, 300000);
+// Shortened from 5min to 30s (2026-10-13) -- this is the kill-switch armed/disarmed
+// indicator, and a stale reading here is a genuinely different kind of wrong than a stale
+// research-data chip elsewhere on this page. The visibilitychange handler above is the real
+// fix for the common "backgrounded phone, switch back" case; this interval is just the
+// backstop for someone staring at an already-foregrounded tab.
+setInterval(checkFlagsBanner, 30000);
 
 // Mobile browsers throttle or fully suspend setInterval timers on a backgrounded tab (screen
 // lock, app switch) -- this page is checked mostly on a phone via the Cloudflare tunnel, so
@@ -3696,6 +3701,12 @@ document.addEventListener('visibilitychange', () => {
   loadVolRegime();
   loadModelsTab();
   loadPulseReading();
+  // Found live 2026-10-13: this was the ONE poll function missing from this list -- the
+  // Sierra Chart armed/disarmed dot could sit stuck on stale data (including showing
+  // disarmed after the backend had already re-armed) indefinitely across a backgrounded-then-
+  // foregrounded phone, exactly the common case this whole handler exists for. Every other
+  // poll already force-refreshed on regaining visibility; this one didn't.
+  checkFlagsBanner();
 });
 
 window.addEventListener('resize', () => {
