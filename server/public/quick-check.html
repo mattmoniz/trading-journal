@@ -985,7 +985,10 @@ function renderMlTab() {
 // comment (mlSiloService.js) for why: each level in a cluster is its own scored candidate
 // here, unlike the main Performance section's account-level totals.
 function computeMlRangeStats(trades) {
-  const decided = trades.filter(t => t.actual_pnl != null).slice().sort((a, b) => (a.fired_at_str || '').localeCompare(b.fired_at_str || ''));
+  // Sorted by resolved_at_str, same fix and same reason as the main Performance section's
+  // getDecidedRows() (see that function's own header comment) -- falls back to fired_at_str
+  // for any row predating resolved_at_str being selected server-side.
+  const decided = trades.filter(t => t.actual_pnl != null).slice().sort((a, b) => (a.resolved_at_str || a.fired_at_str || '').localeCompare(b.resolved_at_str || b.fired_at_str || ''));
   let running = 0, peak = 0, maxDD = 0, worstTrade = 0;
   let wins = 0, losses = 0;
   for (const t of decided) {
@@ -1040,10 +1043,14 @@ function renderMlSiloRangeEquityChart(canvasId, allTrades, takeTrades, range) {
     return;
   }
 
+  // Same resolved_at_str-first convention as getDecidedRows()/computeMlRangeStats() above --
+  // `rows` here is already sorted that way (computeMlRangeStats().decided), so the labels
+  // must come from the same field or they'd disagree with the curve's own ordering.
   const cumulate = (rows) => {
     let running = 0;
-    const points = [0], times = [rows[0]?.fired_at_str];
-    for (const t of rows) { running += parseFloat(t.actual_pnl); points.push(running); times.push(t.fired_at_str); }
+    const timeOf = (t) => t?.resolved_at_str || t?.fired_at_str;
+    const points = [0], times = [timeOf(rows[0])];
+    for (const t of rows) { running += parseFloat(t.actual_pnl); points.push(running); times.push(timeOf(t)); }
     return { points, times };
   };
   const allSeries = cumulate(allDecided);
@@ -3028,9 +3035,28 @@ function getDecidedRows(rows, declustered = false) {
   // backend already excludes them from REAL_TRADE_FILTER/calibration, and the Declustered
   // view (this app's default, per the user's own explicit preference) must match that or it
   // silently shows trades that could never have actually happened live as if they were real.
+  //
+  // Sort by RESOLVED time, not fired time (fixed 2026-10-13, user-caught live: "the chart
+  // did not accurately reflect what I saw all day... then I refreshed it and it was very
+  // positive"). A trade can fire hours before it resolves -- e.g. a TIME_EXPIRED mark-to-
+  // market at session close for something that fired at 10am -- and sorting by fired_at_str
+  // (the old behavior) spliced that trade's P&L into the MIDDLE of the already-rendered
+  // cumulative curve at its 10am slot the instant it resolved, retroactively shifting every
+  // later point upward and silently rewriting hours of already-displayed chart shape with no
+  // real-time event to explain it. Confirmed live the same day: 15 real trades fired between
+  // 10:05am-3:58pm but all resolved in a single TIME_EXPIRED batch at 4:00pm (RTH close,
+  // +$649.50 net) -- sorting by fired_at put most of that swing hours earlier than it was
+  // actually known, instead of as a cluster of new points right at the end where it belongs.
+  // Sorting by resolved_at_str makes the curve monotonically append-only, matching how the
+  // account's real cumulative P&L actually became known over time -- this also fixes maxDD
+  // (computeRangeStats() below walks this same ordering peak-to-trough; a non-chronological
+  // order produces a drawdown number that doesn't correspond to any real sequence of account
+  // equity). Falls back to fired_at_str for a small population of pre-2026-07-20 historical
+  // rows that predate resolved_at being reliably populated (578 all-time, 0 for any date this
+  // sort actually matters for live) -- unchanged behavior for those, not a regression.
   return rows
     .filter(s => s.actual_pnl != null && s.late_fill_past_expiry_basis !== true && (declustered || s.is_cluster_primary !== false))
-    .sort((a, b) => (a.fired_at_str || '').localeCompare(b.fired_at_str || ''));
+    .sort((a, b) => (a.resolved_at_str || a.fired_at_str || '').localeCompare(b.resolved_at_str || b.fired_at_str || ''));
 }
 
 function computeRangeStats(rows, declustered = false) {
@@ -3084,8 +3110,13 @@ function renderEquityCurve(canvasId, rows, range, declustered = false) {
 
   let running = 0;
   const points = [0]; // cumulative pnl values
-  const times = [decided[0].fired_at_str]; // matching timestamp per point (point 0 borrows the first trade's time)
-  for (const s of decided) { running += parseFloat(s.actual_pnl); points.push(running); times.push(s.fired_at_str); }
+  // resolved_at_str (falling back to fired_at_str), matching getDecidedRows()'s own sort key
+  // above -- the x-axis label for each point must reflect WHEN that point's P&L actually
+  // became known, not when the underlying trade happened to fire, or the labels would
+  // misleadingly disagree with the curve's own (now resolved-time-ordered) shape.
+  const timeOf = (s) => s.resolved_at_str || s.fired_at_str;
+  const times = [timeOf(decided[0])]; // matching timestamp per point (point 0 borrows the first trade's time)
+  for (const s of decided) { running += parseFloat(s.actual_pnl); points.push(running); times.push(timeOf(s)); }
 
   const min = Math.min(0, ...points), max = Math.max(0, ...points);
   const valRange = (max - min) || 1;

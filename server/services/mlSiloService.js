@@ -234,6 +234,12 @@ async function getRangeTrades({ modelVersion, sample = 'test', range = 'today' }
   const sql = `
     SELECT a.id, a.setup_type, a.trade_date::text AS trade_date,
       TO_CHAR(a.fired_at, 'YYYY-MM-DD HH24:MI:SS') AS fired_at_str,
+      -- resolved_at_str (2026-10-13): quick-check.html's computeMlRangeStats()/
+      -- renderMlSiloRangeEquityChart() sort by this (falling back to fired_at_str), matching
+      -- the same fix on the main Performance section's getDecidedRows() -- a trade can fire
+      -- hours before it resolves, and sorting the cumulative curve by fired_at retroactively
+      -- reshapes already-displayed chart history the moment a late resolution lands.
+      TO_CHAR(a.resolved_at, 'YYYY-MM-DD HH24:MI:SS') AS resolved_at_str,
       a.actual_pnl::float AS actual_pnl, a.resolution, a.is_cluster_primary,
       v.probability::float AS ml_probability, v.verdict AS ml_verdict,
       v.model_version AS ml_model_version
