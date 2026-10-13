@@ -58,26 +58,36 @@ export async function startConnectionManager() {
 
 /**
  * Auto-rearm-on-simulation, upgraded 2026-10-11 to also gate on a clean post-reconnect
- * reconciliation (matches docs/DTC_AUTO_REARM_ON_BOOT_SPEC.md's original 2026-10-08 design).
- * Two independent gates, both required:
+ * reconciliation (matches docs/DTC_AUTO_REARM_ON_BOOT_SPEC.md's original 2026-10-08 design),
+ * then upgraded AGAIN 2026-10-13 (user directive: "permanently armed until otherwise stated
+ * ... too many variables in the air ... trading simulation money") to also clear a MID-SESSION
+ * halt, not just a boot-time one -- previously this only ever re-armed after the one specific
+ * 'system-boot' halt reason, deliberately leaving any OTHER halt (a real-looking mismatch found
+ * while live) requiring a manual re-arm. That distinction mattered less once
+ * checkPositionInvariant() (reconciliation.js) gained its own retry-before-halt fix the same
+ * day -- the halts THIS function now also auto-clears already survived one fresh recheck before
+ * ever halting in the first place, so by the time this function gets a chance to look again,
+ * it's checking a genuinely independent, later snapshot, not just retrying the same race twice.
+ * Two independent gates, both still required:
  *  1. SCOPE: DTC_AUTO_REARM_SAFE=true, an explicit per-profile opt-in flag
- *     (config/dtc-accounts/*.env) -- not an inference from the account name/number.
- *  2. HEALTH: only re-arms once the first post-logon reconciliation finishes, and only if
- *     NOTHING re-halted the switch for a real reason in the meantime (haltedBy is still
- *     'system-boot') AND that reconciliation actually came back clean. A crash/restart that
- *     leaves the broker and this app's own records genuinely disagreeing -- the exact case
- *     fail-closed-on-boot exists for -- stays halted even on a flagged-safe account, because
- *     runReconciliation() will already have called killSwitch.halt() with a different reason
- *     before this ever runs.
+ *     (config/dtc-accounts/*.env) -- not an inference from the account name/number. A future
+ *     real-money profile must not carry this flag, same standing rule as before.
+ *  2. HEALTH: only re-arms once a FRESH reconciliation (whatever trigger: LOGON, PERIODIC,
+ *     TERMINAL_TRANSITION -- see every triggerReconciliation() call site below) comes back
+ *     clean. No longer restricted to haltedBy==='system-boot' -- ANY halt reason clears once a
+ *     fresh check confirms the broker and this app's own records agree again. The halt event
+ *     itself stays fully visible either way (haltedReason/haltedAt/haltedBy are never erased,
+ *     only armed/haltedAt update on a successful auto-rearm) -- this removes the requirement to
+ *     manually re-arm, not the visibility into what tripped and when.
  */
 function maybeAutoRearmAfterReconcile() {
   if (process.env.DTC_AUTO_REARM_SAFE !== 'true') return;
   const state = killSwitch.getState();
   if (state.armed) return;
-  if (state.haltedBy !== 'system-boot') return; // something else halted it for a real reason -- leave it
   if (!lastReconciliationReport || !lastReconciliationReport.clean) return;
+  const previousHaltReason = state.haltedReason;
   killSwitch.arm('auto-rearm-on-simulation-boot');
-  console.log(`[sierraChart.connectionManager] DTC_AUTO_REARM_SAFE=true for trade account "${process.env.DTC_TRADE_ACCOUNT}" and reconciliation came back clean -- auto-armed.`);
+  console.log(`[sierraChart.connectionManager] DTC_AUTO_REARM_SAFE=true for trade account "${process.env.DTC_TRADE_ACCOUNT}" and a fresh reconciliation came back clean -- auto-armed (was halted: ${previousHaltReason || '(no reason recorded)'}).`);
 }
 
 /**
@@ -99,6 +109,12 @@ async function triggerReconciliation(trigger) {
     if (!result.reconciliationReport.clean) {
       console.error(`[sierraChart.connectionManager] RECONCILIATION MISMATCH (${trigger}):`, JSON.stringify(result.reconciliationReport));
     }
+    // Called from EVERY trigger (2026-10-13), not just LOGON -- a mid-session halt now gets
+    // a chance to auto-clear on the very next TERMINAL_TRANSITION (an order reaching a real
+    // terminal state, so typically within seconds of real activity) or PERIODIC tick, not
+    // just on the next full reconnect. See this function's own header for the full reasoning
+    // and the DTC_AUTO_REARM_SAFE scope gate that still fully applies here.
+    maybeAutoRearmAfterReconcile();
   } catch (err) {
     console.error(`[sierraChart.connectionManager] runReconciliation (${trigger}) failed:`, err);
   }
@@ -134,9 +150,9 @@ async function connectOnce() {
     // Reconcile against the broker's own truth every time a connection is (re)established
     // -- closes the "must reconcile on restart, not assume flat" gap (docs/OPEN_THREADS.md).
     // Also fail-closed halts on a position-invariant mismatch (see reconciliation.js's
-    // header) -- both folded into the one triggerReconciliation() call below.
+    // header), and the auto-rearm check (see that function's own header) -- all 3 folded
+    // into the one triggerReconciliation() call below, same as every other trigger.
     await triggerReconciliation('LOGON');
-    maybeAutoRearmAfterReconcile();
     // Periodic backstop for a quiet night with zero real order activity at all -- restart
     // it fresh on every (re)logon so a reconnect never ends up with two overlapping timers.
     stopPeriodicReconcile();

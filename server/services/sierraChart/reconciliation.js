@@ -776,6 +776,14 @@ export function brokerExitDecision({ brokerQty, entrySide, filledQuantity }) {
   return { ok: true, reason: null };
 }
 
+// How long to wait before the one retry snapshot in checkPositionInvariant() below -- long
+// enough for the broker's own position feed to catch up to an ORDER_UPDATE fill confirmation
+// this app already applied, short enough not to meaningfully delay a real halt. Not derived
+// from a measured distribution of real propagation delays (no such data exists yet) -- a
+// reasonable first guess, flagged clearly here so it's a one-line change if it's not enough
+// margin in practice.
+const INVARIANT_RETRY_DELAY_MS = 1500;
+
 /**
  * Fail-closed invariant check: does the broker's real aggregate position on `symbol`
  * match what this app's own per-order fill records say it SHOULD be? This is the ONLY
@@ -830,12 +838,35 @@ export async function checkPositionInvariant(dtcClient, killSwitch, symbol, snap
   const brokerNet = extractPositionForSymbol(positionMessages, symbol);
   if (brokerNet == null) return { checked: false, reason: 'no broker response' };
 
-  const match = brokerNet === expectedNet;
-  if (!match) {
-    killSwitch.halt(`position invariant mismatch on ${symbol}: broker=${brokerNet}, app-expected=${expectedNet}`, 'system-invariant-check');
-    console.error(`[sierraChart.reconciliation] POSITION INVARIANT MISMATCH on ${symbol}: broker reports net ${brokerNet}, this app's own fill records expect ${expectedNet}. Kill switch halted. Investigate directly in Sierra Chart before re-arming.`);
+  let match = brokerNet === expectedNet;
+  let finalBrokerNet = brokerNet;
+  if (!match && dtcClient?.isLoggedOn) {
+    // RETRY (2026-10-13, found live: a real short closed correctly via a real market exit,
+    // but this check ran in the same instant and halted on a false mismatch). A real
+    // close/fill can win a race against the broker's OWN position feed by a few hundred ms --
+    // this app's own fill confirmation (ORDER_UPDATE) can arrive and update expectedNet
+    // before the broker's separate aggregate-position feed (POSITION_UPDATE) reflects the
+    // same event. One short, fresh re-snapshot (never reusing the stale `snapshot` param
+    // that produced the mismatch) catches exactly this case. A GENUINE mismatch will still
+    // disagree on the retry too -- this doesn't weaken the check, it just stops it from
+    // firing on a timing artifact that resolves itself within about a second.
+    await new Promise(resolve => setTimeout(resolve, INVARIANT_RETRY_DELAY_MS));
+    const retrySnapshot = await getBrokerSnapshot(dtcClient);
+    const retryBrokerNet = extractPositionForSymbol(retrySnapshot.positionMessages, symbol);
+    if (retryBrokerNet === expectedNet) {
+      console.log(`[sierraChart.reconciliation] position invariant mismatch on ${symbol} resolved on retry (broker now reports ${retryBrokerNet}, matches expected ${expectedNet}) -- a timing race against the broker's own position feed, not a real mismatch. Not halting.`);
+      match = true;
+      finalBrokerNet = retryBrokerNet;
+    } else if (retryBrokerNet != null) {
+      finalBrokerNet = retryBrokerNet; // still mismatched -- use the freshest reading in the halt message
+    }
   }
-  return { checked: true, match, brokerNet, expectedNet };
+
+  if (!match) {
+    killSwitch.halt(`position invariant mismatch on ${symbol}: broker=${finalBrokerNet}, app-expected=${expectedNet}`, 'system-invariant-check');
+    console.error(`[sierraChart.reconciliation] POSITION INVARIANT MISMATCH on ${symbol}: broker reports net ${finalBrokerNet}, this app's own fill records expect ${expectedNet}. Kill switch halted. Investigate directly in Sierra Chart before re-arming.`);
+  }
+  return { checked: true, match, brokerNet: finalBrokerNet, expectedNet };
 }
 
 /**
