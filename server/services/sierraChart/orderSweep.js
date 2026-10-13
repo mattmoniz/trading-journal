@@ -93,12 +93,21 @@ export function selectTradeAccount({ isRth, rthAccount, globexAccount }) {
 // every poll inside its lookback window. gate_reason carries setup_id because gated_candidates
 // has no setup_id column.
 async function recordEntrySkip(row, reason) {
+  // Found live 2026-10-13: this silently failed on EVERY call since the day it shipped --
+  // "inconsistent types deduced for parameter $1" (detail: "text versus character varying").
+  // PG's parser gets confused inferring $1's type across this INSERT...SELECT...WHERE NOT
+  // EXISTS shape (no FROM clause on the outer SELECT to anchor it, then a second usage in the
+  // correlated subquery) -- explicit casts settle it. Reproduced and confirmed fixed against
+  // the real gated_candidates table before shipping, not assumed from reading the error alone.
+  // The practical cost: every real skip reason (direction unresolvable, DLL blocked, another
+  // position open, etc.) for a real order-eligible candidate was silently lost, never
+  // queryable in gated_candidates -- only ever visible by grepping raw journalctl output.
   await query(`
     INSERT INTO gated_candidates (trade_date, setup_type, gate_name, gate_reason)
-    SELECT CURRENT_DATE, $1, 'SIERRA_ENTRY_SKIP', $2
+    SELECT CURRENT_DATE, $1::varchar, 'SIERRA_ENTRY_SKIP', $2::text
     WHERE NOT EXISTS (
       SELECT 1 FROM gated_candidates
-      WHERE gate_name = 'SIERRA_ENTRY_SKIP' AND setup_type = $1 AND gate_reason = $2
+      WHERE gate_name = 'SIERRA_ENTRY_SKIP' AND setup_type = $1::varchar AND gate_reason = $2::text
         AND evaluated_at > NOW() - interval '5 minutes'
     )
   `, [row.setup_type, `setup_id=${row.id} ${reason}`]).catch((err) => console.error('[sierraChart.orderSweep] failed to persist skip:', err.message));
