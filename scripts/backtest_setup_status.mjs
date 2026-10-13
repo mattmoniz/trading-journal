@@ -80,6 +80,49 @@ const SUPPRESS_MAX_EV  = -5;   // EV below -$5/trade (sole condition — no WR g
 // long -- it marks NOT_FILLED at expiry, full stop. Flagged so these can be inspected without
 // silently inflating any setup_type's real N/EV with fills that could never have happened live.
 export const REAL_TRADE_FILTER = `origin_status IN ('ACTIVE','SHADOW') AND (resolution_method IS NULL OR resolution_method NOT IN ('MARK_TO_MARKET','RECOVERY_MTM')) AND ib_window_stale_basis IS NOT TRUE AND stale_entry_price_basis IS NOT TRUE AND late_fill_past_expiry_basis IS NOT TRUE AND bad_bars_basis IS NOT TRUE`;
+// EDGE_ATTRIBUTABLE_TRADE_FILTER (2026-10-12, OPEN_DECISION
+// risk_gate_blocked_shadow_rows_pollute_real_ev_20261012, DeepSeek-reviewed): a SEPARATE,
+// narrower constant from REAL_TRADE_FILTER above -- deliberately NOT folded into the shared
+// one. REAL_TRADE_FILTER answers "is this a real, valid, non-synthetic sample of what
+// happened" (origin/resolution/basis-flag data-quality checks) -- every consumer (ML training/
+// scoring in mlFireTimeScoring.js, user-facing P&L in setups.js, day-type stats in
+// levelApproach.js, the pooled scripts via POOLED_TRADE_FILTER) needs THAT question answered
+// the same way, and changing it for all of them was the mistake in this constant's first draft
+// (reviewed and reverted the same session before shipping). This constant answers a DIFFERENT
+// question -- "is this outcome attributable to the setup_type's OWN edge, or to a portfolio-
+// level risk-discipline gate that will block the same scenario forever regardless of the
+// type's quality" -- and is used ONLY by this file's own real_n/real_ev/distinctDates/rigor
+// computation for SETUP_STATUS, where that distinction is the actual question being asked.
+// Reasons excluded here are portfolio/regime gates (acdRiskGates.js, openingDriveGate.js) that
+// recur at a fixed rate regardless of the type's calibrated quality -- unlike THIN_N/
+// STOP_NEVER_SWEPT-style data-quality SHADOW reasons (correctly left uncounted as exclusions
+// here, since those are DESIGNED to self-clear as real N accumulates; excluding them would
+// break the mechanism by which an uncalibrated type proves itself).
+// CROSS_DIRECTION_FAST_FLIP is NOT excluded by exact match -- every write site
+// (acd.js:859,3146,6631) interpolates a per-family cooldown into the string
+// (`CROSS_DIRECTION_FAST_FLIP_${cooldownMin}min`), so an exact IN(...) match is a silent no-op
+// for the entire gate class. Caught by DeepSeek review before shipping -- the first draft of
+// this constant had exactly that bug.
+// REFIRE_COOLDOWN/ML_VETO_GATE_*/PERFORMANCE_BELOW_THRESHOLD deliberately NOT included --
+// DeepSeek review: those fire on a QUALITY signal (a refire is independently validated worse;
+// the ML veto is the model scoring this specific touch bad), so excluding them would be
+// favorable selection, not contamination removal -- the opposite problem this constant exists
+// to fix.
+// KNOWN OPEN RISK, not yet resolved as of this comment: at least one live setup_type
+// (BRACKET_BREAKOUT_LONG, see docs/OPEN_THREADS.md's 2026-10-12 rotation-gate per-type
+// breakdown) has its ROTATION_DIRECTION_CONFLICT-blocked rows running BETTER than its
+// unblocked rows (+$5.40 vs -$27.29/trade) -- excluding them via this filter would strip that
+// type's GOOD trades, not bad ones, biasing its real_ev DOWN. This filter should NOT be
+// applied roster-wide without a per-type delta-sign check first (does real_ev move up or down
+// when each reason is excluded, per type) -- see OPEN_DECISION
+// risk_gate_blocked_shadow_rows_pollute_real_ev_20261012 for that check, not yet run as of
+// this constant's creation.
+export const RISK_GATE_SUPPRESSION_REASONS = [
+  'OPPOSITE_DIRECTION_OPEN', 'ROTATION_DIRECTION_CONFLICT', 'SAME_TYPE_REFIRE',
+  'POST_WIN_OPP_FAMILY_REV', 'OPENING_DRIVE_COUNTER',
+];
+const RISK_GATE_REASONS_SQL = RISK_GATE_SUPPRESSION_REASONS.map(r => `'${r}'`).join(',');
+export const EDGE_ATTRIBUTABLE_TRADE_FILTER = `${REAL_TRADE_FILTER} AND (suppression_reason IS NULL OR (suppression_reason NOT IN (${RISK_GATE_REASONS_SQL}) AND suppression_reason NOT LIKE 'CROSS_DIRECTION_FAST_FLIP%'))`;
 // bad_bars_basis (2026-10-05): rows built from the contaminated NQH26 back-month bars for Sep 28 - Nov 19
 // 2025 (KNOWN_ISSUES item 16). Excluded from real N/EV here AND from the all-origin blended aggregates
 // below (the blended n/wr/ev fields were otherwise folding them in). See scripts/flag_nq_bad_window_setups_20261005.mjs.
