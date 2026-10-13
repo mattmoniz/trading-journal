@@ -39,10 +39,23 @@
  *    the real, already-reviewed reconcileAgainstBroker() output via the live endpoint rather
  *    than re-deriving broker state here.
  *
- * Does NOT try to fix anything -- alert-only, matching check_price_bars_freshness.mjs's own
- * stated philosophy ("making sure a recurrence gets noticed... not repairing the root
- * cause"). A human (or a future, separately-reviewed auto-remediation pass) decides what to
- * do about each alert.
+ * Alert-only for checks 2-5, matching check_price_bars_freshness.mjs's own stated philosophy
+ * ("making sure a recurrence gets noticed... not repairing the root cause") -- each of those
+ * involves a real resting/just-placed order, and a wrong automated guess there has real-money
+ * surface area, so a human decides what to do.
+ *
+ * Check 1 (MISSING_ORDER) is the one deliberate exception, added 2026-10-13 after the first
+ * real occurrence (active_setups id=134133, a server restart during this same session wiped
+ * pocRotationJoinDetector.js's in-memory poll-skip cache and backdated a real signal past
+ * sweepEntries()'s entry window -- see docs/OPEN_THREADS.md's 2026-10-13 entry) needed a manual
+ * fix. User's explicit choice (asked directly, picked the narrowest of 3 offered options):
+ * auto-resolve ONLY this clear-cut case, nothing else. It's genuinely unambiguous -- once a row
+ * is this far past fired_at with ZERO order_placements rows at all, sweepEntries()'s own
+ * fired_at > NOW() - 3min condition can only ever become more false as time passes, so there is
+ * no scenario where waiting longer lets a real order still land. AUTO_RESOLVE_BUFFER_MIN is
+ * wider than MISSING_ORDER_BUFFER_MIN (10min vs 5min) purely for operational visibility -- so
+ * the alert fires on its own at least once before the auto-fix lands, not because the extra
+ * margin is needed for correctness.
  *
  * Run: node scripts/check_order_lifecycle_health.mjs
  * Cron: every 5 minutes.
@@ -63,6 +76,9 @@ const MISSING_ORDER_BUFFER_MIN = 5;
 const STUCK_UNFILLED_BUFFER_MIN = 3;
 const CANCELED_NO_RESUBMIT_BUFFER_MIN = 2;
 const PHANTOM_ACTIVE_BUFFER_MIN = 5;
+// Wider than MISSING_ORDER_BUFFER_MIN deliberately -- see this file's header for why the extra
+// margin is about visibility, not correctness.
+const AUTO_RESOLVE_MISSING_ORDER_BUFFER_MIN = 10;
 
 function logAlert(message, detail) {
   const filePath = path.join(__dirname, '../scratch/server_errors.jsonl');
@@ -83,6 +99,32 @@ async function checkMissingOrders() {
   `, [MISSING_ORDER_BUFFER_MIN]);
   for (const row of r.rows) {
     logAlert(`ORDER_LIFECYCLE: MISSING_ORDER -- active_setups id=${row.id} (${row.setup_type}) fired_at=${row.fired_at} is origin_status='ACTIVE'/status='ACTIVE' with NO order_placements row at all, past sweepEntries()'s 3min lookback window. A real order was expected and never got submitted -- this setup will never get real execution.`);
+  }
+  await autoResolveMissingOrders();
+  return r.rows.length;
+}
+
+// The one deliberate auto-fix in this file -- see the header comment for why this specific
+// case (and only this one) is safe to resolve without a human looking first. Same fields as
+// the two manual fixes applied 2026-10-13 (134090/134096/134110, then 134133): status=EXPIRED,
+// resolution=NOT_FILLED, resolution_method=PRIMARY_UNFILLED, actual_pnl left NULL (no real
+// fill ever happened, so there's no real P&L to record). The WHERE clause is the sole source
+// of truth for eligibility -- re-checked fresh in this same query, not reused from
+// checkMissingOrders()'s earlier SELECT, so a race where an order somehow landed in between
+// (it structurally can't -- sweepEntries()'s own fired_at>NOW()-3min condition only ever
+// becomes more false with time -- but guarded anyway, matching this codebase's standing
+// "never trust a prior SELECT on an UPDATE touching real setup state" convention).
+async function autoResolveMissingOrders() {
+  const r = await query(`
+    UPDATE active_setups a
+    SET status = 'EXPIRED', resolution = 'NOT_FILLED', resolution_method = 'PRIMARY_UNFILLED', resolved_at = NOW()
+    WHERE a.origin_status = 'ACTIVE' AND a.status = 'ACTIVE'
+      AND a.fired_at < (NOW() AT TIME ZONE 'America/New_York') - make_interval(mins => $1)
+      AND NOT EXISTS (SELECT 1 FROM order_placements e WHERE e.setup_id = a.id AND e.purpose = 'ENTRY')
+    RETURNING a.id, a.setup_type, a.fired_at::text
+  `, [AUTO_RESOLVE_MISSING_ORDER_BUFFER_MIN]);
+  for (const row of r.rows) {
+    logAlert(`ORDER_LIFECYCLE: AUTO_RESOLVED MISSING_ORDER -- active_setups id=${row.id} (${row.setup_type}) fired_at=${row.fired_at} marked EXPIRED/NOT_FILLED/PRIMARY_UNFILLED (no order ever existed, ${AUTO_RESOLVE_MISSING_ORDER_BUFFER_MIN}min+ past fired_at). Freed any opposite-direction/same-type gate it was phantom-blocking.`);
   }
   return r.rows.length;
 }
