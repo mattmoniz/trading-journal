@@ -453,42 +453,94 @@ promotes, matching DeepSeek's own Phase 0 note).
    `placeMarketEscalationEntryOrder()`'s own established convention for a MARKET order's
    ignored-but-required wire Price1). `entryPrice` still required/validated even in MARKET mode
    (bookkeeping use by the caller).
-3. `orderSweep.js`'s `sweepEntries()` -- `MARKET_ENTRY_SETUP_TYPES` Set (the 6 types above, each
-   with its own documented reasoning inline), `fired_at` added to the row SELECT,
+3. `orderSweep.js`'s `sweepEntries()` -- `MARKET_ENTRY_SETUP_TYPES` Set (originally 6 types, now
+   4 -- see the Phase 2 review outcome below), `fired_at` added to the row SELECT,
    `marketEntry`/`freeFormText` (`setup_type + setup_id + fired_at-time`) passed through. Bracket
    path (`placeBracketEntryOrder`, off by default) untouched -- this only touches the standalone
    LIMIT/MARKET path.
 
-**Verified (all before any commit/restart):**
-- `npx eslint` clean on all 3 files.
-- All 3 import cleanly under real Node ESM (checked for a genuinely missing export, not just
-  lint -- see this codebase's own standing note on why `no-undef` isn't sufficient alone).
-- `node scripts/test_invariants.mjs`: 139 FAILURE(S)/166 WARNING(S) identical before and after
-  via `git stash` (the non-matching lines in a byte diff were all expected live-data drift --
-  query durations, `gated_candidates` counts, this doc's own size).
-- Synthetic unit test (`scratch/test_market_entry_20261013.mjs`, stubbed `DtcClient`, no real
-  network/DTC connection) -- 4 cases: default LIMIT unchanged, `marketEntry=true` produces
-  MARKET/price1=0/freeFormText passed through, `entryPrice` still required in MARKET mode,
-  `MAX_CHASE_DISTANCE_POINTS` untouched. First draft of the cleanup step had a real bug (cleaned
-  up by an assumed client_order_id prefix that `placeEntryOrder()`'s own `entryClientOrderId()`
-  never actually produces, leaving a stray row behind to wrongly block the next case via the real
-  direction_ok gate) -- caught by the test failing, fixed, re-run clean. Also had to route around
-  the REAL currently-open position (setup_id 134421, from the earlier DLL incident, untouched by
-  this test) rather than fight it.
-- DeepSeek code-review request for the actual diff dispatched
-  (`scratch/claude_request_deepseek.md`, response pending in `scratch/deepseek_response.md`) --
-  this is Phase 2 of the 3-phase workflow; the request explicitly separates "review this
-  implementation" from "re-litigate the already-user-overridden design direction."
+**Phase 2 DeepSeek code review came back (`scratch/deepseek_response.md`, overwritten -- Phase 0's
+critique is gone from that file now, only the Phase 2 review remains) with 1 real correctness
+defect and 1 real scoping inconsistency, both independently verified against the actual code
+before accepting (not taken on faith), both fixed, committed as `3dabe74` (initial build) +
+a follow-up commit (the fixes):**
+
+1. **`price1` DB sentinel bug (the one correctness defect, confirmed real).** The first draft
+   stored `price1=0` in BOTH the DB row and the wire message for a market entry, copying
+   `placeMarketEscalationEntryOrder()`'s own `price1=0` convention -- but that function's row is
+   protected from three downstream "treat price1 as a real limit" consumers
+   (`escalateUnfilledEntriesToMarket`, `resolveSetups.js`'s chase-abandon check,
+   `check_order_lifecycle_health.mjs`'s `checkStuckUnfilled`) by its client_order_id's trailing
+   `'M'` suffix, which all three explicitly filter on. A FRESH market entry has no such suffix, so
+   `price1=0` flows straight into their chase-distance math as a real (wildly wrong) limit price
+   -- and does so ASYMMETRICALLY by side: confirmed directly in `resolveSetups.js` (`orderInfo.
+   status === 'OPEN' && Number.isFinite(orderInfo.price1)` -- `Number.isFinite(0)` is `true`, so
+   this branch runs) that a BUY reads `current - 0` as "too far to ever chase" (silently never
+   escalates/abandons) while a SELL reads `0 - current` as a large negative distance that never
+   trips the "too far" guard (pointlessly cancels-and-resubmits MARKET every poll). Fixed by
+   decoupling DB `price1` (now `null` for a market entry, matching `fillPriceSanity`'s own
+   existing null-as-no-constraint convention -- `orderType==='MARKET' || !Number.isFinite(price1)`
+   -- independently re-read and confirmed in `priceMultiplier.js`) from the wire `Price1` (still
+   `0`, unaffected). `placeEntryOrder()` now computes `dbPrice1`/`wirePrice1` separately instead
+   of one shared value.
+
+2. **POC_ROTATION_JOIN scoping inconsistency (confirmed, dropped from scope).** DeepSeek pointed
+   out that `pocRotationJoinDetector.js`'s `entryPx = entryBar.open` (line 153, independently
+   re-read and confirmed) is a FIXED point-in-time bar price, not a moving reference -- the
+   identical shape to the already-excluded `STACK_VOL_BREAK_LIVE`. Including it was a
+   thesis-level argument ("price will join back to a moving fair-value median"), not an
+   entry-staleness one, and inconsistent with the rule actually being applied everywhere else.
+   Dropped from `MARKET_ENTRY_SETUP_TYPES` for consistency -- was moot anyway (SHADOW-only, real
+   N<20). Final scope: `GLOBEX_VWAP_FADE_LONG/SHORT`, `RTH_VWAP_FADE_LONG/SHORT` (4 types, not 6).
+
+3. **GLOBEX_VWAP_FADE RTH/Globex naming collision (a real landmine the Phase 0 critique hadn't
+   fully flagged, since it wasn't asked specifically about this).** Independently re-confirmed by
+   reading both insert sites directly (I had already read the RTH-hours copy myself earlier this
+   session, lines ~3630-3680): `detectGlobexSetup()` fires `GLOBEX_VWAP_FADE_LONG/SHORT` with
+   `level: vwap24` (the genuinely moving reference), but a SEPARATE RTH-hours `shadowCandidates`
+   block (`globexVwapFadeRTH`) fires the SAME setup_type string with `entry: currentPrice` -- a
+   fixed snapshot, the exact shape `GLOBEX_VWAP_MAGNET` is excluded for. A setup_type-keyed set
+   can't distinguish the two by name alone. Fixed via a `wantsMarketEntry(row)` guard (exported
+   from `orderSweep.js` for direct unit testing) that additionally checks `row.is_rth` -- the two
+   insert paths are time-exclusive (the Globex path only runs during `inGlobex`, the RTH-hours
+   block only runs when NOT `inGlobex`), so `is_rth` (a real, persisted GENERATED column derived
+   from `fired_at`'s time-of-day, already selected in `sweepEntries()`'s row for
+   `selectTradeAccount()`) reliably tells them apart without needing a new column.
+
+4. **Structural-advantage confound (already a known, flagged risk -- `OPEN_DECISION
+   primary_phantom_resolution_no_fill_gate_20261012`) -- now documented at THIS decision site
+   too**, since this change makes a mechanism that was a rare escalation fallback into the
+   default entry path for 4 setup_types: a MARKET fill's real price can differ from the frozen
+   `entry_zone_low` the stop/target were calibrated against, so the real risk distance on a
+   market-filled trade isn't exactly what `OPTIMAL_STOP` assumed for that setup_type. Not a new
+   mechanism, just a wider blast radius for an already-accepted one -- documented inline, not
+   separately re-litigated.
+
+5. **Minor, not fixed (deliberately, low-value):** `wantsMarketEntry()` is not consulted on the
+   OCO-bracket branch (`SIERRA_USE_OCO_BRACKET`, off by default) -- a bracket parent can't itself
+   be MARKET. Documented inline at that branch so flipping the flag on later doesn't silently and
+   confusingly revert these 4 types to LIMIT with no explanation.
+
+**Re-verified after the fixes (not just the first pass):** `npx eslint` clean, both files import
+cleanly under real ESM, `node scripts/test_invariants.mjs` unchanged at 139/166 via `git stash`.
+Extended `scratch/test_market_entry_20261013.mjs` to 7 cases (added: DB `price1` is `null` not
+`0` for a market entry; `wantsMarketEntry()`'s `is_rth` guard, 4 sub-cases; `POC_ROTATION_JOIN`
+confirmed dropped from scope) -- all 7 pass. Residue/real-position check re-run clean (setup_id
+134421 untouched).
 
 **Not yet done:**
-1. Read DeepSeek's Phase 2 response and act on any real finding before proceeding.
-2. **Server has NOT been restarted** -- per the standing restart-disarms-the-kill-switch rule,
+1. **Server has NOT been restarted** -- per the standing restart-disarms-the-kill-switch rule,
    this needs the user told explicitly before it happens, not treated as a silent follow-on step.
-3. Separately, the real broker-side mismatch from the earlier manual "Reverse" incident (setup
+2. Separately, the real broker-side mismatch from the earlier manual "Reverse" incident (setup
    134421, kill switch currently halted/disarmed) still needs the user's own resolution before a
    restart/re-arm makes sense regardless of this code being ready -- same caveat as the entry
    above.
+3. This fix round's own diff was NOT sent back to DeepSeek for a second review pass (matching this
+   codebase's own "2 correction attempts then Claude takes over" convention is about Gemini/
+   DeepSeek being WRONG twice, not about every follow-up fix needing a fresh dispatch -- both
+   findings here were independently verified against the real code directly, not just trusted).
 
-**If a future session picks this up cold:** read this entry, then `scratch/deepseek_response.md`
-(Phase 0, search its own `## Verdict` heading) and whatever Phase 2 response landed in the same
-file/`scratch/deepseek_response.md` afterward, before trusting either "done" or "needs work."
+**If a future session picks this up cold:** read this entry in full (it now contains the
+complete before/after), then `scratch/deepseek_response.md` if more of DeepSeek's own reasoning
+is needed (it currently holds the Phase 2 review only -- the Phase 0 critique was overwritten,
+its conclusions are already folded into this entry and the earlier one above it).

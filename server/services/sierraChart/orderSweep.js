@@ -74,18 +74,14 @@ export const MAX_CHASE_DISTANCE_POINTS = 8;
 // rather than DeepSeek's narrower recommended fix -- a live-reference recompute inside
 // escalateUnfilledEntriesToMarket() only). These are setup_types whose entry is a
 // snapshot of a CONTINUOUSLY MOVING reference (a running VWAP, a session median),
-// confirmed directly from the real candidate-construction code in acd.js/
-// pocRotationJoinDetector.js, not guessed:
+// confirmed directly from the real candidate-construction code in acd.js, not guessed:
 //   - GLOBEX_VWAP_FADE_LONG/SHORT -- entry = vwap24, the running 24hr Globex VWAP,
-//     recomputed every poll (acd.js's detectGlobexSetup()).
+//     recomputed every poll (acd.js's detectGlobexSetup()). See the is_rth guard below
+//     for a real naming collision this type has with a DIFFERENT, fixed-entry insert path.
 //   - RTH_VWAP_FADE_LONG/SHORT -- entry = earlyVwap, the developing RTH VWAP, recomputed
-//     every poll (acd.js ~line 3484-3488, ~4344).
-//   - POC_ROTATION_JOIN_LONG/SHORT -- entry is the triggering bar's own open, but the
-//     thesis is "price will join back to the continuously-moving 24hr fair-value
-//     median" (pocRotationJoinDetector.js) -- currently SHADOW-only (real N<20), so this
-//     is moot today (it can never place a real order), but included per the same
-//     principle for when it eventually promotes.
-// EXCLUDED, confirmed and checked before leaving out, not just copied from the user's
+//     every poll (acd.js ~line 3484-3488, ~4344). Confirmed single-path (keepLevelsAll
+//     only) -- no equivalent collision.
+// EXCLUDED, each checked directly before leaving out, not just copied from the user's
 // first draft of this list:
 //   - GLOBEX_VWAP_MAGNET_LONG/SHORT -- entry = px, the current price itself at trigger
 //     time, not a separately-drifting value. Already market-like by construction.
@@ -97,16 +93,50 @@ export const MAX_CHASE_DISTANCE_POINTS = 8;
 //     entry = bar.close, the triggering bar's own fixed breakout price at detection time
 //     -- the same shape as a structural breakout level (an IB boundary), NOT a
 //     continuously-recomputed moving reference. Firing this at MARKET would pay pure
-//     slippage with no corresponding staleness problem to fix -- the existing generic
-//     chase-distance guard already covers "price moved away from a fixed breakout level"
-//     correctly. Excluded for the same underlying reason GLOBEX_VWAP_MAGNET is excluded,
-//     just discovered via direct code-reading rather than DeepSeek's review (which wasn't
-//     asked about this type, since it was added to scope after that critique was sent).
+//     slippage with no corresponding staleness problem to fix.
+//   - POC_ROTATION_JOIN_LONG/SHORT -- originally included (entry is the triggering bar's
+//     own open, thesis "price will join back to the continuously-moving 24hr fair-value
+//     median"), but DeepSeek's code review (2026-10-13) correctly caught that this is a
+//     THESIS-level argument, not an ENTRY-STALENESS one -- `entryPx = entryBar.open`
+//     (pocRotationJoinDetector.js:153) is a FIXED point-in-time bar price, the identical
+//     shape to the already-excluded STACK_VOL_BREAK_LIVE, not a moving reference. Dropped
+//     for consistency with that same rule, rather than keep it under a different,
+//     undocumented principle. Was moot anyway (SHADOW-only, real N<20).
+//
+// is_rth guard (DeepSeek code review finding, CONFIRMED by direct read of both insert
+// sites): GLOBEX_VWAP_FADE_LONG/SHORT is fired from TWO structurally different places
+// under the identical setup_type string -- detectGlobexSetup() (Globex hours only, entry
+// = vwap24, the genuinely moving reference MARKET is meant to fix) AND the RTH-hours
+// `shadowCandidates` 24hr-VWAP block (acd.js ~3630-3680, `globexVwapFadeRTH`, entry =
+// currentPrice -- a FIXED snapshot, the exact shape GLOBEX_VWAP_MAGNET is excluded for).
+// A setup_type-keyed set can't tell these apart by name alone. `is_rth` (a real,
+// persisted GENERATED column derived from fired_at's time-of-day) reliably distinguishes
+// them in practice because the two insert paths are themselves time-exclusive -- the
+// Globex path only ever runs during inGlobex (so its rows always land outside RTH hours,
+// is_rth=false) and the RTH-hours block only ever runs when NOT inGlobex (is_rth=true).
+// Skip MARKET for the RTH-hours copy explicitly -- it has no staleness problem, and
+// firing it at MARKET would pay pure slippage for no reason, undermining the whole point
+// of this change for that specific copy.
 const MARKET_ENTRY_SETUP_TYPES = new Set([
   'GLOBEX_VWAP_FADE_LONG', 'GLOBEX_VWAP_FADE_SHORT',
   'RTH_VWAP_FADE_LONG', 'RTH_VWAP_FADE_SHORT',
-  'POC_ROTATION_JOIN_LONG', 'POC_ROTATION_JOIN_SHORT',
 ]);
+export function wantsMarketEntry(row) {
+  if (!MARKET_ENTRY_SETUP_TYPES.has(row.setup_type)) return false;
+  if (row.setup_type.startsWith('GLOBEX_VWAP_FADE_') && row.is_rth === true) return false; // the fixed-entry RTH-hours copy, not the moving-reference Globex-hours one
+  return true;
+}
+// Structural-advantage confound (DeepSeek code review, 2026-10-13, Q5#2 -- already
+// documented as a general risk in resolveSetups.js's own OPEN_DECISION
+// primary_phantom_resolution_no_fill_gate_20261012 comment, restated here because this
+// change makes it the DEFAULT path for 4 setup_types rather than a rare escalation
+// fallback): stop_level/t1_level stay fixed at the pre-computed (frozen-reference-
+// derived) levels while the real fill price can differ from entry_zone_low -- meaning
+// the REAL stop/target distance on a MARKET-filled trade is not exactly what that
+// setup_type's own calibration assumed. Bounded in practice by how fast sweepEntries()
+// reaches a fresh row (ENTRY_LOOKBACK_MINUTES=3) and VWAP's typical short-window drift,
+// but not zero, and worth knowing before reading this change's own live EV as directly
+// comparable to the LIMIT-era backtest numbers.
 
 /**
  * Called once per poll, from runSetupDetection(), after every other lifecycle pass has
@@ -189,6 +219,13 @@ async function sweepEntries(dtcClient) {
       // discussed 2026-10-07. Falls back to the existing standalone-STOP path (placeEntryOrder,
       // then placeStopOrder on fill confirmation) whenever the flag is off or either level is
       // missing, so this is purely additive -- no change to today's default behavior.
+      //
+      // wantsMarketEntry() is deliberately NOT consulted on this branch (DeepSeek code
+      // review, Q5#3) -- a bracket PARENT order can't itself be MARKET (per Sierra's own
+      // bracket procedure, see placeBracketEntryOrder's header), so if this flag is ever
+      // flipped on, the 4 MARKET_ENTRY_SETUP_TYPES would silently revert to LIMIT with no
+      // freeFormText label. Not a bug today (the flag is off by default), but worth
+      // knowing before enabling OCO brackets while this market-entry change is also live.
       const useBracket = process.env.SIERRA_USE_OCO_BRACKET === 'true' && Number.isFinite(Number(row.stop_level)) && Number.isFinite(Number(row.t1_level));
       let result;
       if (useBracket) {
@@ -206,7 +243,7 @@ async function sweepEntries(dtcClient) {
         });
         if (result) console.log(`[sierraChart.orderSweep] placed BRACKET ENTRY for setup_id=${row.id} (${row.setup_type}): ${JSON.stringify(result)}`);
       } else {
-        const marketEntry = MARKET_ENTRY_SETUP_TYPES.has(row.setup_type);
+        const marketEntry = wantsMarketEntry(row);
         result = await placeEntryOrder(dtcClient, {
           setupId: row.id,
           entryPrice: Number(row.entry_zone_low),

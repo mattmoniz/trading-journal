@@ -180,13 +180,31 @@ async function submitAndRecord(dtcClient, id, { symbol, exchange, side, orderTyp
  * CONTINUOUSLY MOVING reference (a running VWAP, a session median) frozen at detection
  * time -- if the LIMIT doesn't fill quickly, the real reference keeps drifting and the
  * frozen level becomes progressively less representative of where the setup's own thesis
- * actually is. When true, submits MARKET instead (price1=0, matching
- * placeMarketEscalationEntryOrder's own established convention for a MARKET order's
- * ignored-but-required wire Price1 field) -- entryPrice is still required and still used
- * for position_at_detection-style bookkeeping elsewhere in the caller, just not as the
- * order's own limit price. The scoping decision (which setup_types get this) lives at the
- * call site (orderSweep.js's MARKET_ENTRY_SETUP_TYPES), not in this function -- this
- * function only knows how to place either kind of order.
+ * actually is. When true, submits MARKET instead -- entryPrice is still required and
+ * still used for position_at_detection-style bookkeeping elsewhere in the caller, just
+ * not as the order's own limit price. The scoping decision (which setup_types get this)
+ * lives at the call site (orderSweep.js's MARKET_ENTRY_SETUP_TYPES), not in this function
+ * -- this function only knows how to place either kind of order.
+ *
+ * DB price1 vs wire Price1 are deliberately DECOUPLED for a MARKET order (DeepSeek code
+ * review, 2026-10-13, CORRECTNESS finding -- verified independently before accepting): a
+ * first draft stored `price1=0` in both places, matching
+ * placeMarketEscalationEntryOrder's own `price1=0` convention -- but that function's
+ * price1=0 row is protected from the three downstream "treat price1 as a real limit"
+ * consumers (escalateUnfilledEntriesToMarket, resolveSetups.js's chase-abandon check,
+ * check_order_lifecycle_health.mjs's checkStuckUnfilled) by its client_order_id's
+ * trailing 'M' suffix, which all three explicitly filter on -- a FRESH market entry has
+ * no such suffix, so `price1=0` would flow straight into their chase-distance math as if
+ * it were a real (wildly wrong) limit price, and -- confirmed directly -- do so
+ * ASYMMETRICALLY by side (a BUY reads `current - 0` as "too far to ever chase," a SELL
+ * reads `0 - current` as a large NEGATIVE distance that never trips the "too far" guard
+ * and proceeds to pointlessly cancel-and-resubmit MARKET every poll). `price1=null` in
+ * the DB makes `Number.isFinite(price1)` correctly false for all three, matching
+ * fillPriceSanity's own existing null-as-no-constraint convention (priceMultiplier.js:
+ * `orderType==='MARKET' || !Number.isFinite(price1)` -> ok). The WIRE still gets a real
+ * number (DTC ignores Price1 for MARKET but still requires one on the wire, matching
+ * placeMarketEscalationEntryOrder's own precedent) -- these are computed separately
+ * below, not derived from one shared value.
  *
  * freeFormText (2026-10-13): optional human-readable label passed through to
  * dtcClient.submitOrder() for identifying the order directly in Sierra Chart's own UI --
@@ -198,11 +216,13 @@ async function submitAndRecord(dtcClient, id, { symbol, exchange, side, orderTyp
 export async function placeEntryOrder(dtcClient, { entryPrice, marketEntry = false, freeFormText, ...params }) {
   if (!Number.isFinite(entryPrice)) throw new Error('placeEntryOrder(): entryPrice is required (used for bookkeeping even when marketEntry is true).');
   const clientOrderId = entryClientOrderId(params.setupId);
-  const fullParams = { ...params, orderType: marketEntry ? 'MARKET' : 'LIMIT', price1: marketEntry ? 0 : entryPrice, freeFormText };
+  const dbPrice1 = marketEntry ? null : entryPrice; // null = "no limit price", never 0 -- see header comment
+  const wirePrice1 = marketEntry ? 0 : entryPrice;
+  const fullParams = { ...params, orderType: marketEntry ? 'MARKET' : 'LIMIT', price1: dbPrice1, freeFormText };
   const insertQ = await insertPendingOrder({ ...fullParams, purpose: 'ENTRY', clientOrderId }, true);
   if (insertQ.rows.length === 0) return null;
   const id = insertQ.rows[0].id;
-  await submitAndRecord(dtcClient, id, { ...fullParams, clientOrderId });
+  await submitAndRecord(dtcClient, id, { ...fullParams, price1: wirePrice1, clientOrderId });
   return { id, clientOrderId };
 }
 
