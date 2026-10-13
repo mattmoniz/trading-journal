@@ -3362,6 +3362,20 @@ export default function createACDRouter(io) {
         const sessionDate = etHour >= 18 ? nextTradingDay(nowET) : todayET;
         const globexSetup = await detectGlobexSetup(sessionDate, io);
         const stackVolSignal = await computeStackVolSignal(todayET);
+        // FIXED 2026-10-13: computeMajorPivotDefendedBreakSignal()'s only call site used to be
+        // in the RTH branch below -- same "physically placed after the Globex early-return"
+        // bug class computeStackVolSignal had before its own 2026-07-27 fix (see that call's
+        // own comment two lines up). The function already classifies each break by its OWN bar
+        // timestamp (isGlobexMod(entryMod), majorPivotDefendedBreakDetector.js) and does the
+        // real INSERT itself -- it doesn't need a different `todayET` here, that param is
+        // unused inside the function (checked). Calling it from both branches means a GLOBEX-
+        // classified defended-pivot break (config "A", re-enabled SHADOW-only 2026-09-14) can
+        // finally actually fire during real Globex hours instead of being structurally dead the
+        // whole time regardless of eligibility. Idempotent either way: the unique touch-instant
+        // index + ON CONFLICT DO NOTHING in that INSERT already protects against a double-fire
+        // if this ever ran from both branches in the same poll (it can't -- inGlobex is
+        // mutually exclusive by construction), same as every other dual-branch call here.
+        const majorPivotDefendedBreakSignal = await computeMajorPivotDefendedBreakSignal(todayET);
         // Real historical count for the trade-card display -- see the matching RTH comment
         // above (~line 9852) for why this reuses getCanonicalLiveStatus rather than a new query.
         if (globexSetup?.type) {
@@ -3376,7 +3390,7 @@ export default function createACDRouter(io) {
         // silently disappeared from quick-check.html's standalone card the moment the route
         // crossed into Globex mode at 6PM, even though the position was still genuinely open.
         const openStandalonePosition = await getOpenStandalonePosition();
-        return res.json({ setup: globexSetup, sessionClosed: false, globexMode: true, stackVolSignal, openStandalonePosition });
+        return res.json({ setup: globexSetup, sessionClosed: false, globexMode: true, stackVolSignal, majorPivotDefendedBreakSignal, openStandalonePosition });
       }
 
       // Was a hardcoded `false` (never wired to anything — confirmed zero frontend consumers
