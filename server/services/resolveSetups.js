@@ -23,11 +23,20 @@ import { stepWiderTarget, MAX_BARS_TO_T1_FOR_WIDER, WIDER_TARGET_MULT } from './
 import { stepStepTrail } from './stepTrailWalker.js';
 import { stepT1FloorRunner, t1FloorPnlFromResolution } from './t1FloorRunnerWalker.js';
 import { getCurrentPrice } from './priceRetrieval.js';
+import { MAX_CHASE_DISTANCE_POINTS } from './sierraChart/orderSweep.js';
 import { stepBreakevenStop } from './breakevenStopWalker.js';
 import { stepPocBreakevenHold } from './pocBreakevenHoldWalker.js';
 import { STOP_POINTS as POC_STOP_POINTS, ARM_AT_MINUTES as POC_ARM_AT_MINUTES } from './pocRotationJoinDetector.js';
 import { detectPostEntryExitSignals } from '../../scripts/pilot_exits_extended.mjs';
 import { getCached, setCached, getGlobalCalib, DAY_CACHE_TTL, getTouchQualityCalib, getTouchQualityBaseline, dropToTimeline } from './acdShared.js';
+
+// User-picked (2026-10-13, asked directly: 10/15/30min) -- how long a resting LIMIT entry
+// beyond MAX_CHASE_DISTANCE_POINTS gets to come back on its own before the chase-abandon
+// check below gives up on it. See that check's own comment for the full mechanism.
+// Exported so check_order_lifecycle_health.mjs's STUCK_UNFILLED explanation can give a real
+// ETA instead of duplicating this number -- same "share the constant" convention as
+// orderSweep.js's own MAX_CHASE_DISTANCE_POINTS export.
+export const CHASE_ABANDON_MINUTES = 15;
 
 // Price-based resolution: for each ACTIVE setup with defined entry/stop/T1, walk price
 // bars since fired_at and resolve TARGET_HIT/STOP_HIT the moment either level is touched
@@ -227,12 +236,18 @@ export async function resolveSetupsByPrice(io) {
   // explicit origin_status condition of its own.
   const primaryIds = active.rows.filter(r => r.is_cluster_primary !== false).map(r => r.id);
   const entryOrderBySetupId = new Map();
+  // price1/side/submitted_at (2026-10-13, user request) feed the chase-abandon check just
+  // below -- a resting LIMIT entry beyond MAX_CHASE_DISTANCE_POINTS doesn't need to sit until
+  // this setup's own session-end expires_at; see that check's own comment for why.
+  let currentPriceForChaseCheck = null;
   if (primaryIds.length) {
     const entryOrdersQ = await query(`
-      SELECT setup_id, status, filled_quantity, avg_fill_price::float as avg_fill_price FROM order_placements
-      WHERE setup_id = ANY($1) AND purpose = 'ENTRY'
+      SELECT setup_id, status, filled_quantity, avg_fill_price::float as avg_fill_price,
+             price1::float as price1, side, submitted_at::text as submitted_at
+      FROM order_placements WHERE setup_id = ANY($1) AND purpose = 'ENTRY'
     `, [primaryIds]);
     for (const o of entryOrdersQ.rows) entryOrderBySetupId.set(o.setup_id, o);
+    currentPriceForChaseCheck = await getCurrentPrice('NQ', 'resolveSetups.chaseAbandonCheck');
   }
 
   let count = 0;
@@ -261,15 +276,48 @@ export async function resolveSetupsByPrice(io) {
       const orderInfo = entryOrderBySetupId.get(row.id);
       const realOrderFilled = orderInfo && (orderInfo.status === 'FILLED' || orderInfo.filled_quantity > 0);
       if (!realOrderFilled) {
+        // Chase-abandon early resolution (2026-10-13, user request -- "once its out of the 8
+        // point and time window it needs to close"): a resting LIMIT entry orderSweep.js's
+        // own escalateUnfilledEntriesToMarket() has already declined to chase (price moved
+        // beyond MAX_CHASE_DISTANCE_POINTS) has no realistic path to a fill short of price
+        // genuinely reversing back -- waiting until this setup's own session-end expires_at
+        // (often hours away) serves no purpose once that's true for a sustained stretch.
+        // CHASE_ABANDON_MINUTES (15min, user-picked) gives price real room to come back on
+        // its own before giving up -- re-checked fresh every poll, same as the chase guard
+        // itself, so a brief overshoot doesn't trigger this. Marking EXPIRED here is what
+        // actually closes the loop: sweepExits() already handles "status is RESOLVED/EXPIRED,
+        // entry never filled" by canceling the real resting order via cancelUnfilledEntry()
+        // (reconciliation.js) on its very next poll -- no new order-cancellation code needed,
+        // this just transitions the row's own state into the path that already exists for it.
+        // Scoped to status='OPEN' only (the original, non-escalated order) -- an order
+        // already PENDING_CANCEL/CANCELED is already on its way out via the normal escalation
+        // or this same mechanism, and an 'M'-suffixed MARKET resubmit resting this long would
+        // be a different, more alarming anomaly STUCK_UNFILLED already flags separately.
+        let abandonedByChase = false;
+        if (orderInfo && orderInfo.status === 'OPEN' && currentPriceForChaseCheck != null && Number.isFinite(orderInfo.price1)) {
+          // nowEt is a plain naive-ET text string (see this function's own header comment on
+          // why), NOT a Date -- `nowEt - new Date(...)` would silently coerce the string to
+          // NaN instead of diffing. Parsing BOTH sides through the identical
+          // str.replace(' ','T') method keeps this a pure elapsed-time diff: any ambient-TZ
+          // artifact that convention introduces is identical on both operands and cancels out
+          // in the subtraction -- this is an elapsed-minutes calculation, not an absolute
+          // wall-clock digit extraction, so it doesn't hit the landmine that convention
+          // normally guards against elsewhere in this codebase.
+          const ageMin = (new Date(nowEt.replace(' ', 'T')) - new Date(orderInfo.submitted_at.replace(' ', 'T'))) / 60000;
+          const chaseDistance = orderInfo.side === 'BUY'
+            ? (currentPriceForChaseCheck - orderInfo.price1)
+            : (orderInfo.price1 - currentPriceForChaseCheck);
+          abandonedByChase = ageMin >= CHASE_ABANDON_MINUTES && chaseDistance > MAX_CHASE_DISTANCE_POINTS;
+        }
         // Covers BOTH "a real order exists but hasn't filled" AND "no real order was ever
         // attempted at all" -- no real position exists either way. Same SIBLING_UNFILLED
-        // shape: NOT_FILLED/null actual_pnl only once past expires_at (never force-resolve
-        // early -- an existing order can still fill right up to expiry, and orderSweep.js's
-        // escalateUnfilledEntriesToMarket will cancel-and-resubmit as MARKET well before
-        // most rows ever reach this branch; a never-attempted order has no such chance, but
-        // waiting until expiry keeps this one rule simple rather than branching on which
-        // of the two cases applies).
-        if (row.expires_at && nowEt >= row.expires_at) {
+        // shape: NOT_FILLED/null actual_pnl at expires_at, OR now also at the chase-abandon
+        // condition above (never force-resolve early otherwise -- an existing order can still
+        // fill right up to expiry, and escalateUnfilledEntriesToMarket will cancel-and-
+        // resubmit as MARKET well before most rows ever reach this branch; a never-attempted
+        // order has no such chance, but waiting until expiry keeps this one rule simple for
+        // every OTHER case rather than branching further).
+        if ((row.expires_at && nowEt >= row.expires_at) || abandonedByChase) {
           await query(`UPDATE active_setups SET status='EXPIRED', resolution='NOT_FILLED', resolution_method='PRIMARY_UNFILLED',
                          actual_outcome='NOT_FILLED', actual_pnl=NULL, resolved_at=NOW(), updated_at=NOW()
                        WHERE id=$1 AND status=$2`, [row.id, statusMatch]);

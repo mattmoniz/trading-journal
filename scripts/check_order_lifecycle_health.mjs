@@ -65,6 +65,9 @@ import pool from '../server/db.js';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { getCurrentPrice } from '../server/services/priceRetrieval.js';
+import { MAX_CHASE_DISTANCE_POINTS } from '../server/services/sierraChart/orderSweep.js';
+import { CHASE_ABANDON_MINUTES } from '../server/services/resolveSetups.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const APP_BASE_URL = process.env.APP_BASE_URL || 'http://localhost:3002';
@@ -133,16 +136,40 @@ async function autoResolveMissingOrders() {
 // instead of a bare count -- the ids/detail feed persistHealthStatus()'s signature, which is
 // what lets a dismissal distinguish "the exact same problem" from "something changed, show it
 // again" (see that function's own header for why).
+// User asked directly (2026-10-13) why a stuck order "can't be addressed right away" --
+// the answer, for most real cases, is the MAX_CHASE_DISTANCE_POINTS guard correctly refusing
+// to chase a price that's run too far (see orderSweep.js's own header for why chasing would
+// be worse than waiting). The alert used to just say "should have canceled this already but
+// hasn't," which reads as a malfunction even when the guard is working exactly as designed.
+// Now explains WHY: within the chase distance (a genuine anomaly, worth investigating) vs
+// beyond it (expected, and will self-resolve via resolveSetups.js's CHASE_ABANDON_MINUTES
+// check -- included here so there's a concrete ETA, not just "it'll sort itself out").
 async function checkStuckUnfilled() {
   const r = await query(`
-    SELECT e.id, e.setup_id, a.setup_type, e.submitted_at::text
+    SELECT e.id, e.setup_id, a.setup_type, e.submitted_at::text, e.price1::float, e.side
     FROM order_placements e
     JOIN active_setups a ON a.id = e.setup_id
     WHERE e.purpose = 'ENTRY' AND e.status = 'OPEN' AND e.client_order_id NOT LIKE '%M'
       AND e.submitted_at < (NOW() AT TIME ZONE 'America/New_York') - make_interval(mins => $1)
   `, [STUCK_UNFILLED_BUFFER_MIN]);
+  const currentPrice = r.rows.length ? await getCurrentPrice('NQ', 'check_order_lifecycle_health.checkStuckUnfilled') : null;
+  // nowEt as a naive-ET text string, diffed against submitted_at via the identical
+  // str.replace(' ','T') parse on both sides -- same safe pattern as resolveSetups.js's own
+  // chase-abandon check (see that file's comment for why mixing conventions here silently
+  // produces garbage, a real bug caught and fixed in this exact spot before shipping).
+  const nowEtRow = r.rows.length ? await query(`SELECT (NOW() AT TIME ZONE 'America/New_York')::text as now_et`) : null;
+  const nowEt = nowEtRow ? nowEtRow.rows[0].now_et : null;
   for (const row of r.rows) {
-    logAlert(`ORDER_LIFECYCLE: STUCK_UNFILLED -- order_placements id=${row.id} (setup_id=${row.setup_id}, ${row.setup_type}) submitted_at=${row.submitted_at} is still OPEN past the escalation timeout. escalateUnfilledEntriesToMarket() should have canceled this already but hasn't.`);
+    let reason = 'escalateUnfilledEntriesToMarket() should have canceled this already but hasn\'t -- genuine anomaly, worth investigating directly.';
+    if (currentPrice != null && Number.isFinite(row.price1)) {
+      const chaseDistance = row.side === 'BUY' ? (currentPrice - row.price1) : (row.price1 - currentPrice);
+      if (chaseDistance > MAX_CHASE_DISTANCE_POINTS) {
+        const ageMin = (new Date(nowEt.replace(' ', 'T')) - new Date(row.submitted_at.replace(' ', 'T'))) / 60000;
+        const minutesLeft = Math.max(0, Math.round(CHASE_ABANDON_MINUTES - ageMin));
+        reason = `price has moved ${chaseDistance.toFixed(1)}pts away from the LIMIT (${row.price1}) -- beyond the ${MAX_CHASE_DISTANCE_POINTS}pt chase cap, so this is expected, not a malfunction. Will auto-resolve as NOT_FILLED (resolveSetups.js's chase-abandon check) in ~${minutesLeft}min if it stays this far away -- not an immediate fix, by design (chasing this far would mean a materially different, uncalibrated entry price).`;
+      }
+    }
+    logAlert(`ORDER_LIFECYCLE: STUCK_UNFILLED -- order_placements id=${row.id} (setup_id=${row.setup_id}, ${row.setup_type}) submitted_at=${row.submitted_at} is still OPEN past the escalation timeout. ${reason}`);
   }
   return { count: r.rows.length, ids: r.rows.map(row => row.id) };
 }

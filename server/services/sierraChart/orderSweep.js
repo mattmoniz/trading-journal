@@ -63,7 +63,10 @@ const ENTRY_FILL_TIMEOUT_SECONDS = 90;
 // still-too-far order is simply left resting on its original LIMIT, unescalated, for a
 // later poll to re-check -- it can still fill naturally if price comes back, and
 // escalateUnfilledEntriesToMarket() re-evaluates distance fresh every poll, not just once.
-const MAX_CHASE_DISTANCE_POINTS = 8;
+// Exported (2026-10-13) so check_order_lifecycle_health.mjs's STUCK_UNFILLED check can
+// explain WHY an order is still resting (this guard legitimately blocking escalation, vs a
+// genuine malfunction) instead of duplicating this number -- share the constant, not re-guess it.
+export const MAX_CHASE_DISTANCE_POINTS = 8;
 
 /**
  * Called once per poll, from runSetupDetection(), after every other lifecycle pass has
