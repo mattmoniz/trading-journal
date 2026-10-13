@@ -68,6 +68,46 @@ const ENTRY_FILL_TIMEOUT_SECONDS = 90;
 // genuine malfunction) instead of duplicating this number -- share the constant, not re-guess it.
 export const MAX_CHASE_DISTANCE_POINTS = 8;
 
+// Market-entry setup_types (2026-10-13, user decision -- see docs/OPEN_THREADS.md's
+// 2026-10-13 "market-entry-order-type" entry for the full design critique, which this
+// deliberately overrides in favor of the broader "fire at MARKET from the start" shape
+// rather than DeepSeek's narrower recommended fix -- a live-reference recompute inside
+// escalateUnfilledEntriesToMarket() only). These are setup_types whose entry is a
+// snapshot of a CONTINUOUSLY MOVING reference (a running VWAP, a session median),
+// confirmed directly from the real candidate-construction code in acd.js/
+// pocRotationJoinDetector.js, not guessed:
+//   - GLOBEX_VWAP_FADE_LONG/SHORT -- entry = vwap24, the running 24hr Globex VWAP,
+//     recomputed every poll (acd.js's detectGlobexSetup()).
+//   - RTH_VWAP_FADE_LONG/SHORT -- entry = earlyVwap, the developing RTH VWAP, recomputed
+//     every poll (acd.js ~line 3484-3488, ~4344).
+//   - POC_ROTATION_JOIN_LONG/SHORT -- entry is the triggering bar's own open, but the
+//     thesis is "price will join back to the continuously-moving 24hr fair-value
+//     median" (pocRotationJoinDetector.js) -- currently SHADOW-only (real N<20), so this
+//     is moot today (it can never place a real order), but included per the same
+//     principle for when it eventually promotes.
+// EXCLUDED, confirmed and checked before leaving out, not just copied from the user's
+// first draft of this list:
+//   - GLOBEX_VWAP_MAGNET_LONG/SHORT -- entry = px, the current price itself at trigger
+//     time, not a separately-drifting value. Already market-like by construction.
+//   - WEEKLY_VWAP_FADE_*_OVERNIGHT / MONTHLY_VWAP_FADE_*_OVERNIGHT -- pull from
+//     level_prices, a once-per-trade_date snapshot (scripts/compute_levels.js). Fixed,
+//     like PD_VAH/CAM levels, not live-recomputed per poll.
+//   - STACK_VOL_BREAK_LIVE_LONG/SHORT -- added to the user's original scope mid-build,
+//     then checked directly against acd.js's computeStackVolSignal() (~line 3133):
+//     entry = bar.close, the triggering bar's own fixed breakout price at detection time
+//     -- the same shape as a structural breakout level (an IB boundary), NOT a
+//     continuously-recomputed moving reference. Firing this at MARKET would pay pure
+//     slippage with no corresponding staleness problem to fix -- the existing generic
+//     chase-distance guard already covers "price moved away from a fixed breakout level"
+//     correctly. Excluded for the same underlying reason GLOBEX_VWAP_MAGNET is excluded,
+//     just discovered via direct code-reading rather than DeepSeek's review (which wasn't
+//     asked about this type, since it was added to scope after that critique was sent).
+const MARKET_ENTRY_SETUP_TYPES = new Set([
+  'GLOBEX_VWAP_FADE_LONG', 'GLOBEX_VWAP_FADE_SHORT',
+  'RTH_VWAP_FADE_LONG', 'RTH_VWAP_FADE_SHORT',
+  'POC_ROTATION_JOIN_LONG', 'POC_ROTATION_JOIN_SHORT',
+]);
+
 /**
  * Called once per poll, from runSetupDetection(), after every other lifecycle pass has
  * already run. Never throws -- every failure is caught, logged loudly, and the sweep
@@ -115,7 +155,8 @@ async function recordEntrySkip(row, reason) {
 
 async function sweepEntries(dtcClient) {
   const rows = await query(`
-    SELECT id, setup_type, entry_zone_low, stop_level, t1_level, trade_date, is_rth
+    SELECT id, setup_type, entry_zone_low, stop_level, t1_level, trade_date, is_rth,
+           fired_at::text as fired_at
     FROM active_setups
     WHERE origin_status = 'ACTIVE' AND status = 'ACTIVE'
       AND fired_at > NOW() - make_interval(mins => $1)
@@ -165,9 +206,12 @@ async function sweepEntries(dtcClient) {
         });
         if (result) console.log(`[sierraChart.orderSweep] placed BRACKET ENTRY for setup_id=${row.id} (${row.setup_type}): ${JSON.stringify(result)}`);
       } else {
+        const marketEntry = MARKET_ENTRY_SETUP_TYPES.has(row.setup_type);
         result = await placeEntryOrder(dtcClient, {
           setupId: row.id,
           entryPrice: Number(row.entry_zone_low),
+          marketEntry,
+          freeFormText: `${row.setup_type} #${row.id} ${String(row.fired_at || '').slice(11, 19)}`,
           symbol: contract.orderSymbol,
           exchange: '', // exchange is embedded in the symbol string -- see contractSymbol.js's doc comment
           side,
@@ -175,7 +219,7 @@ async function sweepEntries(dtcClient) {
           tradeAccount,
           environmentService: dtcClient.lastKnownService ?? null,
         });
-        if (result) console.log(`[sierraChart.orderSweep] placed ENTRY for setup_id=${row.id} (${row.setup_type}): ${JSON.stringify(result)}`);
+        if (result) console.log(`[sierraChart.orderSweep] placed ${marketEntry ? 'MARKET' : 'LIMIT'} ENTRY for setup_id=${row.id} (${row.setup_type}): ${JSON.stringify(result)}`);
       }
     } catch (err) {
       console.error(`[sierraChart.orderSweep] entry placement threw for setup_id=${row.id} (${row.setup_type}):`, err);

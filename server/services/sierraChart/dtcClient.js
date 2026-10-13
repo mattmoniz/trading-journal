@@ -416,12 +416,24 @@ export class DtcClient extends EventEmitter {
   // IsParentOrder field), this order must be followed IMMEDIATELY by a SUBMIT_NEW_OCO_ORDER
   // for its two children -- if the next message isn't that, the server rejects this parent.
   // Existing callers are unaffected: the field defaults off.
-  submitOrder({ symbol, exchange, side, orderType, quantity, price1 = 0, price2 = 0, timeInForce = 'DAY', clientOrderId, tradeAccount, isParentOrder = false }) {
+  // freeFormText (2026-10-13, user request -- "does Sierra Chart allow attaching a note with
+  // the setup name") -- confirmed a genuine, submittable field directly against the real
+  // protocol header (/mnt/c/SierraChart/DTC/DTCProtocol.h: `char FreeFormText[...]` is present
+  // on s_SubmitNewSingleOrder itself, not just on response/update structs -- verified before
+  // adding this, not assumed from having seen it on a received ORDER_UPDATE message). Purely a
+  // human-readable label for recognizing an order directly in Sierra Chart's own UI -- it has no
+  // effect on fill behavior, price, or order type.
+  submitOrder({ symbol, exchange, side, orderType, quantity, price1 = 0, price2 = 0, timeInForce = 'DAY', clientOrderId, tradeAccount, isParentOrder = false, freeFormText }) {
     if (!this._loggedOn) throw new Error('DtcClient.submitOrder(): not logged on.');
     if (!BUY_SELL[side]) throw new Error(`DtcClient.submitOrder(): invalid side "${side}"`);
     if (!ORDER_TYPE[orderType]) throw new Error(`DtcClient.submitOrder(): invalid orderType "${orderType}"`);
     if (!TIME_IN_FORCE[timeInForce]) throw new Error(`DtcClient.submitOrder(): invalid timeInForce "${timeInForce}"`);
     if (clientOrderId == null) clientOrderId = String(this._nextClientOrderId++);
+    // ORDER_FREE_FORM_TEXT_LENGTH is 48 in the real DTCProtocol.h (a fixed char[48] on the
+    // C++ struct) -- truncate defensively here, the one wire-serialization choke point,
+    // rather than trusting every future caller to respect that limit. 47 leaves room for
+    // a null terminator on the C++ side.
+    if (freeFormText != null && freeFormText.length > 47) freeFormText = freeFormText.slice(0, 47);
     const sym = _splitSymbolForWire(symbol, exchange);
     const msg = {
       Type: MSG_TYPE.SUBMIT_NEW_SINGLE_ORDER,
@@ -435,6 +447,7 @@ export class DtcClient extends EventEmitter {
       TimeInForce: TIME_IN_FORCE[timeInForce],
       Quantity: quantity,
       TradeAccount: tradeAccount || this._tradeAccount,
+      ...(freeFormText ? { FreeFormText: freeFormText } : {}),
       // 1/0, not true/false (2026-10-07 fix): IsAutomatedOrder/IsParentOrder are uint8_t in the real
       // DTCProtocol.h struct, not bool. Sending a JSON boolean here silently failed to register the
       // order as a parent -- confirmed live: the Trading Evaluator server accepted the order fine

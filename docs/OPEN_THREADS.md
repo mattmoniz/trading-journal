@@ -414,3 +414,81 @@ still pending, and separately, the real broker-side mismatch from the earlier ma
 incident (setup 134421, kill switch currently halted/disarmed, real broker position short 1 that
 this app has no record of) needs the user's own resolution before a restart/re-arm makes sense
 regardless of this code being ready.
+
+## 2026-10-13 (continued): DLL gate fixed, market-entry-order-type build in progress, note field added
+
+**The DLL-gate-blocks-everything incident from earlier today is resolved.** A reconstructed EXIT
+row for setup 134421 (the real long closed by the manual Reverse -- see the entry above) was
+inserted using the broker's own confirmed real fill price (30767.25), and
+`recordBrokerPnlForSetup()` computed a real `broker_pnl=$8.50`. Independently verified:
+`evaluateDailyLossLimit()` now returns `{blocked:false, reason:'within limit'}`, kill switch
+confirmed still armed. Real order placement should be back to normal.
+
+**"Fire at MARKET instead of LIMIT" for specific moving-reference setup_types -- built,
+unit-tested, DeepSeek code-review dispatched, NOT yet restarted/deployed.** Per explicit user
+decision (overriding DeepSeek's own recommended narrower fix -- the Phase 0 design critique is
+in `scratch/deepseek_response.md`, NOT in this doc as an earlier version of this entry
+incorrectly said -- it's a 541-line raw response file including DeepSeek's own thinking trace;
+the final verdict starts at its own `## Verdict` heading).
+
+**STACK_VOL_BREAK_LIVE_LONG/SHORT -- checked directly against the real code, EXCLUDED.** This was
+added to scope mid-build by explicit user request, after the Phase 0 critique had already been
+sent, so DeepSeek was never asked about it. Checked directly: `acd.js`'s `computeStackVolSignal()`
+(~line 3133) sets `const svEntry = bar.close` -- the triggering bar's own FIXED breakout price at
+detection time, not a continuously-recomputed moving reference like `vwap24`/`earlyVwap`. Same
+underlying reason `GLOBEX_VWAP_MAGNET` is excluded (entry already a point-in-time snapshot, not
+something that keeps drifting away from the frozen LIMIT while unfilled) -- excluded on that
+basis. Final scope, 6 setup_types: `GLOBEX_VWAP_FADE_LONG/SHORT`, `RTH_VWAP_FADE_LONG/SHORT`,
+`POC_ROTATION_JOIN_LONG/SHORT` (the last pair confirmed moot today -- real N<20, SHADOW-only, can
+never place a real order -- but kept in scope per the same principle for when it eventually
+promotes, matching DeepSeek's own Phase 0 note).
+
+**Built:**
+1. `dtcClient.js`'s `submitOrder()` -- `freeFormText` param (confirmed real against
+   `/mnt/c/SierraChart/DTC/DTCProtocol.h`'s `ORDER_FREE_FORM_TEXT_LENGTH=48`), truncated
+   defensively to 47 chars at the one wire-serialization point.
+2. `reconciliation.js`'s `placeEntryOrder()` -- `marketEntry` param (default `false`, every
+   existing caller unaffected) + `freeFormText` pass-through via `submitAndRecord()`. When
+   `marketEntry=true`: `orderType: 'MARKET'`, `price1: 0` (matching
+   `placeMarketEscalationEntryOrder()`'s own established convention for a MARKET order's
+   ignored-but-required wire Price1). `entryPrice` still required/validated even in MARKET mode
+   (bookkeeping use by the caller).
+3. `orderSweep.js`'s `sweepEntries()` -- `MARKET_ENTRY_SETUP_TYPES` Set (the 6 types above, each
+   with its own documented reasoning inline), `fired_at` added to the row SELECT,
+   `marketEntry`/`freeFormText` (`setup_type + setup_id + fired_at-time`) passed through. Bracket
+   path (`placeBracketEntryOrder`, off by default) untouched -- this only touches the standalone
+   LIMIT/MARKET path.
+
+**Verified (all before any commit/restart):**
+- `npx eslint` clean on all 3 files.
+- All 3 import cleanly under real Node ESM (checked for a genuinely missing export, not just
+  lint -- see this codebase's own standing note on why `no-undef` isn't sufficient alone).
+- `node scripts/test_invariants.mjs`: 139 FAILURE(S)/166 WARNING(S) identical before and after
+  via `git stash` (the non-matching lines in a byte diff were all expected live-data drift --
+  query durations, `gated_candidates` counts, this doc's own size).
+- Synthetic unit test (`scratch/test_market_entry_20261013.mjs`, stubbed `DtcClient`, no real
+  network/DTC connection) -- 4 cases: default LIMIT unchanged, `marketEntry=true` produces
+  MARKET/price1=0/freeFormText passed through, `entryPrice` still required in MARKET mode,
+  `MAX_CHASE_DISTANCE_POINTS` untouched. First draft of the cleanup step had a real bug (cleaned
+  up by an assumed client_order_id prefix that `placeEntryOrder()`'s own `entryClientOrderId()`
+  never actually produces, leaving a stray row behind to wrongly block the next case via the real
+  direction_ok gate) -- caught by the test failing, fixed, re-run clean. Also had to route around
+  the REAL currently-open position (setup_id 134421, from the earlier DLL incident, untouched by
+  this test) rather than fight it.
+- DeepSeek code-review request for the actual diff dispatched
+  (`scratch/claude_request_deepseek.md`, response pending in `scratch/deepseek_response.md`) --
+  this is Phase 2 of the 3-phase workflow; the request explicitly separates "review this
+  implementation" from "re-litigate the already-user-overridden design direction."
+
+**Not yet done:**
+1. Read DeepSeek's Phase 2 response and act on any real finding before proceeding.
+2. **Server has NOT been restarted** -- per the standing restart-disarms-the-kill-switch rule,
+   this needs the user told explicitly before it happens, not treated as a silent follow-on step.
+3. Separately, the real broker-side mismatch from the earlier manual "Reverse" incident (setup
+   134421, kill switch currently halted/disarmed) still needs the user's own resolution before a
+   restart/re-arm makes sense regardless of this code being ready -- same caveat as the entry
+   above.
+
+**If a future session picks this up cold:** read this entry, then `scratch/deepseek_response.md`
+(Phase 0, search its own `## Verdict` heading) and whatever Phase 2 response landed in the same
+file/`scratch/deepseek_response.md` afterward, before trusting either "done" or "needs work."

@@ -155,9 +155,9 @@ async function insertPendingOrder({ setupId, purpose, clientOrderId, symbol, exc
   `, [setupId, purpose, clientOrderId, symbol, exchange, side, orderType, quantity, price1 ?? null, price2 ?? null, tradeAccount ?? null, environmentService ?? null, MAX_CONCURRENT_POSITIONS]);
 }
 
-async function submitAndRecord(dtcClient, id, { symbol, exchange, side, orderType, quantity, price1, price2, timeInForce, clientOrderId }) {
+async function submitAndRecord(dtcClient, id, { symbol, exchange, side, orderType, quantity, price1, price2, timeInForce, clientOrderId, freeFormText }) {
   try {
-    dtcClient.submitOrder({ symbol, exchange, side, orderType, quantity, price1, price2, timeInForce, clientOrderId });
+    dtcClient.submitOrder({ symbol, exchange, side, orderType, quantity, price1, price2, timeInForce, clientOrderId, freeFormText });
     await query(`UPDATE order_placements SET status='SUBMITTED', last_update_at = now() WHERE id = $1`, [id]);
   } catch (err) {
     // A submission that never reached the broker must release the singleton slot it
@@ -169,17 +169,36 @@ async function submitAndRecord(dtcClient, id, { symbol, exchange, side, orderTyp
 }
 
 /**
- * Place a real entry order for a real active_setups row. ALWAYS submitted as a LIMIT
- * order at the setup's own entry level (user decision, 2026-09-28). `entryPrice` is
+ * Place a real entry order for a real active_setups row. Submitted as a LIMIT order at
+ * the setup's own entry level by default (user decision, 2026-09-28) -- `entryPrice` is
  * required -- this function does not compute or default it.
+ *
+ * marketEntry (2026-10-13, user decision, overriding DeepSeek's own narrower recommended
+ * fix -- see docs/OPEN_THREADS.md's 2026-10-13 "market-entry-order-type" entry for the
+ * full design critique this overrides and why): a deliberate, scoped exception to the
+ * 2026-09-28 LIMIT-only contract, for setup_types whose entry is a snapshot of a
+ * CONTINUOUSLY MOVING reference (a running VWAP, a session median) frozen at detection
+ * time -- if the LIMIT doesn't fill quickly, the real reference keeps drifting and the
+ * frozen level becomes progressively less representative of where the setup's own thesis
+ * actually is. When true, submits MARKET instead (price1=0, matching
+ * placeMarketEscalationEntryOrder's own established convention for a MARKET order's
+ * ignored-but-required wire Price1 field) -- entryPrice is still required and still used
+ * for position_at_detection-style bookkeeping elsewhere in the caller, just not as the
+ * order's own limit price. The scoping decision (which setup_types get this) lives at the
+ * call site (orderSweep.js's MARKET_ENTRY_SETUP_TYPES), not in this function -- this
+ * function only knows how to place either kind of order.
+ *
+ * freeFormText (2026-10-13): optional human-readable label passed through to
+ * dtcClient.submitOrder() for identifying the order directly in Sierra Chart's own UI --
+ * no effect on fill behavior, price, or order type.
  *
  * Returns { id, clientOrderId } on success, or null if an entry order for this setupId
  * already exists (the idempotency short-circuit -- NOT an error).
  */
-export async function placeEntryOrder(dtcClient, { entryPrice, ...params }) {
-  if (!Number.isFinite(entryPrice)) throw new Error('placeEntryOrder(): entryPrice is required (LIMIT entry at the setup\'s own level, never MARKET).');
+export async function placeEntryOrder(dtcClient, { entryPrice, marketEntry = false, freeFormText, ...params }) {
+  if (!Number.isFinite(entryPrice)) throw new Error('placeEntryOrder(): entryPrice is required (used for bookkeeping even when marketEntry is true).');
   const clientOrderId = entryClientOrderId(params.setupId);
-  const fullParams = { ...params, orderType: 'LIMIT', price1: entryPrice };
+  const fullParams = { ...params, orderType: marketEntry ? 'MARKET' : 'LIMIT', price1: marketEntry ? 0 : entryPrice, freeFormText };
   const insertQ = await insertPendingOrder({ ...fullParams, purpose: 'ENTRY', clientOrderId }, true);
   if (insertQ.rows.length === 0) return null;
   const id = insertQ.rows[0].id;
