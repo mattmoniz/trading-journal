@@ -7296,14 +7296,44 @@ export default function createACDRouter(io) {
       // Cluster-sibling fill check (2026-10-05). A sibling's entry is its own resting level, not the
       // touch price, so an OPEN sibling is only a position once a bar has traded through that entry.
       // Found live: CAM_R4_FADE_LONG id 131076 (sibling, entry 31232) showed a $160 open P&L on
-      // quick-check.html, but price never traded down to 31232 -- the order never filled. Primaries
-      // enter at the touch price and are always treated as filled. Only open siblings get a bar scan,
-      // so this stays a handful of bounded queries per poll. Naive ET text throughout (no Date
-      // parameters -- see the 4-hour shift note in scripts/backtest_exit_tightening_20261005.mjs).
+      // quick-check.html, but price never traded down to 31232 -- the order never filled. Only open
+      // siblings get a bar scan, so this stays a handful of bounded queries per poll. Naive ET text
+      // throughout (no Date parameters -- see the 4-hour shift note in
+      // scripts/backtest_exit_tightening_20261005.mjs).
+      //
+      // Primary real-order fill check (2026-10-12, OPEN_DECISION
+      // primary_phantom_resolution_no_fill_gate_20261012): the comment above used to say
+      // "Primaries enter at the touch price and are always treated as filled" -- true back when
+      // this was pure simulation, false now that a primary can submit a REAL resting limit order
+      // through Sierra Chart/DTC that never fills. Found live: PD_POC_FADE_SHORT id 134090 showed
+      // a live, growing "profit" on quick-check.html for 2.5+ hours while its real SELL LIMIT
+      // order sat OPEN/unfilled at the broker -- a price-touch check (the sibling approach above)
+      // can't catch this, since a primary's entry IS the touch price, so it's trivially always
+      // "touched" -- the real broker fill status is the only signal that actually distinguishes
+      // this. Batched (one query for every open primary this poll, not N+1) rather than inside the
+      // loop. Mirrors resolveSetups.js's own identically-named fix exactly -- see that file's
+      // header comment for the full incident; this is the read-side half, that one is the
+      // write-side (resolution/actual_pnl) half.
+      const openPrimaryIds = setupsRes.rows
+        .filter(r => r.is_cluster_primary !== false && (r.status === 'ACTIVE' || r.status === 'SHADOW') && r.resolution == null)
+        .map(r => r.id);
+      const primaryEntryOrderById = new Map();
+      if (openPrimaryIds.length) {
+        const primaryOrdersQ = await query(`
+          SELECT setup_id, status, filled_quantity FROM order_placements
+          WHERE setup_id = ANY($1) AND purpose = 'ENTRY'
+        `, [openPrimaryIds]);
+        for (const o of primaryOrdersQ.rows) primaryEntryOrderById.set(o.setup_id, o);
+      }
       for (const row of setupsRes.rows) {
         row.entry_filled = true;
         const isOpen = (row.status === 'ACTIVE' || row.status === 'SHADOW') && row.resolution == null;
-        if (row.is_cluster_primary !== false || !isOpen) continue;
+        if (!isOpen) continue;
+        if (row.is_cluster_primary !== false) {
+          const orderInfo = primaryEntryOrderById.get(row.id);
+          if (orderInfo && orderInfo.status !== 'FILLED' && !(orderInfo.filled_quantity > 0)) row.entry_filled = false;
+          continue;
+        }
         const entry = Number(row.entry_zone_high ?? row.entry_zone_low);
         const dir = resolveDirection(row);
         if (!Number.isFinite(entry) || dir == null) { row.entry_filled = false; continue; }

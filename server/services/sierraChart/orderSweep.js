@@ -25,12 +25,45 @@
 import { query } from '../../db.js';
 import { isOrderEligible } from './orderEligibility.js';
 import { evaluateDailyLossLimit } from './dllGate.js';
-import { placeEntryOrder, placeBracketEntryOrder, placeExitOrder, isAnotherPositionOpen } from './reconciliation.js';
+import { placeEntryOrder, placeBracketEntryOrder, placeExitOrder, placeMarketEscalationEntryOrder, isAnotherPositionOpen } from './reconciliation.js';
 import { resolveMnqFrontMonthSymbolFromEnv } from './contractSymbol.js';
 import { resolveDirection } from '../../config/setupTypes.js';
+import { getCurrentPrice } from '../priceRetrieval.js';
 
 const ENTRY_LOOKBACK_MINUTES = 3; // don't backfill an entry for an old row a deploy/restart happens to see fresh
 const DIRECTION_TO_SIDE = { LONG: 'BUY', SHORT: 'SELL' };
+// Entry fill-timeout escalation (2026-10-12, user decision -- see
+// placeMarketEscalationEntryOrder()'s own header in reconciliation.js for the full
+// incident/rationale). placeEntryOrder() is still ALWAYS a LIMIT at the setup's own level
+// (2026-09-28 decision, unchanged) -- but a LIMIT that never fills means a trade shown live
+// never actually happened, and (more consequentially) the resolver had no way to know that,
+// so it would silently resolve a phantom win/loss from pure simulated price action with zero
+// capital ever at risk (OPEN_DECISION primary_phantom_resolution_no_fill_gate_20261012).
+// REVISED 90s, same night (2026-10-13): the original 20s pick predated
+// MAX_CHASE_DISTANCE_POINTS below -- once that guard existed as an INDEPENDENT check, the
+// timeout's job changed from "bound how far price could move" (the user's original 1-2min
+// concern) to purely "how patient are we before giving up on a natural fill," since the
+// distance guard now catches the "price moved too far" risk on its own, regardless of how
+// long we waited. Real fill-latency data (order_placements, FILLED entries) made 20s look
+// too impatient in the OTHER direction: 21/23 real fills land in <1s, but the 2 slower ones
+// took 24.4s and 361.1s -- both eventually filled near their own original limit price (the
+// 361s one landed just 0.125pt off) -- so a 20s cutoff would have killed a real, good,
+// merely-patient fill. 90s comfortably covers the 24s case with margin; the 361s/6min
+// outlier is a single data point, deliberately not chased -- waiting multiple minutes on
+// every stuck order works against the actual goal (real fills generating real data).
+const ENTRY_FILL_TIMEOUT_SECONDS = 90;
+// Max-chase distance (2026-10-12, user constraint, same decision as above): don't
+// cancel-and-escalate to MARKET if price has already moved further than this many points
+// away from the original LIMIT level in the direction that would make a market fill worse
+// -- that's no longer "the same trade a few points late," it's giving up a meaningfully
+// different, and possibly structurally confounded, price (the user's own example: price
+// moving through ANOTHER clustered level on the way is a sign this isn't a normal
+// few-point drift). Picked 8 as the midpoint of the user's own stated "5-10pts" range --
+// flagged clearly here so it's a one-line change if that's not the right number. A
+// still-too-far order is simply left resting on its original LIMIT, unescalated, for a
+// later poll to re-check -- it can still fill naturally if price comes back, and
+// escalateUnfilledEntriesToMarket() re-evaluates distance fresh every poll, not just once.
+const MAX_CHASE_DISTANCE_POINTS = 8;
 
 /**
  * Called once per poll, from runSetupDetection(), after every other lifecycle pass has
@@ -41,6 +74,7 @@ const DIRECTION_TO_SIDE = { LONG: 'BUY', SHORT: 'SELL' };
 export async function sweepRealOrders(dtcClient) {
   if (!dtcClient || !dtcClient.isLive()) return; // not connected/logged-on/live -- nothing to do this poll
   await sweepEntries(dtcClient).catch((err) => console.error('[sierraChart.orderSweep] entry sweep failed:', err));
+  await escalateUnfilledEntriesToMarket(dtcClient).catch((err) => console.error('[sierraChart.orderSweep] entry fill-timeout escalation failed:', err));
   await sweepExits(dtcClient).catch((err) => console.error('[sierraChart.orderSweep] exit sweep failed:', err));
 }
 
@@ -131,6 +165,110 @@ async function sweepEntries(dtcClient) {
       }
     } catch (err) {
       console.error(`[sierraChart.orderSweep] entry placement threw for setup_id=${row.id} (${row.setup_type}):`, err);
+    }
+  }
+}
+
+/**
+ * Cancel-then-resubmit-MARKET escalation for an ENTRY LIMIT order that's been resting
+ * OPEN past ENTRY_FILL_TIMEOUT_SECONDS. See that constant's own header comment and
+ * placeMarketEscalationEntryOrder()'s header (reconciliation.js) for the full incident
+ * and design rationale. Two independent, idempotent steps -- never assumes a cancel
+ * succeeded just because it was requested; only a real ORDER_UPDATE (handleOrderUpdate(),
+ * whose terminal-state lattice already protects FILLED as absorbing even if a fill races
+ * a cancel request) ever sets status='CANCELED', and only then does step 2 resubmit.
+ */
+async function escalateUnfilledEntriesToMarket(dtcClient) {
+  // Step 1: cancel the ORIGINAL LIMIT entry (client_order_id has no trailing 'M' -- an
+  // already-escalated resubmit's id always ends in 'M', entryClientOrderId()'s never does
+  // since setupId is always numeric, so this LIKE pattern cleanly separates the two without
+  // an extra join/flag column) once it's been resting OPEN longer than the timeout. Scoped
+  // to setups still status='ACTIVE' -- if the setup already resolved/invalidated via some
+  // other path first, this escalation leaves its entry alone; that's a different cleanup
+  // this function doesn't own.
+  const staleQ = await query(`
+    SELECT e.id, e.setup_id, e.server_order_id, e.client_order_id, e.side, e.price1::float as price1
+    FROM order_placements e
+    JOIN active_setups a ON a.id = e.setup_id
+    WHERE e.purpose = 'ENTRY' AND e.status = 'OPEN'
+      AND e.client_order_id NOT LIKE '%M'
+      AND e.submitted_at < NOW() - make_interval(secs => $1)
+      AND a.status = 'ACTIVE'
+  `, [ENTRY_FILL_TIMEOUT_SECONDS]);
+  // Fetched once per poll (not once per stale row) -- every candidate this poll is judged
+  // against the same current price, matching every other "one fetch, filter in JS" pattern
+  // already used elsewhere in this codebase's poll loops.
+  const currentPrice = staleQ.rows.length ? await getCurrentPrice('NQ', 'orderSweep.escalateUnfilledEntriesToMarket') : null;
+  for (const row of staleQ.rows) {
+    if (!row.server_order_id) continue; // no ORDER_UPDATE has assigned one yet -- cancelOrder() can't target it by ClientOrderID alone; retried next poll once one arrives
+    // FAILS CLOSED (DeepSeek review finding, 2026-10-13): a missing/stale price feed must
+    // skip escalation, never proceed without a real distance measurement -- the original
+    // version here fired on `currentPrice != null` (fail OPEN), meaning a data gap would
+    // have escalated blindly, exactly the "blind market-chase" the distance guard exists to
+    // prevent. No price to check against is treated the same as "too far to chase."
+    if (currentPrice == null || !Number.isFinite(row.price1)) {
+      console.log(`[sierraChart.orderSweep] escalation: setup_id=${row.setup_id} skipped -- no current price available to check the chase-distance guard against (failing closed, not escalating blind).`);
+      continue;
+    }
+    // BUY limit stuck unfilled means price moved UP away from it (a fill would have
+    // already happened on the way down through price1); SELL limit stuck unfilled means
+    // price moved DOWN away from it. Either way, chaseDistance is "how much worse a price
+    // a market fill would get right now compared to the original limit" -- always computed
+    // as a positive number when price has moved the unfavorable-to-chase direction, never
+    // signed/negative (a limit that's favorably placed relative to current price would
+    // already have filled, so that case shouldn't persist here).
+    const chaseDistance = row.side === 'BUY' ? (currentPrice - row.price1) : (row.price1 - currentPrice);
+    if (chaseDistance > MAX_CHASE_DISTANCE_POINTS) {
+      console.log(`[sierraChart.orderSweep] escalation: setup_id=${row.setup_id} price has moved ${chaseDistance.toFixed(2)}pts away from the original LIMIT (${row.price1}, current ${currentPrice}) -- too far to chase (cap ${MAX_CHASE_DISTANCE_POINTS}pts), leaving it resting.`);
+      continue;
+    }
+    try {
+      dtcClient.cancelOrder({ serverOrderId: row.server_order_id, clientOrderId: row.client_order_id });
+      // Optimistic local mark, matching the real DTC PENDING_CANCEL status code (6) rather
+      // than an invented value, so the next poll doesn't re-request the same cancel. The
+      // REAL confirmation still only ever comes from handleOrderUpdate()'s own terminal-
+      // state lattice -- this write can never itself mark something CANCELED.
+      await query(`UPDATE order_placements SET status='PENDING_CANCEL', last_update_at=NOW() WHERE id=$1 AND status='OPEN'`, [row.id]);
+      console.log(`[sierraChart.orderSweep] escalation: canceling unfilled LIMIT entry for setup_id=${row.setup_id} after ${ENTRY_FILL_TIMEOUT_SECONDS}s -- will resubmit MARKET once confirmed.`);
+    } catch (err) {
+      console.error(`[sierraChart.orderSweep] escalation cancel failed for setup_id=${row.setup_id}:`, err.message);
+    }
+  }
+
+  // Step 2: once the cancel is REAL-CONFIRMED (status='CANCELED', set only by
+  // handleOrderUpdate() from an actual broker ORDER_UPDATE), resubmit as MARKET.
+  // placeMarketEscalationEntryOrder() REUSES this exact row in place (UPDATE, not INSERT --
+  // see that function's own header, DeepSeek CRITICAL finding) rather than creating a
+  // second ENTRY row, so idempotency here is naturally just "status still says CANCELED" --
+  // the instant a resubmit succeeds the row's own status moves on (PENDING_SUBMIT/
+  // SUBMITTED/...), and it stops matching this WHERE clause on the next poll. No separate
+  // "does an escalated row already exist" check is needed (or possible) now that there's
+  // only ever one row per setup_id. Reuses the row's own recorded symbol/exchange/side/
+  // quantity/trade_account/environment_service directly (not re-derived from active_setups
+  // a second time) -- these were already correctly decided once, at the original
+  // submission.
+  const readyQ = await query(`
+    SELECT e.id, e.setup_id, e.symbol, e.exchange, e.side, e.quantity, e.trade_account, e.environment_service
+    FROM order_placements e
+    JOIN active_setups a ON a.id = e.setup_id
+    WHERE e.purpose = 'ENTRY' AND e.status = 'CANCELED' AND e.client_order_id NOT LIKE '%M'
+      AND a.status = 'ACTIVE'
+  `);
+  for (const row of readyQ.rows) {
+    try {
+      const result = await placeMarketEscalationEntryOrder(dtcClient, {
+        orderId: row.id,
+        setupId: row.setup_id,
+        symbol: row.symbol,
+        exchange: row.exchange,
+        side: row.side,
+        quantity: row.quantity,
+        tradeAccount: row.trade_account,
+        environmentService: row.environment_service,
+      });
+      if (result) console.log(`[sierraChart.orderSweep] escalation: placed MARKET entry for setup_id=${row.setup_id}: ${JSON.stringify(result)}`);
+    } catch (err) {
+      console.error(`[sierraChart.orderSweep] escalation market resubmit failed for setup_id=${row.setup_id}:`, err.message);
     }
   }
 }

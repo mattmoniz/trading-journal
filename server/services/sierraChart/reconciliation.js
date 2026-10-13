@@ -124,6 +124,86 @@ export async function placeEntryOrder(dtcClient, { entryPrice, ...params }) {
   return { id, clientOrderId };
 }
 
+export function marketEscalationClientOrderId(setupId) { return `E${setupId}M`; }
+
+/**
+ * Place a real MARKET entry order for a setup whose original LIMIT entry (placeEntryOrder)
+ * was canceled after sitting unfilled past the escalation timeout
+ * (orderSweep.js's escalateUnfilledEntriesToMarket, 2026-10-12 -- user decision, reversing
+ * placeEntryOrder's own 2026-09-28 "ALWAYS LIMIT, never MARKET" contract specifically for
+ * this narrow timeout-escalation case, after a real incident: PD_POC_FADE_SHORT's LIMIT
+ * entry sat OPEN/unfilled for 2.5+ hours while quick-check.html showed a live, growing
+ * "profit" for a position that never existed, and -- more consequentially -- the resolver
+ * had no fill gate for primaries at all, meaning the trade would eventually have resolved a
+ * real win/loss from pure simulated price action with zero capital ever at risk).
+ *
+ * REVISED same night, DeepSeek code review (CRITICAL finding, verified against the live
+ * schema before accepting): the first version INSERTed a brand-new ENTRY row with a
+ * distinct 'M'-suffixed client_order_id, but idx_order_placements_one_entry_per_setup is
+ * UNIQUE(setup_id) WHERE purpose='ENTRY' with NO status filter (unlike the EXIT equivalent,
+ * idx_order_placements_one_live_exit_per_setup, which IS status-scoped) -- so that INSERT
+ * always collided with the original (by-then-CANCELED) entry row for the same setup_id, the
+ * bare ON CONFLICT DO NOTHING silently swallowed it, and the function always returned null.
+ * Net effect: Step 1 of escalateUnfilledEntriesToMarket really did cancel a real resting
+ * LIMIT, and the market resubmit could NEVER actually happen -- a regression (an order that
+ * might well have filled naturally, per live data showing real fills up to 361s/24.5pts off
+ * the limit, got canceled with no path back to a live order at all) rather than the intended
+ * fix. Changing the unique index itself was considered and rejected as riskier than needed
+ * (other code may assume "at most one ENTRY row per setup_id, ever" when querying this
+ * table) -- instead this function now REUSES the existing (CANCELED) row in place via
+ * UPDATE, submitting against the SAME row id, so "one ENTRY row per setup_id" stays
+ * literally true at the DB level and the unique index is never touched or threatened.
+ *
+ * Also now explicitly checks isAnotherPositionOpen() before resubmitting and LOGS LOUDLY if
+ * blocked, rather than silently no-op'ing (DeepSeek finding #2): handleOrderUpdate() frees
+ * the account-wide position_open singleton the instant the original LIMIT's cancel
+ * confirms, so another setup's entry can legitimately claim that slot in the gap before this
+ * resubmit runs -- a real, expected scenario under the single-position-at-a-time invariant,
+ * not a bug, but one that must never fail silently.
+ *
+ * Deliberately a SEPARATE function from placeEntryOrder, not a parameterized variant of it
+ * -- placeEntryOrder's own docstring is an explicit, deliberate contract every OTHER caller
+ * still relies on; this is a narrowly-scoped escalation path, not a loosening of that
+ * contract.
+ *
+ * price1=0 (not null) matches dtcClient.submitOrder()'s own destructuring default for a
+ * MARKET order, where Price1 is required on the wire but ignored by the exchange --
+ * destructuring defaults only apply to `undefined`, not `null`, so passing null here would
+ * silently override that default and send a non-numeric Price1 instead.
+ *
+ * `orderId` is the existing (CANCELED) order_placements row id to reuse (the original
+ * LIMIT entry's own id, from escalateUnfilledEntriesToMarket's Step 2 query).
+ *
+ * Returns { id, clientOrderId } on success, or null if blocked by the position-open
+ * invariant (logged loudly, not silent) or if the row is no longer in a reusable state
+ * (another poll already claimed it -- a benign race, not an error).
+ */
+export async function placeMarketEscalationEntryOrder(dtcClient, { orderId, setupId, symbol, exchange, side, quantity, tradeAccount, environmentService }) {
+  if (await isAnotherPositionOpen(setupId)) {
+    console.log(`[sierraChart.reconciliation] market-escalation resubmit BLOCKED for setup_id=${setupId}: another real position is already open (the singleton slot was freed when the original LIMIT's cancel confirmed, and a different setup claimed it first). Will retry next poll if it frees up again.`);
+    return null;
+  }
+  const clientOrderId = marketEscalationClientOrderId(setupId);
+  const fullParams = { symbol, exchange, side, orderType: 'MARKET', quantity, price1: 0, tradeAccount, environmentService };
+  // Reuse the existing row (reset to a fresh pending-submit state) instead of inserting a
+  // new one -- see this function's own header for why. WHERE status='CANCELED' is the real
+  // idempotency guard: if some other path already moved this row again (or it's no longer
+  // CANCELED for any reason), this UPDATE matches zero rows and we correctly return null
+  // rather than resubmit against a row whose state we no longer understand.
+  const updateQ = await query(`
+    UPDATE order_placements
+    SET client_order_id = $2, order_type = 'MARKET', price1 = 0, price2 = NULL,
+        status = 'PENDING_SUBMIT', position_open = TRUE, filled_quantity = NULL,
+        avg_fill_price = NULL, server_order_id = NULL, reject_reason = NULL,
+        submitted_at = now(), last_update_at = now()
+    WHERE id = $1 AND purpose = 'ENTRY' AND status = 'CANCELED'
+    RETURNING id
+  `, [orderId, clientOrderId]);
+  if (updateQ.rows.length === 0) return null;
+  await submitAndRecord(dtcClient, orderId, { ...fullParams, clientOrderId });
+  return { id: orderId, clientOrderId };
+}
+
 const OPPOSITE_SIDE = { BUY: 'SELL', SELL: 'BUY' };
 
 /**
@@ -342,7 +422,11 @@ export async function cancelUnfilledEntry(dtcClient, setupId) {
   );
   if (r.rows.length === 0) return false;
   const row = r.rows[0];
-  const terminal = ['FILLED', 'CANCELED', 'REJECTED'].includes(row.status);
+  // PENDING_CANCEL included (DeepSeek code review, 2026-10-13): a cancel already requested
+  // (orderSweep.js's escalateUnfilledEntriesToMarket's own optimistic mark, or any other
+  // real cancel in flight) needs no SECOND cancelOrder() call -- not technically a terminal
+  // DTC status, but "already being canceled" is the same "nothing more to do here" outcome.
+  const terminal = ['FILLED', 'CANCELED', 'REJECTED', 'PENDING_CANCEL'].includes(row.status);
   if (terminal || !row.server_order_id) return false; // nothing live to cancel
   // Defense in depth -- should be structurally impossible. A STOP is only ever placed
   // (placeStopOrder, called from handleOrderUpdate) AFTER the matching ENTRY fills, and

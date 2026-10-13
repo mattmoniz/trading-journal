@@ -204,10 +204,95 @@ export async function resolveSetupsByPrice(io) {
   // per the user's explicit "remove any dead code" request. See RESEARCH_CLAIM
   // pitchcatch_degenerate_calibration_removed_20260929 for the full account.
 
+  // Primary real-order fill gate (2026-10-12, OPEN_DECISION
+  // primary_phantom_resolution_no_fill_gate_20261012): mirrors the cluster-sibling fill gate
+  // below (SIBLING_UNFILLED, 2026-09-25) for the SAME root reason -- a row can resolve via
+  // pure simulated price action with no real position ever having existed -- except this one
+  // applies to PRIMARY rows once real Sierra Chart/DTC order placement exists. Siblings enter
+  // at their own level (not the touch price), so a price-touch proxy has real discriminating
+  // power for them; a primary's entry IS the touch price, so a price-touch check is trivially
+  // always true and can't detect this -- the only real signal is the broker's own fill status
+  // (order_placements), checked directly here instead. Found live 2026-10-12: PD_POC_FADE_SHORT
+  // (id 134090) showed a live, growing "profit" on quick-check.html for 2.5+ hours while its
+  // real SELL LIMIT order sat OPEN/unfilled at the broker -- entry_filled was hardcoded true
+  // for every primary (acd.js, unconditional) and this resolver had no fill check for primaries
+  // at all, meaning the SAME row would eventually resolve a real TARGET_HIT/STOP_HIT purely
+  // from simulated price action, polluting real_n/real_ev/ML training with a trade that never
+  // actually risked capital. Batched (one query for every primary row this poll, not N+1,
+  // matching this file's own established fetch-once-then-filter-in-JS convention above) --
+  // rows with NO real order at all (origin_status='SHADOW', or origin_status='ACTIVE' from a
+  // period the kill switch was disarmed, or any pre-DTC-era row) fall through unaffected,
+  // since sweepEntries() only ever submits an order for origin_status='ACTIVE' AND
+  // status='ACTIVE' rows -- this check naturally no-ops for everything else without an
+  // explicit origin_status condition of its own.
+  const primaryIds = active.rows.filter(r => r.is_cluster_primary !== false).map(r => r.id);
+  const entryOrderBySetupId = new Map();
+  if (primaryIds.length) {
+    const entryOrdersQ = await query(`
+      SELECT setup_id, status, filled_quantity, avg_fill_price::float as avg_fill_price FROM order_placements
+      WHERE setup_id = ANY($1) AND purpose = 'ENTRY'
+    `, [primaryIds]);
+    for (const o of entryOrdersQ.rows) entryOrderBySetupId.set(o.setup_id, o);
+  }
+
   let count = 0;
   for (const row of active.rows) {
-    const entry = row.entry_zone_high ?? row.entry_zone_low;
+    let entry = row.entry_zone_high ?? row.entry_zone_low;
     const statusMatch = row.status; // 'ACTIVE' or 'SHADOW'
+
+    if (row.is_cluster_primary !== false) {
+      const orderInfo = entryOrderBySetupId.get(row.id);
+      const realOrderFilled = orderInfo && (orderInfo.status === 'FILLED' || orderInfo.filled_quantity > 0);
+      const realOrderUnfilled = orderInfo && !realOrderFilled;
+      if (realOrderUnfilled) {
+        // A real order exists but hasn't filled -- no real position exists yet. Same
+        // SIBLING_UNFILLED shape: NOT_FILLED/null actual_pnl only once past expires_at
+        // (never force-resolve early -- the order can still fill right up to expiry, and
+        // orderSweep.js's escalateUnfilledEntriesToMarket will cancel-and-resubmit as
+        // MARKET well before most rows ever reach this branch).
+        if (row.expires_at && nowEt >= row.expires_at) {
+          await query(`UPDATE active_setups SET status='EXPIRED', resolution='NOT_FILLED', resolution_method='PRIMARY_UNFILLED',
+                         actual_outcome='NOT_FILLED', actual_pnl=NULL, resolved_at=NOW(), updated_at=NOW()
+                       WHERE id=$1 AND status=$2`, [row.id, statusMatch]);
+          if (statusMatch === 'ACTIVE' && io) io.emit('setup-expired', { setupId: row.id, setupType: row.setup_type, resolution: 'NOT_FILLED' });
+          count++;
+        }
+        continue; // either resolved above, or still waiting on a fill -- skip every branch below this poll either way
+      }
+      // Real traded price takes over from the theoretical entry level once a real fill
+      // exists (2026-10-12, user decision: "we need to use the actual traded price and not
+      // what our system thinks the price is"). avg_fill_price is what ACTUALLY happened at
+      // the broker -- this can differ meaningfully from entry_zone_low/high once the
+      // market-escalation path engages (a MARKET resubmit fills at whatever price is
+      // available, not the original theoretical level; live data shows real fills deviating
+      // from their own limit price by up to 24.5pts). Every branch below reads from this
+      // same `entry` local for its own PNL/MFE/MAE math, so overriding it here once is
+      // sufficient -- NO branch needs its own separate READ of avg_fill_price. CORRECTED
+      // (DeepSeek code review, 2026-10-13) -- a stronger, inaccurate earlier version of this
+      // comment claimed moving `entry` changes NOTHING but the entry reference point. It
+      // changes more than that, correctly: stop_level/t1_level stay fixed, so the real
+      // stop/target DISTANCE and R:R shift with the real fill (this IS the real P&L, that's
+      // the point of the fix -- just state it, don't deny it). Three branches also derive a
+      // live TRIGGER LEVEL from `entry`, so their resolution thresholds move with it too:
+      // widerTarget = entry ± |t1-entry|*mult (widerTargetWalker.js, called below);
+      // COIL_SURGE's reverted = currentDist < |t1-entry|*0.5; and POC_ROTATION_JOIN's
+      // breakeven-hold arm/stop reference (stepPocBreakevenHold, entry passed directly) --
+      // all three are the intended, correct behavior ("measure everything from the real
+      // entry"), not a bug, but a future reader tracing one of those three needs to know
+      // `entry` isn't just cosmetic there. stop_level/t1_level THEMSELVES are deliberately
+      // left unchanged (still the theoretical, pre-computed levels) -- the real broker-side
+      // stop order is already placed against stop_level directly (placeStopOrder, called
+      // once the entry's own real fill confirms), so this resolver must keep checking the
+      // SAME stop price that order actually rests at. One known, unmitigated consequence:
+      // since stop_level is fixed but entry now varies with the real fill, the REAL stop
+      // distance is variable too (live data: 0-24.5pts off the designed distance) -- a
+      // fill deviating badly enough could mean more real risk than this setup was designed
+      // for. Flagged, not fixed here -- OPEN_DECISION
+      // primary_phantom_resolution_no_fill_gate_20261012 tracks it as a real follow-up.
+      if (realOrderFilled && orderInfo.avg_fill_price != null) {
+        entry = orderInfo.avg_fill_price;
+      }
+    }
 
     // server/config/instruments.js is the single source of truth for this — found
     // 2026-07-16 that a wrong $/pt constant had independently drifted into 3 separate
