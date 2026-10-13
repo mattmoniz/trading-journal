@@ -240,16 +240,35 @@ export async function resolveSetupsByPrice(io) {
     let entry = row.entry_zone_high ?? row.entry_zone_low;
     const statusMatch = row.status; // 'ACTIVE' or 'SHADOW'
 
-    if (row.is_cluster_primary !== false) {
+    // Scoped to origin_status='ACTIVE' (2026-10-13 fix, found live): the original version
+    // checked is_cluster_primary alone, which meant a primary with origin_status='SHADOW'
+    // (never eligible for a real order in the first place -- sweepEntries() only submits
+    // for origin_status='ACTIVE' AND status='ACTIVE') correctly fell through unaffected
+    // ONLY because its entryOrderBySetupId lookup always misses. But the SAME miss also
+    // silently affected a genuine origin_status='ACTIVE' primary that should have gotten a
+    // real order but never did for any other reason (a missed sweepEntries() poll, the
+    // 3-minute ENTRY_LOOKBACK_MINUTES window closing before the sweep caught it, a
+    // transient connection drop) -- `orderInfo` is `undefined` in both cases, and the old
+    // `realOrderUnfilled = orderInfo && !realOrderFilled` guard required a row to even
+    // exist, so "no order was ever attempted at all" fell through to plain simulated
+    // resolution, the EXACT original bug this whole fix exists to close. Found live:
+    // POC_ROTATION_JOIN_SHORT id 134096, origin_status='ACTIVE', fired 19:49:00, zero
+    // order_placements rows ever -- was about to resolve via pure price simulation despite
+    // no real order ever having been attempted. Explicit origin_status==='ACTIVE' scoping
+    // makes the intent exact: "a real order was expected here" now drives the gate, not
+    // just "a real order happens to already exist."
+    if (row.is_cluster_primary !== false && row.origin_status === 'ACTIVE') {
       const orderInfo = entryOrderBySetupId.get(row.id);
       const realOrderFilled = orderInfo && (orderInfo.status === 'FILLED' || orderInfo.filled_quantity > 0);
-      const realOrderUnfilled = orderInfo && !realOrderFilled;
-      if (realOrderUnfilled) {
-        // A real order exists but hasn't filled -- no real position exists yet. Same
-        // SIBLING_UNFILLED shape: NOT_FILLED/null actual_pnl only once past expires_at
-        // (never force-resolve early -- the order can still fill right up to expiry, and
-        // orderSweep.js's escalateUnfilledEntriesToMarket will cancel-and-resubmit as
-        // MARKET well before most rows ever reach this branch).
+      if (!realOrderFilled) {
+        // Covers BOTH "a real order exists but hasn't filled" AND "no real order was ever
+        // attempted at all" -- no real position exists either way. Same SIBLING_UNFILLED
+        // shape: NOT_FILLED/null actual_pnl only once past expires_at (never force-resolve
+        // early -- an existing order can still fill right up to expiry, and orderSweep.js's
+        // escalateUnfilledEntriesToMarket will cancel-and-resubmit as MARKET well before
+        // most rows ever reach this branch; a never-attempted order has no such chance, but
+        // waiting until expiry keeps this one rule simple rather than branching on which
+        // of the two cases applies).
         if (row.expires_at && nowEt >= row.expires_at) {
           await query(`UPDATE active_setups SET status='EXPIRED', resolution='NOT_FILLED', resolution_method='PRIMARY_UNFILLED',
                          actual_outcome='NOT_FILLED', actual_pnl=NULL, resolved_at=NOW(), updated_at=NOW()

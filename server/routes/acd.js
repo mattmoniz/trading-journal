@@ -7330,8 +7330,18 @@ export default function createACDRouter(io) {
         const isOpen = (row.status === 'ACTIVE' || row.status === 'SHADOW') && row.resolution == null;
         if (!isOpen) continue;
         if (row.is_cluster_primary !== false) {
+          // Scoped to origin_status==='ACTIVE' (2026-10-13 fix, same gap as
+          // resolveSetups.js's identically-dated fix -- see that file's header for the
+          // full incident). The old `orderInfo && ...` guard required a row to exist before
+          // flagging unfilled, so a primary with origin_status='ACTIVE' but ZERO
+          // order_placements rows (no real order ever attempted -- a missed sweepEntries()
+          // poll, the ENTRY_LOOKBACK_MINUTES window closing first, a connection drop) stayed
+          // entry_filled=true by default, showing a fabricated "live" position. A SHADOW
+          // primary correctly never has a real order either, but is explicitly excluded by
+          // origin_status here rather than by accident of the lookup missing.
           const orderInfo = primaryEntryOrderById.get(row.id);
-          if (orderInfo && orderInfo.status !== 'FILLED' && !(orderInfo.filled_quantity > 0)) row.entry_filled = false;
+          const realOrderFilled = orderInfo && (orderInfo.status === 'FILLED' || orderInfo.filled_quantity > 0);
+          if (row.origin_status === 'ACTIVE' && !realOrderFilled) row.entry_filled = false;
           continue;
         }
         const entry = Number(row.entry_zone_high ?? row.entry_zone_low);
