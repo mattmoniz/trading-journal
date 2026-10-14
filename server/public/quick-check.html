@@ -155,8 +155,16 @@
      it now carries both. */
   #timeline-head, .tab-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
   #timeline-head h2, .tab-head h2 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin: 0; }
-  #timeline-stats { display: flex; gap: 14px; font-size: 13px; margin-bottom: 12px; padding: 8px 12px; background: rgba(255,255,255,0.03); border-radius: 6px; border: 1px solid var(--border); }
-  #timeline-stats span b { font-family: monospace; }
+  /* #shadow-stats/#poc-stats never had this rule (found 2026-10-14, user report: "the header
+     looks different then live and all trades") -- their <span> elements rendered with zero
+     spacing/background, running straight into each other ("AGREE 35(27 decided..."), unlike
+     #timeline-stats's properly boxed/gapped stats bar. Shared selector so both tabs match
+     Timeline's look exactly, not just POC Gate. flex-wrap added (not on the original
+     #timeline-stats, which never needed it) since POC Gate's AGREE/DISAGREE line runs longer
+     than Timeline's Wins/Losses/Net/etc and needs to wrap on a narrow phone screen. */
+  #timeline-stats, #shadow-stats, #poc-stats-rth, #poc-stats-globex { display: flex; gap: 14px; font-size: 13px; margin-bottom: 8px; padding: 8px 12px; background: rgba(255,255,255,0.03); border-radius: 6px; border: 1px solid var(--border); flex-wrap: wrap; align-items: center; }
+  #poc-stats-globex { margin-bottom: 12px; }
+  #timeline-stats span b, #shadow-stats span b, #poc-stats-rth span b, #poc-stats-globex span b { font-family: monospace; }
 
   /* Page tabs (2026-09-28, replaces the old collapse-to-reach-Performance mechanism -- user
      request: "consolidate and move the session timeline feed to a separate tab besides
@@ -189,6 +197,9 @@
   .badge.win { color: var(--green); background: rgba(34,197,94,0.12); }
   .badge.loss { color: var(--red); background: rgba(239,68,68,0.12); }
   .badge.other { color: var(--dim); background: rgba(148,163,184,0.1); }
+  /* badgeClassFor() (2026-10-14) -- same grey as .other, named separately so it's not confused
+     with "no real outcome at all" (.other's original meaning) in a future search for either. */
+  .badge.sim { color: var(--dim); background: rgba(148,163,184,0.1); }
   /* Still-open row (2026-09-22, user request) -- amber, matches --amber used elsewhere on this
      page for "in progress/worth attention" states (Worst Trade, Max DD when > 0). */
   .badge.open { color: var(--amber-soft); background: rgba(245,158,11,0.15); }
@@ -362,6 +373,13 @@
     <button data-ptab="shadow">Shadow</button>
   </div>
   <div id="shared-filter-row">
+    <!-- POC Gate is a THIRD pill inside this same toggle (2026-10-14, user request: "the
+         third view or toggle besides live and all trades") -- not a separate box beside it.
+         See renderSharedFilters()/onLiveAllOrPocPick() for the wiring: Live/All still only
+         filter origin_status within Timeline/Performance (liveAllFilter, deliberately NOT
+         persisted -- see its own declaration comment for the standing hard rule this
+         protects), POC Gate switches pageTab to 'poc' (which IS persisted, same as every
+         other tab choice). -->
     <div id="liveall-toggle" class="perf-toggle"></div>
     <div id="cluster-toggle" class="perf-toggle"></div>
   </div>
@@ -396,6 +414,36 @@
       <div id="shadow-stats"></div>
       <div style="margin:8px 0 10px;"><div id="shadow-reason-toggle" class="perf-toggle" style="flex-wrap:wrap;border-radius:6px;"></div></div>
       <div id="shadow-list"><div class="loading">Loading…</div></div>
+    </div>
+  </div>
+
+  <!-- POC Gate tab (2026-10-14, user request) -- the 65pt rotation-direction gate
+       (isRotationDirectionConflict(), server/services/acdRiskGates.js) stopped force-SHADOWing
+       candidates the same day, per explicit user decision (per-setup breakdown showed it's
+       inconclusive/backwards for most of the roster) -- every setup now fires live except
+       SETUP_STATUS/PROMOTE_ALL_MODE's own suppression (unchanged, including the 6-type
+       MANUAL_SUPPRESS_OVERRIDE). This tab exists specifically so the gate's verdict stays
+       visible for comparison even though it no longer blocks anything: every real row since
+       2026-10-08 carries `rotation_65pt_gate_shadow` (tagRotation65ptGateShadow(), computed
+       independently of the live-blocking flag), showing whether that candidate's own direction
+       agreed or conflicted with the live 65pt rotation leg at the moment it fired -- tap a row
+       to see its real outcome either way. Not clusterView/liveAllFilter-scoped, same reasoning
+       as the Shadow tab above: the whole point is "show every tagged candidate," not a filtered
+       subset. -->
+  <div id="tab-panel-poc" style="display:none">
+    <div class="tab-head">
+      <h2 id="poc-title">POC Gate</h2>
+    </div>
+    <div id="poc-body">
+      <!-- RTH/Globex split (2026-10-14, user request) -- two separate boxed stat bars rather
+           than one pooled row, same reasoning as every other RTH-vs-Globex split in this
+           codebase (CLAUDE.md's standing rule: the two sessions behave structurally
+           differently, and a pooled number can hide opposite-signed subgroups). Reuses
+           isRthAdjacent() (already the canonical RTH/Globex classifier on this page, matching
+           acd.js's own 9:30am-6pm RTH_SESSION_FIRED_AT_SQL boundary) rather than a new check. -->
+      <div id="poc-stats-rth"></div>
+      <div id="poc-stats-globex"></div>
+      <div id="poc-list"><div class="loading">Loading…</div></div>
     </div>
   </div>
   <div class="section-block" id="sec-performance">
@@ -1484,25 +1532,50 @@ function openPnlEstimate(entry, isLong) {
   return pts * 2 - COMMISSION_PER_TRADE;
 }
 
-// Win/loss classification (2026-09-02, user-caught bug): TARGET_HIT/STOP_HIT string equality
-// alone silently missed TRAIL_EXIT (the breakeven-trail mechanism, CLAUDE.md's "Breakeven-
-// then-trail single-position exit mechanism") -- those rows fell through every badge/tally
-// branch to a neutral '—'/uncounted even though actual_pnl was correctly positive. TRAIL_EXIT
-// is a genuinely decisive outcome (T1 was reached, then trailed further -- not an ambiguous
-// time-based cutoff), so it belongs in the win/loss tally; classified by its own P&L sign since
-// a trail can in principle close at breakeven-or-worse. Deliberately NOT extended to
-// TIME_EXPIRED/INVALIDATED/SESSION_CLOSED -- those stay excluded from win/loss by design (see
-// computeRangeStats below and the OPEN_THREADS "decisive outcomes only" convention), this only
-// closes the gap for the one resolution type that should have been decisive all along.
+// Win/loss classification. Originally (2026-09-02) only recognized TARGET_HIT/STOP_HIT, with
+// TRAIL_EXIT added the same day (breakeven-trail closes, classified by P&L sign since a trail
+// can close at breakeven-or-worse) -- that version's own comment claimed TIME_EXPIRED/
+// INVALIDATED/SESSION_CLOSED were "deliberately" excluded from win/loss "by design." That claim
+// did not survive contact with real data: FIXED 2026-10-14 (user-caught live, "how is live +$9
+// but it's only had one trade that's actually fired for a $50 loss") -- computeRangeStats()'s
+// Net P&L sums EVERY decided row's actual_pnl regardless of resolution type, so a real
+// INVALIDATED/MARK_TO_MARKET close (a structural invalidation closed out at the market, real $
+// either way) or TIME_EXPIRED/ROTATION_FLIP contributed to Net P&L while being invisible to
+// Wins/Losses entirely -- 106 real rows in the trailing week alone (72 TIME_EXPIRED, 21
+// INVALIDATED, 7 ROTATION_FLIP, all with a real actual_pnl). Confirmed live: two real +$32.50
+// INVALIDATED/MARK_TO_MARKET rows plus one real -$56 STOP_HIT summed to the displayed +$9 Net
+// P&L, but Wins/Losses showed "0/1" since neither +$32.50 row matched TARGET_HIT or TRAIL_EXIT.
+// Now falls back to sign-of-actual_pnl for ANY resolution type not already decided by name --
+// not a hardcoded list of the 3 types found today, so a future resolution_method this page has
+// never seen gets classified correctly too, same as TRAIL_EXIT already was.
 function isWinRow(s) {
   if (s.resolution === 'TARGET_HIT') return true;
-  if (s.resolution === 'TRAIL_EXIT') return s.actual_pnl != null && parseFloat(s.actual_pnl) >= 0;
-  return false;
+  if (s.resolution === 'STOP_HIT') return false;
+  return s.actual_pnl != null && parseFloat(s.actual_pnl) >= 0;
 }
 function isLossRow(s) {
   if (s.resolution === 'STOP_HIT') return true;
-  if (s.resolution === 'TRAIL_EXIT') return s.actual_pnl != null && parseFloat(s.actual_pnl) < 0;
-  return false;
+  if (s.resolution === 'TARGET_HIT') return false;
+  return s.actual_pnl != null && parseFloat(s.actual_pnl) < 0;
+}
+
+// Grey out a decided row's badge regardless of win/loss sign if it never actually hit the
+// broker (2026-10-14, user-caught live: "how is live +$9 but it's only had one trade that's
+// actually fired for a $50 loss" -- traced to a win/loss-tally bug, fixed above, but surfaced a
+// SEPARATE real issue: some origin_status='ACTIVE' rows show a colored win/loss badge with zero
+// real broker order behind them -- a cluster sibling [never gets a real order by design], a
+// candidate that fired while the kill switch was briefly disarmed [fail-closed working
+// correctly], or one structurallyInvalidateSetups() closed out before sweepRealOrders() ever ran
+// that same poll. All three are correct, intentional backend behavior -- the gap was only that
+// the display gave no visual signal the $ shown is a simulation, not a real fill. `broker_confirmed`
+// (GET /api/setups/today, server/routes/acd.js) is true only for a real FILLED entry with a real
+// server_order_id -- see that field's own backend comment for why that check is safe.
+// SHADOW-origin rows are deliberately excluded here -- they were never going to have a broker
+// order by design, and showing their real win/loss is the whole point of the Shadow/POC Gate tabs.
+function badgeClassFor(s, isOpen, isWin, isLoss) {
+  if (isOpen) return 'open';
+  if (s.origin_status === 'ACTIVE' && !s.broker_confirmed) return 'sim';
+  return isWin ? 'win' : isLoss ? 'loss' : 'other';
 }
 
 let timelineRows = []; // full setup rows (already session+filter scoped), keyed for the modal lookup
@@ -1548,6 +1621,7 @@ async function loadTimeline() {
     // whichever of those is actually active AFTER renderTimeline(), so its own timelineRows
     // assignment wins last.
     if (pageTab === 'shadow') renderShadowTab();
+    else if (pageTab === 'poc') renderPocGateTab();
     renderSweepWatch();
   } catch (e) { /* keep last good render */ }
 }
@@ -1888,7 +1962,7 @@ function renderTimeline() {
     const isOpen = s.status === 'SHADOW' || s.status === 'ACTIVE';
     const isWin = isWinRow(s);
     const isLoss = isLossRow(s);
-    const badgeClass = isOpen ? 'open' : isWin ? 'win' : isLoss ? 'loss' : 'other';
+    const badgeClass = badgeClassFor(s, isOpen, isWin, isLoss);
     const isLong = isLongSetupType(s.setup_type);
     // Unrealized P&L on the "open" badge itself (2026-09-22, user request), same inline-not-
     // hidden-behind-a-tap convention as everything else on this row. Falls back to plain
@@ -2095,7 +2169,7 @@ function shadowRowHtml(s) {
   const rowPnl = s.actual_pnl != null ? parseFloat(s.actual_pnl) : null;
   const isOpen = s.status === 'SHADOW' || s.status === 'ACTIVE';
   const isWin = isWinRow(s), isLoss = isLossRow(s);
-  const badgeClass = isOpen ? 'open' : isWin ? 'win' : isLoss ? 'loss' : 'other';
+  const badgeClass = badgeClassFor(s, isOpen, isWin, isLoss);
   const badgeText = isOpen ? 'open' : rowPnl != null ? (rowPnl >= 0 ? '+$' : '-$') + Math.abs(rowPnl).toFixed(0) : '—';
   const isLong = isLongSetupType(s.setup_type);
   const dotColor = isLong ? 'var(--green-soft)' : 'var(--red-soft)';
@@ -2136,6 +2210,78 @@ function renderShadowTab() {
   $('shadow-list').innerHTML = rows.length
     ? rows.map(s => shadowRowHtml(s)).join('')
     : '<div class="loading">' + (all.length ? 'No shadow touches for this reason' : 'No shadow-tracked touches yet this session') + '</div>';
+}
+
+// POC Gate tab (2026-10-14) -- see the panel's own HTML comment for the full context. Every
+// real row carrying rotation_65pt_gate_shadow (tagRotation65ptGateShadow(), unconditional on
+// every real insert since 2026-10-08, independent of the now-disabled live-blocking flag).
+function getPocGateRows() {
+  return allTimelineRows.filter(r => r.rotation_65pt_gate_shadow);
+}
+
+function pocGateRowHtml(s) {
+  const tag = s.rotation_65pt_gate_shadow;
+  const agree = tag.agree === true;
+  const rowPnl = s.actual_pnl != null ? parseFloat(s.actual_pnl) : null;
+  const isOpen = s.status === 'SHADOW' || s.status === 'ACTIVE';
+  const isWin = isWinRow(s), isLoss = isLossRow(s);
+  const badgeClass = badgeClassFor(s, isOpen, isWin, isLoss);
+  const badgeText = isOpen ? 'open' : rowPnl != null ? (rowPnl >= 0 ? '+$' : '-$') + Math.abs(rowPnl).toFixed(0) : '—';
+  const isLong = isLongSetupType(s.setup_type);
+  const dotColor = isLong ? 'var(--green-soft)' : 'var(--red-soft)';
+  const time = s.fired_at_str ? s.fired_at_str.slice(11, 16) : '';
+  const timeLabel = to12Hour(time);
+  const price = s.entry_zone_low != null ? '@ ' + Number(s.entry_zone_low).toLocaleString(undefined, {maximumFractionDigits: 0}) : '';
+  // No LIVE/shadow badge here (removed 2026-10-14, user correction): every setup now fires
+  // live regardless of origin_status except SETUP_STATUS/PROMOTE_ALL_MODE's own suppression
+  // (the random 6 + whatever else is still THIN_N/SUPPRESS for unrelated reasons) -- this tab
+  // is specifically a "what if the POC gate was the only filter" comparison, so every tagged
+  // row is treated uniformly as live here regardless of why its real origin_status happens to
+  // read SHADOW; only AGREE/DISAGREE matters for this view.
+  const agreeTag = agree
+    ? '<span class="vb-tag sig-tag" style="color:var(--green)">AGREE</span>'
+    : '<span class="vb-tag sig-tag" style="color:var(--red)">DISAGREE</span>';
+  return '<div class="row" onclick="openTradeModal(' + s.id + ')" style="flex-wrap:wrap;">' +
+    '<span class="rdot" style="background:' + dotColor + '"></span>' +
+    '<span class="time mono">' + timeLabel + '</span>' +
+    '<span class="type">' + (s.setup_type || '').replace(/_/g, ' ') + '</span>' +
+    '<span class="price mono">' + price + '</span>' +
+    agreeTag +
+    '<span class="badge ' + badgeClass + '">' + badgeText + '</span>' +
+    '</div>';
+}
+
+const fmtNetPnl = (v) => (v >= 0 ? '+' : '') + '$' + v.toFixed(0);
+
+// Builds one "N X  AGREE n (n decided, net $Y)  DISAGREE n (...)" stat-bar innerHTML for a
+// given row subset -- shared by the RTH and Globex stat bars below so the two can never drift
+// out of sync with each other's formatting.
+function pocStatsBarHtml(label, rows) {
+  const agreeRows = rows.filter(r => r.rotation_65pt_gate_shadow.agree === true);
+  const disagreeRows = rows.filter(r => r.rotation_65pt_gate_shadow.agree === false);
+  const agreeStats = computeRangeStats(agreeRows, true);
+  const disagreeStats = computeRangeStats(disagreeRows, true);
+  return '<span style="color:var(--muted);text-transform:uppercase;font-size:11px;letter-spacing:0.05em;">' + label + '</span>' +
+    '<span>N <b class="mono">' + rows.length + '</b></span>' +
+    '<span style="color:var(--green)">AGREE <b class="mono">' + agreeRows.length + '</b> (' + agreeStats.n + ' decided, net <b style="color:' + (agreeStats.netPnl >= 0 ? 'var(--green)' : 'var(--red)') + '">' + fmtNetPnl(agreeStats.netPnl) + '</b>)</span>' +
+    '<span style="color:var(--red)">DISAGREE <b class="mono">' + disagreeRows.length + '</b> (' + disagreeStats.n + ' decided, net <b style="color:' + (disagreeStats.netPnl >= 0 ? 'var(--green)' : 'var(--red)') + '">' + fmtNetPnl(disagreeStats.netPnl) + '</b>)</span>';
+}
+
+function renderPocGateTab() {
+  const all = getPocGateRows();
+  timelineRows = all;
+  $('poc-title').textContent = 'POC Gate (' + all.length + ')';
+  // RTH/Globex split (2026-10-14, user request) -- isRthAdjacent() is this page's existing
+  // canonical RTH/Globex classifier (matches acd.js's own 9:30am-6pm RTH_SESSION_FIRED_AT_SQL
+  // boundary), not a new one hand-rolled for this tab.
+  const rthRows = all.filter(isRthAdjacent);
+  const globexRows = all.filter(s => !isRthAdjacent(s));
+  $('poc-stats-rth').innerHTML = pocStatsBarHtml('RTH', rthRows);
+  $('poc-stats-globex').innerHTML = pocStatsBarHtml('Globex', globexRows);
+  const sorted = [...all].sort((a, b) => (b.fired_at_str || '').localeCompare(a.fired_at_str || ''));
+  $('poc-list').innerHTML = sorted.length
+    ? sorted.map(s => pocGateRowHtml(s)).join('')
+    : '<div class="loading">No rotation-gate-tagged touches yet this session</div>';
 }
 
 // Cluster group popup (2026-09-14) -- tap target for the 🔗 tag above. Lists every real row
@@ -3228,12 +3374,32 @@ function renderToggle(elId, options, currentVal, onSelect) {
 // BOTH sections rather than just whichever tab happens to be visible -- otherwise the hidden
 // tab would silently show a stale filter the next time it's switched to.
 function renderSharedFilters() {
-  renderToggle('liveall-toggle', [['live', 'Live'], ['all', 'All']], liveAllFilter, setLiveAllFilter);
+  // THIRD pill, POC Gate, added 2026-10-14 -- a real pageTab switch, not an origin_status
+  // filter like its two siblings, so its "current" state is read off pageTab, not
+  // liveAllFilter. See onLiveAllOrPocPick() for the click handler that routes each pill to
+  // the right place.
+  const liveAllPos = pageTab === 'poc' ? 'poc' : liveAllFilter;
+  renderToggle('liveall-toggle', [['live', 'Live'], ['all', 'All'], ['poc', 'POC Gate']], liveAllPos, onLiveAllOrPocPick);
   // Label renamed 2026-09-25 (user request: "Collapsed vs Declustered isn't a clean pair,
   // Clustered vs Declustered reads better") -- display text only, the internal value ('collapsed')
   // and localStorage key are unchanged since nothing compares against it directly (only
   // `clusterView === 'declustered'` is ever checked), so old stored values still work correctly.
   renderToggle('cluster-toggle', [['collapsed', 'Clustered'], ['declustered', 'Declustered']], clusterView, setClusterView);
+}
+
+// Routes a click on the merged Live/All/POC-Gate pill to the right handler (2026-10-14).
+// Live/All stay exactly what they always were -- an origin_status filter on Timeline/
+// Performance, liveAllFilter, deliberately NOT persisted (see its own declaration comment
+// for the standing hard rule: a display filter on this live monitoring page must never
+// silently carry over a stale value across a reload). POC Gate is a real tab switch
+// (switchPageTab()), which IS persisted, same as every other tab choice -- "save view as
+// those" (user, 2026-10-14) means remember which of the three you're ON, not remember a
+// restrictive filter value, which is exactly what pageTab's existing persistence already
+// does for every other tab.
+function onLiveAllOrPocPick(v) {
+  if (v === 'poc') { switchPageTab('poc'); return; } // switchPageTab() re-renders this row itself
+  if (pageTab === 'poc') switchPageTab('timeline'); // leaving POC Gate needs a real tab to land on
+  setLiveAllFilter(v);
 }
 
 function setLiveAllFilter(f) {
@@ -3519,37 +3685,43 @@ document.addEventListener('click', (e) => {
 // (like the collapse state it replaces) -- pure navigation state, never hides real data within
 // a view the way performanceFilter/clusterView/liveAllFilter's OWN persistence used to (that's
 // why those are forced-default/not persisted, and this is different).
-let pageTab = ['performance', 'ml', 'shadow'].includes(localStorage.getItem('pageTab')) ? localStorage.getItem('pageTab') : 'timeline';
+let pageTab = ['performance', 'ml', 'shadow', 'poc'].includes(localStorage.getItem('pageTab')) ? localStorage.getItem('pageTab') : 'timeline';
 function applyPageTab() {
   $('tab-panel-timeline').style.display = pageTab === 'timeline' ? '' : 'none';
   $('sec-performance').style.display = pageTab === 'performance' ? '' : 'none';
   $('sec-ml').style.display = pageTab === 'ml' ? '' : 'none';
   $('tab-panel-shadow').style.display = pageTab === 'shadow' ? '' : 'none';
-  // Shared Live/All + Clustered/Declustered toggle only applies to Timeline/Performance --
-  // Shadow/Blocked are ALWAYS the full SHADOW population (every real touch that never became a
-  // live trade, siblings included), unconditionally, since the whole point of these two tabs is
-  // "don't let me miss one" -- a Live/All toggle wouldn't mean anything on a tab that's already
-  // SHADOW-only, and forcing clusterView on top would silently hide the exact sibling rows this
-  // feature exists to surface.
-  $('shared-filter-row').style.display = (pageTab === 'timeline' || pageTab === 'performance') ? '' : 'none';
-  document.querySelectorAll('#page-tabs button').forEach(b => b.classList.toggle('active', b.dataset.ptab === pageTab));
+  $('tab-panel-poc').style.display = pageTab === 'poc' ? '' : 'none';
+  // Shared Live/All/POC-Gate + Clustered/Declustered toggle row -- now also shown on the POC
+  // Gate tab itself (2026-10-14, since the merged toggle that NAVIGATES there also lives in
+  // this row -- it has to stay visible once you've arrived, or there'd be no way back to
+  // Live/All through it). Still hidden on ML/Shadow, which don't use either toggle. Shadow/
+  // Blocked are ALWAYS the full SHADOW population (every real touch that never became a live
+  // trade, siblings included), unconditionally, since the whole point of that tab is "don't
+  // let me miss one" -- a Live/All toggle wouldn't mean anything on a tab that's already
+  // SHADOW-only, and forcing clusterView on top would silently hide the exact sibling rows
+  // that feature exists to surface.
+  $('shared-filter-row').style.display = (pageTab === 'timeline' || pageTab === 'performance' || pageTab === 'poc') ? '' : 'none';
+  document.querySelectorAll('[data-ptab]').forEach(b => b.classList.toggle('active', b.dataset.ptab === pageTab));
 }
 function switchPageTab(tab) {
   pageTab = tab;
   localStorage.setItem('pageTab', tab);
   applyPageTab();
+  renderSharedFilters(); // keeps the merged Live/All/POC-Gate pill's active state in sync with whichever tab just became active, regardless of how we got here
   // Re-render whichever panel just became visible (2026-09-28, found while verifying the new
   // Session Timeline equity chart) -- a canvas measured while its container is display:none
   // reports clientWidth 0, so renderEquityCurve() sizes it to a literal 0px-wide chart if the
   // last render happened before this tab was ever switched to. Switching display alone doesn't
   // retrigger a redraw, so the chart stayed broken until some OTHER trigger (a poll, a window
   // resize) happened to fire afterward. renderTimeline()/renderPerformance()/renderShadowTab()/
-  // renderMlTab() are all pure re-renders of already-fetched data -- safe to call here, no
-  // extra network request.
+  // renderMlTab()/renderPocGateTab() are all pure re-renders of already-fetched data -- safe to
+  // call here, no extra network request.
   if (tab === 'timeline') renderTimeline();
   else if (tab === 'performance') renderPerformance();
   else if (tab === 'ml') renderMlTab();
   else if (tab === 'shadow') renderShadowTab();
+  else if (tab === 'poc') renderPocGateTab();
   $('nav-menu').classList.remove('open');
   // Deliberately no scrollIntoView here (2026-09-28, user report: "it keeps scrolling down" --
   // the tab buttons are already on screen when tapped, so force-scrolling back to them on every
@@ -3557,7 +3729,7 @@ function switchPageTab(tab) {
   // Performance links call this same function and lose their scroll-to-tabs behavior too as a
   // result -- accepted tradeoff, the reported complaint was specifically about the tab buttons.
 }
-document.querySelectorAll('#page-tabs button').forEach(b => b.addEventListener('click', () => switchPageTab(b.dataset.ptab)));
+document.querySelectorAll('[data-ptab]').forEach(b => b.addEventListener('click', () => switchPageTab(b.dataset.ptab)));
 applyPageTab();
 renderSharedFilters();
 

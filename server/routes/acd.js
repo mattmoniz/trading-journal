@@ -7374,6 +7374,31 @@ export default function createACDRouter(io) {
         `, [openPrimaryIds]);
         for (const o of primaryOrdersQ.rows) primaryEntryOrderById.set(o.setup_id, o);
       }
+      // broker_confirmed (2026-10-14, user-caught live: a resolved ACTIVE row with a colored
+      // win/loss badge but zero real order ever placed -- e.g. a cluster sibling [never gets
+      // a real order by design], a candidate that fired while the kill switch was briefly
+      // disarmed [fail-closed working correctly], or one structurallyInvalidateSetups() closed
+      // out before sweepRealOrders() ever ran that same poll. All three are correct, intentional
+      // behavior -- the bug was only that the DISPLAY gave no visual signal the $ shown is a
+      // simulation, not a broker fill. Covers EVERY row here, not just open primaries (unlike
+      // entry_filled above, which only matters for still-resolving rows) -- a FILLED order with
+      // a real server_order_id is, by construction, the only thing that can never come from a
+      // synthetic/reconstructed bookkeeping row (see reconciliation.js's checkPositionInvariant()
+      // header for why that exact check is safe: every genuine fill gets a real ServerOrderID
+      // from the broker's own ORDER_UPDATE, a reconstructed row never does).
+      const allIds = setupsRes.rows.map(r => r.id);
+      const entryOrderById = new Map();
+      if (allIds.length) {
+        const entryOrdersQ = await query(`
+          SELECT setup_id, status, server_order_id FROM order_placements
+          WHERE setup_id = ANY($1) AND purpose = 'ENTRY'
+        `, [allIds]);
+        for (const o of entryOrdersQ.rows) entryOrderById.set(o.setup_id, o);
+      }
+      for (const row of setupsRes.rows) {
+        const eo = entryOrderById.get(row.id);
+        row.broker_confirmed = !!(eo && eo.status === 'FILLED' && eo.server_order_id != null);
+      }
       for (const row of setupsRes.rows) {
         row.entry_filled = true;
         const isOpen = (row.status === 'ACTIVE' || row.status === 'SHADOW') && row.resolution == null;

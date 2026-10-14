@@ -1037,10 +1037,28 @@ export async function checkPositionInvariant(dtcClient, killSwitch, symbol, snap
   // shorts for setups 127681/127693 had already closed on the broker before 20:36, so counting them
   // cancels real fills the broker holds. Every order placed after the baseline counts on its own.
   // Manual, non-setup fills (setup_id NULL) count the same way.
+  //
+  // FIXED 2026-10-14: a FILLED row with no server_order_id is -- by construction -- never a real
+  // broker fill (every genuine fill arrives via an ORDER_UPDATE push that carries a real
+  // ServerOrderID, assigned the moment the order is accepted; confirmed live, every real filled
+  // row this app has ever recorded has one). It's always synthetic bookkeeping: a reconstructed
+  // exit written after the fact for a position that actually closed via an UNTRACKED manual order
+  // (e.g. id 1967, RECONSTRUCTED-REVERSE-EXIT-134421 -- the real close for that setup's reverse was
+  // the untracked MANUALCLOSE-REVERSE-... order the 2026-10-13 baseline reset already accounted
+  // for; this row was only ever meant to give active_setups its own resolution/actual_pnl, not to
+  // describe a second real fill), a manual test fixture, or attemptSilentCloseReconciliation()'s
+  // own `RECON-X...` rows (which never set server_order_id either). Without this filter, every such
+  // bookkeeping insert permanently and silently adds a phantom +-1 to this sum until someone
+  // manually advances the baseline again -- found live 2026-10-14 when id 1967 (inserted hours
+  // after the 2026-10-13 13:53 baseline reset that already excluded this same setup's real entry)
+  // made expectedNet read -2 when the real open exposure was -1. Filtering on server_order_id
+  // fixes this at the root for every future reconstruction/manual-bookkeeping row of this shape,
+  // not just this one instance -- no baseline bump needed.
   const expectedQ = await query(`
     SELECT COALESCE(SUM(filled_quantity * (CASE WHEN side = 'BUY' THEN 1 ELSE -1 END)), 0) AS expected_net
     FROM order_placements
     WHERE symbol = $1
+      AND server_order_id IS NOT NULL
       AND id > (SELECT COALESCE(MAX(baseline_order_id), 0) FROM order_placements_invariant_baseline)
   `, [symbol]);
   const expectedNet = Number(expectedQ.rows[0].expected_net);

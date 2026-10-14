@@ -327,10 +327,26 @@ export async function isOppositeDirectionOpen(direction) {
 // thing actually keeping a real candidate from being mis-gated.
 const ROTATION_GATE_EXEMPT_TYPES = new Set(['BRACKET_BREAKOUT_LONG']);
 
+// LIVE-BLOCKING DISABLED (2026-10-14, explicit user decision). The per-setup-type breakdown
+// above showed real heterogeneity -- the gate genuinely helps a couple of types, works
+// BACKWARDS for BRACKET_BREAKOUT_LONG, and is statistically inconclusive for the other 51 (only
+// 4/55 types with enough data clear real significance either way, per RESEARCH_CLAIM
+// rotation_gate_per_setup_breakdown_20261012). User's call: stop using it to force SHADOW
+// roster-wide -- every setup fires live now except SETUP_STATUS/PROMOTE_ALL_MODE's own
+// suppression (including the 6-type MANUAL_SUPPRESS_OVERRIDE), which this flag never touched
+// anyway. tagRotation65ptGateShadow() keeps independently computing and persisting this same
+// verdict on every real row regardless of this flag (it calls getCurrentRotationDirection()
+// directly, not through this function) -- that's what feeds quick-check.html's new POC Gate
+// tab, so turning off the live-blocking effect doesn't lose any visibility, it just stops the
+// verdict from being acted on. Flip ROTATION_GATE_LIVE_BLOCKING.enabled back to true to restore
+// the force-SHADOW behavior; nothing else about the gate's own logic changes either way.
+const ROTATION_GATE_LIVE_BLOCKING = { enabled: false, disabledDate: '2026-10-14' };
+
 // Returns false (never blocks) if no rotation leg has formed yet this session, or during the
 // 5-6PM ET maintenance gap -- matches getCurrentRotationDirection()'s own fail-closed-to-null
 // contract (never guess, never block on an unknown reading).
 export async function isRotationDirectionConflict(direction, setupType) {
+  if (!ROTATION_GATE_LIVE_BLOCKING.enabled) return false; // see the flag's own comment above
   if (!direction) return false; // candidate itself has no resolvable direction -- can't conflict
   if (setupType && ROTATION_GATE_EXEMPT_TYPES.has(setupType)) return false;
   const rotationDir = await getCurrentRotationDirection();
