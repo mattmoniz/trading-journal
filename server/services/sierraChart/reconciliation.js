@@ -929,6 +929,31 @@ function extractPositionForSymbol(positionMessages, symbol) {
 }
 
 /**
+ * Picks the SETTLED position reading for one symbol out of a getBrokerSnapshot()'s
+ * `positionMessages`, for PRICE recovery -- deliberately NOT the same selection as
+ * extractPositionForSymbol() above (which uses `.find()`, the FIRST match, fine for a
+ * quantity-only check retried after a 1.5s delay). A position-in-flux collection window
+ * can contain several sequential s_PositionUpdate messages for the same symbol (confirmed
+ * live: 7 in one window during a real reverse) -- the first one can be a stale/transient
+ * intermediate state. Takes the LAST matching, non-`NoPositions`, non-zero-quantity
+ * message instead -- the latest settled reading in the window. Returns null if nothing
+ * qualifies (a flat/`NoPositions` close has no usable price at all -- see
+ * attemptSilentCloseReconciliation()'s own header for why that case can't be auto-priced).
+ */
+function extractSettledPositionForSymbol(positionMessages, symbol) {
+  const bare = _bareSymbol(symbol);
+  let settled = null;
+  for (const p of positionMessages) {
+    if (p.Symbol !== symbol && p.Symbol !== bare) continue;
+    if (p.NoPositions) continue;
+    if (!Number.isFinite(p.Quantity) || p.Quantity === 0) continue;
+    if (!Number.isFinite(p.AveragePrice)) continue;
+    settled = p; // keep overwriting -- last qualifying message in iteration order wins
+  }
+  return settled;
+}
+
+/**
  * Pure guard for placeExitOrder (2026-10-07; RELAXED 2026-10-13 for multi-position-stacking --
  * see docs/OPEN_THREADS.md's 2026-10-13 entry). Originally required the broker's signed
  * position to EXACTLY equal this one setup's own expected open (sign * filledQuantity) --
@@ -1020,12 +1045,23 @@ export async function checkPositionInvariant(dtcClient, killSwitch, symbol, snap
   `, [symbol]);
   const expectedNet = Number(expectedQ.rows[0].expected_net);
 
-  const { positionMessages } = snapshot || (dtcClient?.isLoggedOn ? await getBrokerSnapshot(dtcClient) : { positionMessages: [] });
+  const resolvedSnapshot = snapshot || (dtcClient?.isLoggedOn ? await getBrokerSnapshot(dtcClient) : { positionMessages: [] });
+  const { positionMessages } = resolvedSnapshot;
   const brokerNet = extractPositionForSymbol(positionMessages, symbol);
   if (brokerNet == null) return { checked: false, reason: 'no broker response' };
 
   let match = brokerNet === expectedNet;
   let finalBrokerNet = brokerNet;
+  // Tracks whichever snapshot actually produced finalBrokerNet (NOT exposed in the
+  // persisted reconciliation log -- persistReconciliationFinding() strips it before
+  // JSON.stringify to avoid bloating every logged row with a full position-message array).
+  // Found 2026-10-13 via the silent-close auto-reconciliation's own E2E test: without this,
+  // a caller using this function's return value to recover a broker-reported price (as
+  // attemptSilentCloseReconciliation() does) would read from the ORIGINAL, possibly-stale
+  // snapshot even when a retry below produced a fresher, more-settled one -- exactly the
+  // "picks a stale reading" bug DeepSeek's review warned about, one level deeper than the
+  // `.find()`-vs-last-match fix already applied in extractSettledPositionForSymbol().
+  let freshSnapshot = resolvedSnapshot;
   if (!match && dtcClient?.isLoggedOn) {
     // RETRY (2026-10-13, found live: a real short closed correctly via a real market exit,
     // but this check ran in the same instant and halted on a false mismatch). A real
@@ -1043,8 +1079,10 @@ export async function checkPositionInvariant(dtcClient, killSwitch, symbol, snap
       console.log(`[sierraChart.reconciliation] position invariant mismatch on ${symbol} resolved on retry (broker now reports ${retryBrokerNet}, matches expected ${expectedNet}) -- a timing race against the broker's own position feed, not a real mismatch. Not halting.`);
       match = true;
       finalBrokerNet = retryBrokerNet;
+      freshSnapshot = retrySnapshot;
     } else if (retryBrokerNet != null) {
       finalBrokerNet = retryBrokerNet; // still mismatched -- use the freshest reading in the halt message
+      freshSnapshot = retrySnapshot;
     }
   }
 
@@ -1052,7 +1090,7 @@ export async function checkPositionInvariant(dtcClient, killSwitch, symbol, snap
     killSwitch.halt(`position invariant mismatch on ${symbol}: broker=${finalBrokerNet}, app-expected=${expectedNet}`, 'system-invariant-check');
     console.error(`[sierraChart.reconciliation] POSITION INVARIANT MISMATCH on ${symbol}: broker reports net ${finalBrokerNet}, this app's own fill records expect ${expectedNet}. Kill switch halted. Investigate directly in Sierra Chart before re-arming.`);
   }
-  return { checked: true, match, brokerNet: finalBrokerNet, expectedNet };
+  return { checked: true, match, brokerNet: finalBrokerNet, expectedNet, freshSnapshot };
 }
 
 /**
@@ -1123,6 +1161,163 @@ async function buildReconciliationReport(brokerOpenOrders, brokerPositions) {
   };
 }
 
+/**
+ * Auto-reconciles a SILENT CLOSE -- a real position change the broker confirms but this
+ * app's live ORDER_UPDATE stream never received a message for (found live 2026-10-13:
+ * Sierra Chart's "Reverse and Cancel" command submits its flatten+re-establish orders with
+ * an EMPTY ClientOrderID, so `handleOrderUpdate()` never sees them at all, not even as an
+ * unattributed UNOWNED: entry -- see docs/SIERRA_CHART_NOTES.md's "Manual actions taken
+ * directly in Sierra Chart's own UI" section for the full incident this is built from).
+ * User-approved design, built from a DeepSeek Phase 0 critique (independently verified
+ * before accepting: the unique-index collision, the `.find()`-picks-a-stale-reading bug,
+ * and the schema.sql-vs-live-DB drift were all confirmed directly against the real
+ * schema/code before this was written).
+ *
+ * Called ONLY from runReconciliation(), ONLY when checkPositionInvariant() has already
+ * confirmed (post-retry) a REAL quantity mismatch -- deliberately NEVER driven off
+ * `unknownToApp` (DeepSeek Q4: a closing fill is already executed, so it's never still
+ * "open" by the time a snapshot is taken; `unknownToApp` in the Reverse incident held only
+ * 2 residual resting bracket orders with no usable price at all -- the quantity delta from
+ * the invariant check is the only signal that actually means "a position closed").
+ *
+ * SCOPE, deliberately narrow (per the user's own explicit go-ahead, "proceed either way" +
+ * "fire this market" + "let's try autoapprove for now" -- auto-WRITE, not a
+ * pending-approval queue, because the kill switch stays halted regardless either way --
+ * re-arming is NEVER automatic, by unrelated standing design, so there is no "unattended
+ * resumed trading" risk from auto-writing the bookkeeping alone):
+ *   1. Never places an order, never cancels an order, never touches the kill switch.
+ *   2. Only fires when exactly ONE real `active_setups` row (origin_status='ACTIVE') still
+ *      believes it has an open position on this symbol/account -- defined as a FILLED
+ *      ENTRY with `position_open=TRUE` and NO already-FILLED EXIT/STOP/TARGET row (NOT
+ *      "no broker_pnl yet", which DeepSeek confirmed would collide with
+ *      idx_order_placements_one_live_exit_per_setup the moment a DIFFERENT bug -- a failed
+ *      recordBrokerPnlForSetup() write on an otherwise-normal close -- produced the same
+ *      "no broker_pnl" symptom for an unrelated reason). Two or more candidates -> refuse,
+ *      same as today (this is a single-open-position-only feature; under the 2026-10-13
+ *      stacking build, N>1 real positions open is the normal case and this silently,
+ *      correctly falls back to halt-and-wait-for-a-human, exactly as it did before this
+ *      function existed).
+ *   3. The broker's settled net reading must be CONSISTENT with that one candidate
+ *      closing -- either exactly 0 (flattened) or the exact sign-flipped magnitude
+ *      (flattened and reversed, the Reverse-and-Cancel shape) -- never a same-sign larger
+ *      magnitude (that would mean a position was ADDED, not closed, a materially
+ *      different and unrelated event this function must not misinterpret as a close).
+ *   4. A flatten-to-0 has NO recoverable price (a flat/NoPositions broker message carries
+ *      no average price worth reading) -- this function identifies WHICH setup closed but
+ *      cannot auto-write a price for it; logs that plainly and leaves the halt in place
+ *      for a human, same as before.
+ *   5. A flatten-and-reverse DOES have a recoverable price, but it is the settled NEW
+ *      position's own average ENTRY price, not a directly-confirmed exit fill price for
+ *      the OLD position -- it only equals the real exit price because Reverse's two legs
+ *      execute back-to-back at ~the same market price (DeepSeek Q2). Recorded as a
+ *      best-estimate, not asserted as a confirmed fill -- `raw_last_order_update` on the
+ *      reconstructed row stores a synthetic (not a real broker) message making this
+ *      explicit, and every auto-write is logged loudly specifically because it's writing
+ *      real P&L without a human confirming the number at that moment.
+ *   6. Idempotent by construction, not a separate dedup check: once the reconstructed EXIT
+ *      row exists and is FILLED, that same candidate no longer matches step 2's own
+ *      predicate (NOT EXISTS a FILLED close leg) on the next poll -- it naturally stops
+ *      re-firing without a second flag/table to maintain.
+ *   7. Reuses the exact same price-multiplier pipeline the live fill path already uses
+ *      (getPriceMultiplier/applyPriceMultiplier/toTickPrice) rather than assuming the
+ *      broker's position-update AveragePrice needs no conversion -- DeepSeek flagged this
+ *      as unverified; reusing the already-tested pipeline is the safe default either way
+ *      (a no-op if the multiplier turns out to be 1, a real fix if it isn't).
+ */
+export async function attemptSilentCloseReconciliation(dtcClient, { snapshot, invariantCheck, symbol, tradeAccount }) {
+  if (!invariantCheck?.checked || invariantCheck.match) return { attempted: false, reason: 'no confirmed invariant mismatch' };
+
+  const candidatesQ = await query(`
+    SELECT e.id AS entry_order_id, e.setup_id, e.side, e.filled_quantity, e.symbol, e.exchange,
+           e.trade_account, e.environment_service
+    FROM order_placements e
+    JOIN active_setups a ON a.id = e.setup_id
+    WHERE e.purpose = 'ENTRY' AND e.status = 'FILLED' AND e.position_open = TRUE
+      AND e.symbol = $1 AND e.trade_account = $2
+      AND a.origin_status = 'ACTIVE'
+      AND NOT EXISTS (
+        SELECT 1 FROM order_placements x
+        WHERE x.setup_id = e.setup_id AND x.purpose IN ('STOP','EXIT','TARGET') AND x.status = 'FILLED'
+      )
+  `, [symbol, tradeAccount]);
+
+  if (candidatesQ.rows.length !== 1) {
+    console.log(`[sierraChart.reconciliation] silent-close auto-reconciliation: ${candidatesQ.rows.length} candidate(s) for ${symbol}/${tradeAccount} still believe they're open -- need exactly 1 to auto-attribute, refusing to guess.`);
+    return { attempted: false, reason: `${candidatesQ.rows.length} candidates (need exactly 1)` };
+  }
+  const cand = candidatesQ.rows[0];
+  const candSign = cand.side === 'BUY' ? 1 : -1;
+  const candQty = candSign * cand.filled_quantity;
+
+  if (invariantCheck.brokerNet !== 0 && invariantCheck.brokerNet !== -candQty) {
+    console.log(`[sierraChart.reconciliation] silent-close auto-reconciliation: setup_id=${cand.setup_id}'s own expected position is ${candQty}, but broker net is ${invariantCheck.brokerNet} -- not a clean flatten (0) or flatten-and-reverse (${-candQty}), so this isn't confidently "that position closed." Refusing to guess.`);
+    return { attempted: false, reason: `broker net ${invariantCheck.brokerNet} inconsistent with candidate closing (expected 0 or ${-candQty})` };
+  }
+
+  if (invariantCheck.brokerNet === 0) {
+    console.log(`[sierraChart.reconciliation] silent-close auto-reconciliation: setup_id=${cand.setup_id} confidently identified as flattened to 0, but a flat position carries no recoverable price -- cannot auto-write a P&L. Leaving halted for a human.`);
+    return { attempted: false, reason: 'flattened to 0 -- no price to recover', setupId: cand.setup_id };
+  }
+
+  // Flatten-and-reverse: a real, non-zero, priced settled position exists for the NEW
+  // (opposite) side -- recover it from the FRESHEST snapshot (the one checkPositionInvariant()
+  // itself confirmed the mismatch against, past its own 1.5s retry), not the original one
+  // that may have raced a timing artifact.
+  const settled = extractSettledPositionForSymbol(snapshot.positionMessages, symbol);
+  if (!settled || settled.Quantity !== invariantCheck.brokerNet) {
+    console.log(`[sierraChart.reconciliation] silent-close auto-reconciliation: setup_id=${cand.setup_id} -- expected a settled position reading of ${invariantCheck.brokerNet} but found ${settled ? settled.Quantity : 'none'}. Refusing to guess at a price.`);
+    return { attempted: false, reason: 'no settled position reading matched the expected reversed quantity', setupId: cand.setup_id };
+  }
+
+  const mult = await getPriceMultiplier(dtcClient, cand.symbol).catch(() => null);
+  if (mult == null) {
+    console.error(`[sierraChart.reconciliation] silent-close auto-reconciliation: setup_id=${cand.setup_id} -- no price multiplier known for ${cand.symbol}, cannot safely convert the recovered price. Leaving halted for a human.`);
+    return { attempted: false, reason: 'no price multiplier available', setupId: cand.setup_id };
+  }
+  const recoveredPrice = toTickPrice(applyPriceMultiplier(settled.AveragePrice, mult));
+  if (!Number.isFinite(recoveredPrice)) {
+    console.error(`[sierraChart.reconciliation] silent-close auto-reconciliation: setup_id=${cand.setup_id} -- recovered price did not convert to a finite number (raw=${settled.AveragePrice}, mult=${mult}). Leaving halted for a human.`);
+    return { attempted: false, reason: 'price conversion failed', setupId: cand.setup_id };
+  }
+
+  const exitClientOrderId = `RECON-X${cand.setup_id}-${Date.now()}`;
+  const exitSide = cand.side === 'BUY' ? 'SELL' : 'BUY';
+  const provenance = {
+    _synthetic: true,
+    note: 'Auto-reconciled: a real position change was confirmed via the broker position snapshot but no live ORDER_UPDATE was ever received for it (see docs/SIERRA_CHART_NOTES.md). This is NOT a real broker message -- recoveredPrice is the settled NEW (reversed) position\'s own average entry price, used as a best-estimate proxy for the OLD position\'s real exit fill price.',
+    detectedAt: new Date().toISOString(),
+    invariantCheck: { brokerNet: invariantCheck.brokerNet, expectedNet: invariantCheck.expectedNet },
+    settledPositionMessage: settled,
+    priceMultiplier: mult,
+    recoveredPrice,
+  };
+
+  const insertQ = await query(`
+    INSERT INTO order_placements
+      (setup_id, purpose, client_order_id, symbol, exchange, side, order_type, quantity,
+       trade_account, environment_service, status, filled_quantity, avg_fill_price,
+       position_open, raw_last_order_update)
+    VALUES ($1,'EXIT',$2,$3,$4,$5,'MARKET',$6,$7,$8,'FILLED',$6,$9,FALSE,$10)
+    ON CONFLICT DO NOTHING
+    RETURNING id
+  `, [cand.setup_id, exitClientOrderId, cand.symbol, cand.exchange, exitSide, cand.filled_quantity,
+      cand.trade_account, cand.environment_service, recoveredPrice, JSON.stringify(provenance)]);
+  if (insertQ.rows.length === 0) {
+    console.error(`[sierraChart.reconciliation] silent-close auto-reconciliation: setup_id=${cand.setup_id} -- reconstructed EXIT row insert returned 0 rows (likely a unique-index collision against an existing row). Leaving halted for a human to investigate directly.`);
+    return { attempted: false, reason: 'reconstructed EXIT insert conflicted', setupId: cand.setup_id };
+  }
+
+  // Mirrors applyOrderUpdate()'s own existing cross-row release on a real EXIT fill
+  // (reconciliation.js, "a real cross-row write") -- frees the position slot the same way.
+  await query(`UPDATE order_placements SET position_open = FALSE WHERE setup_id = $1 AND purpose = 'ENTRY'`, [cand.setup_id]);
+
+  const pnlResult = await recordBrokerPnlForSetup(cand.setup_id).catch((err) => ({ written: false, reason: err.message }));
+
+  console.error(`[sierraChart.reconciliation] SILENT-CLOSE AUTO-RECONCILED setup_id=${cand.setup_id} (${exitSide} ${cand.filled_quantity} @ ${recoveredPrice}, price is a best-estimate proxy, not a confirmed fill -- see raw_last_order_update on order_placements id=${insertQ.rows[0].id}). broker_pnl write: ${JSON.stringify(pnlResult)}. Kill switch remains halted -- this only fixes bookkeeping, it does not re-arm or resolve any residual broker-side position.`);
+
+  return { attempted: true, setupId: cand.setup_id, exitOrderId: insertQ.rows[0].id, recoveredPrice, pnlResult };
+}
+
 // Single-flight guard (docs/OPEN_THREADS.md's 2026-09-29 "Item 1" spec: "a reconciliation
 // already in progress must not start a second overlapping one") -- module-level, so it
 // covers every trigger (logon, a terminal order-status transition, the periodic
@@ -1163,10 +1358,33 @@ export async function runReconciliation(dtcClient, killSwitch, symbol, trigger) 
       console.error(`[sierraChart.reconciliation] UNKNOWN-TO-APP MISMATCH (${trigger}): ${JSON.stringify(reconciliationReport.unknownToApp)}. Kill switch halted. Investigate directly in Sierra Chart before re-arming.`);
     }
 
-    await persistReconciliationFinding(trigger, reconciliationReport, invariantCheck)
+    // Silent-close auto-reconciliation (2026-10-13, user-approved -- see
+    // attemptSilentCloseReconciliation()'s own header). Only ever attempted on a CONFIRMED
+    // invariant mismatch (never unknownToApp) -- the function itself re-checks this and
+    // no-ops otherwise, this guard just avoids the call entirely on the common clean case.
+    // Deliberately does NOT affect whether the kill switch halts above/below -- it only
+    // ever fixes bookkeeping after the fact, never the halt decision itself.
+    let silentCloseResult = null;
+    if (invariantCheck.checked && !invariantCheck.match) {
+      // Uses invariantCheck.freshSnapshot (the snapshot that actually produced the
+      // confirmed mismatch, post-retry if one happened), NOT runReconciliation()'s own
+      // original `snapshot` variable above -- found via this feature's own E2E test
+      // (2026-10-13): passing the original would read price data from a snapshot that
+      // may predate checkPositionInvariant()'s own internal retry, exactly the kind of
+      // stale-reading bug this feature exists to avoid at the extractSettledPositionFor
+      // Symbol() layer, just one level higher up the call chain.
+      silentCloseResult = await attemptSilentCloseReconciliation(dtcClient, {
+        snapshot: invariantCheck.freshSnapshot || snapshot, invariantCheck, symbol, tradeAccount: dtcClient.tradeAccount,
+      }).catch((err) => {
+        console.error('[sierraChart.reconciliation] silent-close auto-reconciliation threw (halt remains in place, no bookkeeping change applied):', err.message);
+        return { attempted: false, reason: `threw: ${err.message}` };
+      });
+    }
+
+    await persistReconciliationFinding(trigger, reconciliationReport, invariantCheck, silentCloseResult)
       .catch((err) => console.error('[sierraChart.reconciliation] failed to persist reconciliation finding (in-memory result still returned):', err.message));
 
-    return { reconciliationReport, invariantCheck };
+    return { reconciliationReport, invariantCheck, silentCloseResult };
   })();
   try {
     return await reconciliationInFlight;
@@ -1175,7 +1393,12 @@ export async function runReconciliation(dtcClient, killSwitch, symbol, trigger) 
   }
 }
 
-async function persistReconciliationFinding(trigger, reconciliationReport, invariantCheck) {
+async function persistReconciliationFinding(trigger, reconciliationReport, invariantCheck, silentCloseResult) {
+  // freshSnapshot (added 2026-10-13 for the silent-close feature) is deliberately excluded
+  // from the persisted report -- it's a full position-message array, not metadata, and
+  // would bloat every logged row (including the common clean-case ones) if serialized
+  // wholesale here. invariantCheckForLog keeps everything else unchanged.
+  const { freshSnapshot: _omitFromLog, ...invariantCheckForLog } = invariantCheck;
   await query(`
     INSERT INTO sierra_chart_reconciliation_log
       (trigger, reconciliation_clean, unknown_to_app_count, stale_in_app_count,
@@ -1190,7 +1413,7 @@ async function persistReconciliationFinding(trigger, reconciliationReport, invar
     invariantCheck.match ?? null,
     invariantCheck.brokerNet ?? null,
     invariantCheck.expectedNet ?? null,
-    JSON.stringify({ reconciliationReport, invariantCheck }),
+    JSON.stringify({ reconciliationReport, invariantCheck: invariantCheckForLog, silentCloseResult }),
   ]);
 }
 

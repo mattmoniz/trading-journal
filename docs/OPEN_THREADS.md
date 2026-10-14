@@ -1,7 +1,6 @@
 # Open Threads / Pending Work
 
 Older resolved/superseded threads are periodically moved to [OPEN_THREADS_ARCHIVE.md](OPEN_THREADS_ARCHIVE.md) (via `node scripts/archive_open_threads.mjs --apply`) to keep this file's per-session read cost down — nothing is deleted, just relocated. Still-pending items are backed by `OPEN_DECISION`/`RESEARCH_CLAIM` rows regardless, so archiving here never buries anything. Since 2026-09-07 this also applies per-bullet inside evergreen sections ("30-day shadow validation", "Pending decisions") — not just whole dated sections.
-
 ## 2026-10-12: Globex 44-type rotation-filter expansion shipped live, after DeepSeek caught a real lookahead bug Gemini's own independent re-derivation structurally could not catch
 
 Tested whether 44 RTH-only level-fade setup_types would work in Globex, gated by the already-live 65pt rotation-direction filter. First pass (`scratch/globex_level_fade_rotation_backtest_20261012.mjs`): N=2,207, AGREE-minus-DISAGREE delta=+$35.52/trade, placebo-clean, 7/10 well-powered types individually clean. Dispatched to both Gemini (independent mine-and-run re-derivation + chronological split) and DeepSeek (line-by-line methodology/code review) in parallel, per explicit user request to send it to both.
@@ -27,62 +26,6 @@ Verified: lint clean, full run against real data (exit 0), `test_invariants.mjs`
 First live run result, worth knowing before assuming this is already biting: 0 new suppressions. 10 setup_types showed a confidently-negative CI (e.g. `CAM_R3_FADE_LONG` CI=[-57.29,-15.79], `PD_SESSION_MID_FADE_SHORT` CI=[-34.78,-1.50]) but all 10 were held back by the day-clustering guard — most of the roster is only ~7-16 distinct real trading days old since `PROMOTE_ALL_MODE` first shipped 2026-09-28, so `top5DayPct` is mechanically high regardless of real quality (a cold-start artifact, not a flaw in the test). Tracked as `OPEN_DECISION promote_all_mode_stat_gate_coldstart_watch_20261011` — revisit in 2-3 weeks once more distinct days have accumulated to confirm the gate actually starts suppressing, not just sitting permanently lenient. The pending `promote_all_roster_review_20261013` decision (keep-vs-revert `PROMOTE_ALL_MODE` entirely, based on real primary-trade P&L) is unaffected by this change and still due 2026-10-13.
 
 Not done: the standing 3-phase DeepSeek review this codebase's own rule calls for on higher-stakes live-wiring changes. Deferred, not skipped — flag before the next related change in this area.
-
-## 2026-10-05 wrap-up: six open items (status per item)
-
-- **Unfilled cluster siblings shown as open (HIGH):** no open-ACTIVE unfilled siblings remain today; expiry is clearing them. Display fix is live. **Still needs your call:** whether an unfilled sibling should keep `ACTIVE` status at all, or get a `PENDING_FILL` status. Left open as a design decision (`unfilled_sibling_shown_as_open_position_20261005`).
-- **Replay timestamp shift (HIGH):** audited by grep across scripts/ and server/. No JS `Date` is bound as a query parameter; the `Z`-suffix conversions are all ms arithmetic between naive timestamps. Resolved (`replay_date_param_4h_shift_20261005`). Grep-based, not exhaustive.
-- **Downstream rebuild of flagged BACKFILL rows (HIGH):** wired `bad_bars_basis IS NOT TRUE` into `backtest_day_type_alpha.js` (both queries) and into the two all-origin queries in `update_optimal_stops.mjs` (DPP and first raw-trade pull). The other `update_optimal_stops.mjs` queries already filter to ACTIVE/SHADOW origin, which excludes the flagged rows. Still open: the remaining all-origin consumers across the ~300 scripts that aggregate `active_setups` (grep pass not complete), and the decision on re-running the chain (`nq_window_downstream_rebuild_decision`).
-- **Sep 22–27 NQ bar gap (MEDIUM):** no bar-count gap in `price_bars_primary`. Sep 22, 23, 24 and 28 each have 1380 bars; Sep 25 has 1020 (Friday close, expected); Sundays have 360 (Globex evening). There are minute-to-minute jumps of 25–75 pts on Sep 22–24 that look like real volatility. I can't rule out a contract error from the bars alone. Open, needs the original source of the flag.
-- **2024–2025 bar gaps (MEDIUM):** measured. 2023 is almost entirely thin (229 of 252 weekdays under 300 bars). 2024 Jan 2 to Aug 20 is thin (117 weekdays at 1 bar/day, the known placeholder issue in KNOWN_ISSUES #17). 2025 is clean except Thanksgiving. The thin 2023 and 2024 days are unflagged in the DB. Open, needs a bad_bars-style flag or a decision to exclude the window.
-- **ML promotion gate (MEDIUM):** the 2026-10-05 `ML_CHECKPOINT_PROMOTION` report does not meet the promotion rule. 1,219 comparable unseen trades is enough, but only 10 distinct days against the 20-day floor. Candidate policy mean is -$0.15 vs checkpoint -$0.61, with a day-blocked CI of [-1.87, 2.95] (crosses zero). The checkpoint stays `metalabel_v20260928_202126`. Stop-width check is still due Oct 6 (not yet due).
-- **Exit test, per setup (MEDIUM):** done. `scripts/backtest_exit_tightening_20261005.mjs` now prints and stores a per-setup breakdown (`perSetup` in `scratch/exit_tightening_20261005.json`). Of 320 verdicted cells (20 setups, N>=20 each): 281 FLAT, 26 NEGATIVE, 13 POSITIVE. The one consistent positive is `GLOBEX_VWAP_FADE_SHORT` (6 of 16 cells, mean +$4.58 to +$16.78/trade). Recorded as PROVISIONAL (`exit_tightening_per_setup_20261005`). It is grid-searched, so it needs a placebo test and a chronological split before any use.## 2026-10-06 wrap-up: broker-truth recording, Sim2 routing, open broker position
-
-**RESOLVED 2026-10-07 (user go-ahead):** the open long 1 MNQZ6.CME (avg 31559.50, Sim1) was flattened with a one-off MARKET SELL, clientOrderId `FLAT-20261007-*`, filled at 31500.25. Broker now shows flat across MNQU6/MNQZ6/NQM6. Gross loss on that long is about -$118.50 (59.25 pts x $2), not recorded in `active_setups` because no app setup owns it. Its origin was most likely setup 131378's stop fill, as described above. The existing `/api/sierra-chart/stop` route would NOT have flattened it: `panicStopAppOrders` returns "already closed by stop" for 131378. Still open: the sim fill-semantics decision (`sim_fills_ignore_order_price_stop_entry_race_20261007`). The system remains DISARMED.
-
-Done this session (merged to main, restarted, switch OFF):
-- Fill check keeps real market fills (bid/ask quote check) and flags them.
-
-- Converted broker prices rounded to the 0.25 MNQ tick.
-
-- Raw-unit fill repair (10 rows) and missing stop/exit price repair (5 rows), both backed up.
-
-- Broker-derived P&L written on close (`broker_pnl`, `pnl_source`), tested, live on restart. Not yet verified on a live close.
-
-- Globex entries routed to Sim2 (Sim2 confirmed on the broker's account list). Not yet verified on a live order.
-
-- Daily loss-limit gate (`dllGate.js`) built and tested; NOT wired into the entry path.
-
-Still open:
-
-- OCO bracket (stop + target), not built. Depends on Sim1 filling limits and stops correctly, which is not confirmed.
-
-- Skip reasons not persisted; loss-limit gate not enforced at entry.
-
-- 127681 and 127693: app says closed, but the broker has no exit fill (exit rows still OPEN).
-
-- 131237: stop and exit both show broker fills, which is impossible for one flat position. Part of the open-position investigation.
-
-- Sim1 fill behaviour: limits and stops fill at the quoted bid/ask, not at their prices (see DeepSeek day-scope review).
-
-- Morning pre-placed limits: pilot only, not built.## ✅ 2026-10-05: NQ bad-bar repair, Sep 28 to Nov 19 2025 — DONE (one gap left, flagged)
-The Sep 28 to Nov 19 2025 NQ window was stored only as the NQH26 back-month contract (about 2 contracts per minute, against about 215 per minute for the real front month NQZ25). Nothing in the DB held the front-month bars for those dates; the NQZ5 text export starts 2025-11-19 16:15. Rebuilt the 52,395 front-month 1-minute bars directly from the raw `NQZ5.CME.scid` tick file with `scripts/tick_microstructure/build_1m_bars_from_scid.py` (aggregator reuses the canonical `scid_reader.py`). Validated against Sierra's own 1-minute export first: OHLC exact on all 4,545 overlapping minutes, volume/bid/ask/trades exact on all but 2 minutes (a 53-contract difference at 2025-11-19 16:35). Applied `scripts/repair_nq_front_month_bars_sep_nov2025_20261005.mjs --write` after a dry run: backup of 9,899 bad rows (`price_bars_nqh26_sep_nov2025_backup_20261005`, catalogued), transactional delete + insert, calendar reconcile, matview refresh. Verified through the app's own view (`price_bars_primary`): calendar picks NQZ25 for every day in the window, zero open-vs-prior-close gaps over 50pt except real weekend gaps (including Oct 10's Sunday rebound after the Friday selloff). Server stayed up throughout; no new entries in `scratch/server_errors.jsonl`.
-- **Not verified / deliberately not changed:** the 2 minutes with a small volume difference against Sierra's export, and whether any research claim or calibration was computed on the old NQH26 rows for this window. NOT checked yet; that is the next step before trusting any result that spans Sep 28 to Nov 19 2025. The volume-piling claim already re-ran from 2025-11-20.
-
-
-
-
-- **Downstream fix, done 2026-10-05 (your go-ahead):** (1) `developing_value_log`, `acd_daily_log` (OR/A), and `level_prices` recomputed for 2025-09-29..2025-11-21 through the real live functions (`computeAndPersistSession`, `computeORLevelsOnly` with a new opt-in `{ overwrite: true }` flag, default off, and `compute_levels.js` per date). Verified PD_HIGH/PD_CLOSE against corrected prior-session bars on all 40 dates, 0 mismatches (15:59 close convention — the first verify pass used 16:00 and falsely flagged correct values; fixed). Backups: `*_nqbad_backup_20261005`. (2) The 1,333 contaminated `active_setups` rows were FLAGGED, not re-simulated: new column `active_setups.bad_bars_basis`, set true on all 1,333, backup `active_setups_badbars_flag_backup_20261005`. Re-simulation was rejected because the old repair script (`repair_backfill_duplicate_bars.mjs`) is not importable and deletes every BACKFILL row globally. Wired into `REAL_TRADE_FILTER` and the two all-origin blended queries in `backtest_setup_status.mjs`. **Not yet wired:** other scripts that aggregate all-origin BACKFILL rows directly (UNIFIED_BACKTEST, DAY_TYPE_ALPHA, pooled studies) still include the 1,333 rows — a grep for `FROM active_setups` aggregates is the next check. (3) Weekly calibration chain (`run_weekly_backtests.sh`, 81 steps) re-run manually at `nice -n 19` during RTH, log `scratch/weekly_backtests_manual_20261005.log`. Server health checked throughout: 200. Results pending at time of writing; check the log tail and `performance_audit` before reporting any SUPPRESS/ACTIVE change.
-
-
-
-
-- **Next, per the handoff:** cumulative session volume in the ML loop, now unblocked by this repair.
-
-
-
-
-- Uncommitted: this repair's scripts and docs. Not committed, awaiting your say-so.
 
 ## 🔴 CURRENT TOP PRIORITY (set 2026-07-29): risk management, not more entry-signal research
 
@@ -165,7 +108,9 @@ Read-only review (plan mode, auto-approve off, full diff embedded in the prompt 
 - **Fixed**: `dllGateDecision()` (`server/services/sierraChart/dllGate.js`) used to report `unknownCount > 0` (a trade closed with no broker_pnl recorded yet) without blocking — fail-open exactly when reconciliation is lagging and a real loss could be hiding past the limit. Now blocks. Test added to `scripts/test_broker_guards.mjs`.
 
 
+
 - **Not a bug (verified against the DB, not just re-asserted)**: the reviewer flagged `scripts/repair_stale_exit_rows_20261007.mjs`'s hardcoded `IDS=[4,16]` against setups 127681/127693 as a discrepancy to confirm — already confirmed earlier the same day via a direct query (row 4 = 127681's EXIT, row 16 = 127693's EXIT).
+
 
 
 - **Open, not blocking**: the position invariant's baseline assumes the broker was flat at `order_placements_invariant_baseline`'s own baseline id — never independently confirmed, just asserted in a comment. `getBrokerSnapshot`'s 3-second collection window could miss a position message in some environment, which would fail-closed (refuse every exit) rather than silently misbehave — also not independently tested against a real DTC session dropping a position message.
@@ -638,3 +583,83 @@ traded we would have been up +$649?") was checked against the real data, not ass
 skip logged at 15:54, before the 16:27 fix); the other (-$2.50, `C_PAIRED_LONG` cluster sibling)
 has no logged skip reason at all, the small loose end flagged above. The real, honest "cost of
 today's incident" figure is +$55.50, not +$649.50.
+
+
+## 2026-10-13/14: Silent-close auto-reconciliation shipped; two more real "stuck pending" bugs found and fixed live
+
+**Silent-close auto-reconciliation (`attemptSilentCloseReconciliation()`, reconciliation.js) --
+built, DeepSeek-reviewed (Phase 0 design critique, independently verified before accepting),
+real DB-backed unit + end-to-end tests, shipped.** Addresses the manual-Reverse incident
+documented above: when `checkPositionInvariant()` confirms a real quantity mismatch, and exactly
+one real `active_setups` row still believes it has an open position that could explain it, this
+auto-writes the real closing price (recovered from the broker's own settled position snapshot,
+not guessed) and calls `recordBrokerPnlForSetup()` -- same bookkeeping fix done manually this
+morning, now automatic. Deliberately auto-WRITE, not pending-approval (explicit user decision,
+"fire this market" / "lets try autoapprove for now" -- argued through directly: a pending-
+approval queue doesn't actually help if nobody's watching, which was the whole problem today).
+Never re-arms the kill switch, never places an order -- bookkeeping only. User explicitly
+confirmed understanding the real risk (an estimated, not directly-confirmed, price) before
+approving.
+
+**A real bug was found and fixed via the feature's own end-to-end test, not assumed clean**:
+`checkPositionInvariant()` does its own internal retry with a FRESH broker snapshot when the
+first reading is stale, but never returned that fresher snapshot to its caller -- so
+`attemptSilentCloseReconciliation()` was reading price data from the ORIGINAL, possibly-stale
+snapshot instead of the one that actually confirmed the real mismatch. Fixed by having
+`checkPositionInvariant()` return `freshSnapshot` (excluded from the persisted reconciliation
+log to avoid bloating every row with a full position-message array). Caught specifically
+because the E2E test modeled a REALISTIC broker (the retry call returns only the settled state,
+not a replay of the original in-flux window) rather than a naive fake that happened to mask the
+bug. 5/5 E2E cases + 7/7 unit cases pass after the fix.
+
+**Two more real, independently-discovered "stuck pending" bugs, found live while investigating
+user reports, both fixed the same night:**
+
+1. **Missing-order resolution was too slow (user: "It needs to be seconds nor minutes" /
+   "We're too slow").** The existing MISSING_ORDER auto-resolve (5-min cron + a deliberate
+   5-10min visibility buffer) meant a real setup with no order ever placed could show
+   misleading "pending fill" for up to 15 minutes -- confirmed live: 3 real setups
+   (134732/134735/134736) sat that way from 18:30 until the cron caught them at 18:45. The
+   buffer was NEVER about correctness (the code's own comment said so) -- it assumed a human
+   would be watching and benefit from seeing the alert first, which this exact session already
+   established isn't true in practice (nobody's watching the dashboard in real time). Extracted
+   the resolve logic into `server/services/missingOrderAutoResolve.js` and wired it into the
+   main 15s live poll loop (acd.js) as well as the 5-min cron (now a redundant backstop only) --
+   resolves within one poll cycle instead of minutes.
+
+2. **A real order CANCELED fast (by something outside this app) falls through every existing
+   resolution path.** Found live: setup 134741 (`PD_POC_FADE_SHORT`, 7:05pm fire) had its real
+   entry order canceled only ~93 seconds after submission -- confirmed via `journalctl`, zero
+   app-side activity at that moment, not this app's own escalation logic. Traced precisely by
+   timestamp comparison against two OTHER real cancels that DID resolve cleanly (134738/134739,
+   canceled at exactly ~15 minutes, crossing `resolveSetups.js`'s own `CHASE_ABANDON_MINUTES=15`
+   threshold while still `status='OPEN'`) -- chase-abandon only fires for an order still OPEN
+   past 15 minutes; an order canceled THIS fast is no longer OPEN by the time 15 minutes pass,
+   so it can never satisfy that condition. The existing MISSING_ORDER check doesn't apply either
+   (a real order row exists). Sat stuck ~11.5 hours before being found and manually resolved.
+   Built `autoResolveDeadCanceledEntries()` (same file) -- catches a real ENTRY order CANCELED
+   with zero fill and no market-escalation resubmit (`client_order_id NOT LIKE '%M'`, confirmed
+   that suffix is what a successful resubmit actually gets) after a 3-min buffer. Wired into the
+   live loop and the cron the same way as the missing-order fix. 4/4 real DB-backed test cases
+   pass (the dead-cancel shape resolves, an escalated order is left alone, a too-recent cancel
+   waits out the buffer, no residue).
+
+**Also fixed in passing**: both resolve functions now set `actual_outcome='NOT_FILLED'`
+(the original missing-order fix didn't -- every OTHER resolution writer in this codebase does,
+confirmed by grep before fixing, a real inconsistency even if nothing was actively broken by it).
+
+**Not yet investigated**: WHY setup 134741's order was canceled from outside the app in the
+first place (cause unknown -- broker/Trading Evaluator side, no explanation in the raw message
+beyond "Simulated order canceled"). The two new auto-resolve functions are a safety net for the
+SYMPTOM (a dead order that will never get a real position), not a fix for whatever caused the
+fast external cancel. Worth a closer look if this recurs with any frequency -- not chased
+tonight given the fixes already close the user-facing "stuck pending" problem regardless of
+root cause.
+
+**Verification, all of it, not assumed**: lint clean on all touched files;
+`node scripts/test_invariants.mjs` byte-identical (141/168, confirmed via a live `git stash`
+comparison against the exact same baseline, not the earlier-in-session 139/166 number -- real
+data drift over hours, not a regression); real DB-backed tests for all three mechanisms
+(unit + end-to-end for silent-close, unit for both new resolve functions); the real stuck
+trades (134741, and the earlier 3 missing-order cases) all confirmed resolved in the live DB,
+not just in test fixtures.

@@ -131,6 +131,22 @@ to search for.
   action (a plain manual flatten, modifying an order's price by hand, etc.) has not been
   observed and may propagate differently. Test or ask before assuming.
 
+## Order lifecycle quirks
+
+- **A real resting LIMIT entry can get CANCELED by something outside this app, fast —
+  sometimes under 2 minutes after submission — with no explanation beyond "Simulated order
+  canceled" in the raw message, and no app-side trigger at all.** Confirmed live
+  2026-10-13: setup 134741's entry was submitted 19:05:57, canceled 19:07:30 (~93s later) —
+  `journalctl` showed zero app-side activity (no escalation attempt, no restart) at that
+  moment. This matters structurally, not just as a curiosity: a cancel this fast can fall
+  through every resolution mechanism this app has — `resolveSetups.js`'s own chase-abandon
+  only fires for an order still `status='OPEN'` after 15 minutes, which a 93-second cancel
+  never satisfies (it's already `CANCELED`, not `OPEN`, by then). See `docs/OPEN_THREADS.md`'s
+  2026-10-13/14 entry for the fix (`autoResolveDeadCanceledEntries()`,
+  `missingOrderAutoResolve.js`) — a safety net for the symptom, not a fix for the unknown
+  root cause. **Root cause not established** — don't assert a mechanism without checking
+  further if this recurs.
+
 ## Account specifics
 
 - **A prop-firm evaluation account ("Trading Evaluator" / "Simulated Futures Trading

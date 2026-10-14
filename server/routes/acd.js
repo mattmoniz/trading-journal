@@ -94,6 +94,7 @@ import { computeUnifiedPerformanceAudit } from '../services/unifiedSignalTable.j
 // (only query/getLatestBars/getCached/setCached) before moving.
 import { computeMarketPulse } from '../services/marketPulse.js';
 import { sweepRealOrders } from '../services/sierraChart/orderSweep.js';
+import { autoResolveMissingOrders, autoResolveDeadCanceledEntries } from '../services/missingOrderAutoResolve.js';
 import { closeOnRotationFlip } from '../services/rotationFlipClose.js';
 import { getClient as getSierraChartClient } from '../services/sierraChart/connectionManager.js';
 
@@ -3304,6 +3305,27 @@ export default function createACDRouter(io) {
       // this closes gets picked up by the real order sweep in the SAME poll, matching
       // orderSweep.js's own documented "deliberately last" latency guarantee.
       await closeOnRotationFlip(io).catch((err) => console.error('[acd.js] closeOnRotationFlip threw unexpectedly:', err));
+      // Missing-order auto-resolve (2026-10-13, user request: "We're too slow" / "needs to be
+      // seconds nor minutes") -- was a 5-min cron-only check with a deliberate extra 5-10min
+      // visibility buffer (see missingOrderAutoResolve.js's own header for the full incident
+      // and why that buffer never had a real correctness reason behind it, only an unverified
+      // assumption that a human would be watching in that window). Now also runs every ~15s
+      // here, right before the real order sweep, so a setup that's aged past sweepEntries()'s
+      // own 3-minute entry window gets marked NOT_FILLED within one poll cycle instead of
+      // sitting on the dashboard showing a misleading "pending fill" for minutes. The 5-min
+      // cron keeps calling the same shared function too, as a redundant backstop only.
+      await autoResolveMissingOrders().catch((err) => console.error('[acd.js] autoResolveMissingOrders threw unexpectedly:', err));
+      // Dead-canceled-entry auto-resolve (2026-10-14, user report: "lots of unfilled trades
+      // even with some trades firing at market") -- a DIFFERENT dead-end shape than the
+      // missing-order check above: a real order that WAS submitted, then got CANCELED with
+      // zero fill by something outside this app (confirmed live: setup_id=134741, canceled
+      // only ~93s after submission, no app-side action at that moment), fast enough that it
+      // never satisfies resolveSetups.js's own chase-abandon condition (which requires the
+      // order to still be `status='OPEN'` after 15 minutes). See
+      // missingOrderAutoResolve.js's own header on autoResolveDeadCanceledEntries() for the
+      // full incident -- that setup sat stuck ~11.5 hours before being found and manually
+      // resolved; this makes it automatic going forward.
+      await autoResolveDeadCanceledEntries().catch((err) => console.error('[acd.js] autoResolveDeadCanceledEntries threw unexpectedly:', err));
       // Real Sierra Chart order placement (2026-09-29) -- the ONE call site wiring this
       // app's real DTC order-placement side effects to the simulated detection/resolution
       // logic above. Deliberately last, deliberately a single centralized sweep rather

@@ -66,6 +66,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { getCurrentPrice } from '../server/services/priceRetrieval.js';
+import { autoResolveMissingOrders as sharedAutoResolveMissingOrders, autoResolveDeadCanceledEntries as sharedAutoResolveDeadCanceledEntries } from '../server/services/missingOrderAutoResolve.js';
 import { MAX_CHASE_DISTANCE_POINTS } from '../server/services/sierraChart/orderSweep.js';
 import { CHASE_ABANDON_MINUTES } from '../server/services/resolveSetups.js';
 
@@ -103,33 +104,23 @@ async function checkMissingOrders() {
   for (const row of r.rows) {
     logAlert(`ORDER_LIFECYCLE: MISSING_ORDER -- active_setups id=${row.id} (${row.setup_type}) fired_at=${row.fired_at} is origin_status='ACTIVE'/status='ACTIVE' with NO order_placements row at all, past sweepEntries()'s 3min lookback window. A real order was expected and never got submitted -- this setup will never get real execution.`);
   }
+  // Auto-resolve itself now also runs every ~15s from the live poll loop (acd.js, via
+  // missingOrderAutoResolve.js) -- found live 2026-10-13 that this cron's old 5-10min
+  // buffers left a real setup showing "pending fill" for up to 15 minutes after it was
+  // already, unambiguously, never going to get a real order. This call stays as a
+  // redundant backstop (covers a gap if the live loop somehow missed a poll) -- by the
+  // time this 5-min cron runs, the live loop will normally have already resolved
+  // anything eligible, so this usually finds 0 rows, which is expected, not a bug.
   await autoResolveMissingOrders();
   return r.rows.length;
 }
 
-// The one deliberate auto-fix in this file -- see the header comment for why this specific
-// case (and only this one) is safe to resolve without a human looking first. Same fields as
-// the two manual fixes applied 2026-10-13 (134090/134096/134110, then 134133): status=EXPIRED,
-// resolution=NOT_FILLED, resolution_method=PRIMARY_UNFILLED, actual_pnl left NULL (no real
-// fill ever happened, so there's no real P&L to record). The WHERE clause is the sole source
-// of truth for eligibility -- re-checked fresh in this same query, not reused from
-// checkMissingOrders()'s earlier SELECT, so a race where an order somehow landed in between
-// (it structurally can't -- sweepEntries()'s own fired_at>NOW()-3min condition only ever
-// becomes more false with time -- but guarded anyway, matching this codebase's standing
-// "never trust a prior SELECT on an UPDATE touching real setup state" convention).
+// Thin wrapper around the shared implementation (server/services/missingOrderAutoResolve.js)
+// -- see that file's own header for the full reasoning and the 2026-10-13 incident that
+// moved the real logic there. Kept as a cron-local name so the rest of this file (and its
+// own log/performance_audit framing) doesn't need to change.
 async function autoResolveMissingOrders() {
-  const r = await query(`
-    UPDATE active_setups a
-    SET status = 'EXPIRED', resolution = 'NOT_FILLED', resolution_method = 'PRIMARY_UNFILLED', resolved_at = NOW()
-    WHERE a.origin_status = 'ACTIVE' AND a.status = 'ACTIVE'
-      AND a.fired_at < (NOW() AT TIME ZONE 'America/New_York') - make_interval(mins => $1)
-      AND NOT EXISTS (SELECT 1 FROM order_placements e WHERE e.setup_id = a.id AND e.purpose = 'ENTRY')
-    RETURNING a.id, a.setup_type, a.fired_at::text
-  `, [AUTO_RESOLVE_MISSING_ORDER_BUFFER_MIN]);
-  for (const row of r.rows) {
-    logAlert(`ORDER_LIFECYCLE: AUTO_RESOLVED MISSING_ORDER -- active_setups id=${row.id} (${row.setup_type}) fired_at=${row.fired_at} marked EXPIRED/NOT_FILLED/PRIMARY_UNFILLED (no order ever existed, ${AUTO_RESOLVE_MISSING_ORDER_BUFFER_MIN}min+ past fired_at). Freed any opposite-direction/same-type gate it was phantom-blocking.`);
-  }
-  return r.rows.length;
+  return sharedAutoResolveMissingOrders(AUTO_RESOLVE_MISSING_ORDER_BUFFER_MIN); // wider buffer here is pure redundancy margin, not a correctness requirement -- the live loop (3min) normally gets there first
 }
 
 // Each check below now returns { count, ids } (or { count, detail } for reconciliation)
@@ -190,6 +181,12 @@ async function checkCanceledNoResubmit() {
   for (const row of r.rows) {
     logAlert(`ORDER_LIFECYCLE: CANCELED_NO_RESUBMIT -- order_placements id=${row.id} (setup_id=${row.setup_id}, ${row.setup_type}) CANCELED at ${row.last_update_at}, setup still status='ACTIVE', no market-escalation resubmit since. Either the escalation logic failed to act, or the broker canceled it for a reason outside the app's own escalation flow (e.g. an account/symbol issue) and nothing has followed up.`);
   }
+  // Auto-resolve itself now also runs every ~15s from the live poll loop (acd.js, via
+  // missingOrderAutoResolve.js's autoResolveDeadCanceledEntries()) -- found live 2026-10-13/14
+  // that a real order canceled fast enough (before resolveSetups.js's own 15min chase-abandon
+  // condition could ever apply) sat stuck for ~11.5 hours with no auto-fix at all. This call
+  // stays as a redundant backstop only (same convention as checkMissingOrders() above).
+  await sharedAutoResolveDeadCanceledEntries();
   return { count: r.rows.length, ids: r.rows.map(row => row.id) };
 }
 
