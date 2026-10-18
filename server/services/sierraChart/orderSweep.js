@@ -124,8 +124,11 @@ const MARKET_ENTRY_SETUP_TYPES = new Set([
 ]);
 // EXTENDED 2026-10-18 (user: "I want to see all [non-level trades] fire and fill"). Setups whose entry is
 // simply the price at detection (no fixed level to wait for) fire at MARKET so they fill. In the 21 days
-// before this change those families left 9/19 POC_ROTATION_JOIN, 6/24 STACK_VOL_BREAK_LIVE, 6/31 VWAP_MAGNET
-// and 18/45 case-engine/breakout (18/24 of A_UP_STRONG alone) live rows NOT_FILLED. This deliberately
+// before this change those families showed many NOT_FILLED live rows -- CORRECTION 2026-10-18: most of those
+// counts were rows that never got a broker order at all (the Thu/Fri outage), NOT limits that failed to fill.
+// Among rows that DID get a real entry order, the limit fill rate was 60% overall (54/90) and POC rotation
+// filled 6/10 -- still a real miss rate, which is why this stays, but the original 9/19, 6/24, 18/24 figures
+// overstated it. This deliberately
 // overrides the 2026-10-13 review's "pure slippage, no staleness problem" exclusion (see the EXCLUDED notes
 // above): a limit at the current price can miss the trade entirely, which costs more than a point of
 // slippage. Real LEVEL fades (PD_/CAM_/FLOOR_/OR*/IB_/WS/MS/PW/_OVERNIGHT) are NOT in this list -- the level
