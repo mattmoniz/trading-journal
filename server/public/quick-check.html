@@ -1736,17 +1736,17 @@ function renderSweepWatch() {
   el.className = 'visible';
 }
 
-// Globex-watch toggle (2026-09-16, user request, added the same session Globex firing was
-// paused): a THIRD, fully INDEPENDENT toggle -- deliberately not a third value on
-// liveAllFilter, because the user explicitly does not want this to touch the Live/All-driven
-// Performance stats (Wins/Losses/Net P&L/Gross/Comm/Worst Trade) at all. Those stay computed
-// from `resolved` (the normal liveAllFilter-based set) unconditionally, regardless of this
-// toggle's state -- see renderTimeline()'s own comment at the point it branches on
-// `globexWatch` for exactly where the two paths split.
-let globexWatch = localStorage.getItem('globexWatch') === 'true';
-function setGlobexWatch(on) {
-  globexWatch = on;
-  localStorage.setItem('globexWatch', String(on));
+// Session filter (2026-10-18, user request: "unify the view of globex and rth again so we can watch
+// longer trades ... with a filter option for me"). Replaces the old on/off Globex-watch switch
+// (2026-09-16) that showed Globex as a separate, hidden-by-default list. 'all' (DEFAULT) = RTH and
+// Globex rows of the current trading session in one chronological list, so a trade that fired
+// overnight and carries into RTH (or an RTH trade still open past 6PM) stays on screen; 'rth' / 'globex'
+// narrow it. Hardcoded to 'all' on every load and NEVER persisted -- same standing rule as
+// liveAllFilter/clusterView (a stale stored filter once hid a real session behind a small button).
+// Stats, equity curve and row list all describe whichever set is selected.
+let sessionView = 'all';
+function setSessionView(v) {
+  sessionView = (v === 'rth' || v === 'globex') ? v : 'all';
   renderTimeline();
 }
 
@@ -1811,8 +1811,10 @@ function renderTimeline() {
     // 'declustered' (forced default) keeps every cluster-sibling row too, same population this
     // list has always shown by default.
     .filter(s => clusterView === 'declustered' || s.is_cluster_primary !== false)
-    // Globex omitted from the main timeline entirely (2026-09-16, user request, same session
-    // Globex firing was paused) -- unconditional, not tied to the globexWatch toggle below, so
+    // NOTE 2026-10-18: this RTH-only set (`resolved`) is now just the 'rth' view of the session filter;
+    // the default 'all' view unions it with Globex rows (bothRows below). Originally: Globex omitted from
+    // the main timeline entirely (2026-09-16, user request, same session
+    // Globex firing was paused) -- unconditional, not tied to the old Globex toggle below, so
     // it stays out of both the row list AND Performance/timeline-stats regardless of Live/All.
     // Globex's own rows live exclusively under the separate "🌙 Globex" tab (globexRows below).
     // Deliberate exception (2026-09-21, user request): OVERNIGHT_ORDERFLOW_LONG/SHORT fires
@@ -1890,9 +1892,17 @@ function renderTimeline() {
     .filter(s => clusterView === 'declustered' || s.is_cluster_primary !== false)
     .filter(s => liveAllFilter === 'all' || s.origin_status === 'ACTIVE')
     .sort((a, b) => (b.fired_at_str || '').localeCompare(a.fired_at_str || ''));
-  const displayRows = globexWatch ? globexRows : resolved;
+  // Unified view (2026-10-18): RTH rows + Globex rows of the current session in one list. A row can be
+  // in BOTH sets (OVERNIGHT_ORDERFLOW_* is deliberately shown under RTH too), so de-duplicate by id.
+  const bothRows = (() => {
+    const seen = new Set();
+    return [...resolved, ...globexRows]
+      .filter(s => (seen.has(s.id) ? false : (seen.add(s.id), true)))
+      .sort((a, b) => (b.fired_at_str || '').localeCompare(a.fired_at_str || ''));
+  })();
+  const displayRows = sessionView === 'globex' ? globexRows : sessionView === 'rth' ? resolved : bothRows;
 
-  $('timeline-title').textContent = (globexWatch ? 'Globex Watch (' : 'Session Timeline (') + displayRows.length + ')';
+  $('timeline-title').textContent = (sessionView === 'globex' ? 'Globex Timeline (' : sessionView === 'rth' ? 'RTH Timeline (' : 'Session Timeline (') + displayRows.length + ')';
   // Live/All + the old top-5-$-impact tag filter row were both LIFTED OUT of this per-poll
   // rebuild 2026-09-28 (moved to the shared #liveall-toggle/#cluster-toggle above both tabs;
   // the tag filter row was removed outright per user request -- see removed TAG_META/tagFilter/
@@ -1901,9 +1911,14 @@ function renderTimeline() {
   $('timeline-head').querySelector('#timeline-toggle')?.remove();
   const toggle = document.createElement('div');
   toggle.id = 'timeline-toggle';
-  toggle.innerHTML = '<button data-gw="' + (globexWatch ? 'off' : 'on') + '" style="padding:3px 9px;font-size:10px;font-weight:600;cursor:pointer;border:none;border-radius:6px;' +
-    'background:' + (globexWatch ? 'rgba(147,51,234,0.30)' : 'rgba(15,23,42,0.8)') + ';' +
-    'color:' + (globexWatch ? '#d8b4fe' : 'var(--dim)') + '">🌙 Globex (' + globexRows.length + ')</button>';
+  // Three-way session filter (data-sv), each with its own live count. Same inline-button styling the
+  // old single Globex button used; active pill highlighted.
+  toggle.style.cssText = 'display:flex;gap:4px;';
+  toggle.innerHTML = [['all', 'All', bothRows.length], ['rth', 'RTH', resolved.length], ['globex', '🌙 Globex', globexRows.length]]
+    .map(([v, label, n]) => '<button data-sv="' + v + '" style="padding:3px 9px;font-size:10px;font-weight:600;cursor:pointer;border:none;border-radius:6px;' +
+      'background:' + (sessionView === v ? (v === 'globex' ? 'rgba(147,51,234,0.30)' : 'rgba(96,165,250,0.25)') : 'rgba(15,23,42,0.8)') + ';' +
+      'color:' + (sessionView === v ? (v === 'globex' ? '#d8b4fe' : '#bfdbfe') : 'var(--dim)') + '">' + label + ' (' + n + ')</button>')
+    .join('');
   $('timeline-head').appendChild(toggle);
   // Click handled via delegation below (document-level listener) -- NOT attached per-button here.
   // This button is recreated by innerHTML on every 20s loadTimeline() poll; a listener bound
@@ -1911,14 +1926,15 @@ function renderTimeline() {
   // silently swallowing the tap (found live 2026-08-28, user reported "I see it but can't click
   // on it" on the vol-building toggle -- same risk applies here).
 
-  // Stats shown are ENTIRELY independent per view (2026-09-16, user: "I want to track Globex
-  // but totally separate") -- when globexWatch is on, every number below is recomputed from
-  // globexRows alone via the same shared computeRangeStats()/worstTradeDD() helpers, never
+  // Stats always describe EXACTLY the rows shown (2026-09-16 "track Globex totally separate", extended
+  // 2026-10-18 with the All/RTH/Globex session filter): 'rth' = the RTH set, 'globex' = globexRows,
+  // 'all' = their union -- each recomputed from that set alone via the same shared
+  // computeRangeStats()/worstTradeDD() helpers (the old text below describes the Globex case), never
   // blended with or falling back to the RTH-based rangeStats/maxTradeDD above. Without this,
   // the Globex row list would sit directly under RTH's own Wins/Losses/Net P&L, which reads as
   // if those numbers described the list below them when they don't.
-  const shownStats = globexWatch ? computeRangeStats(globexRows, true) : rangeStats;
-  const shownMaxDD = globexWatch ? worstTradeDD(globexRows) : maxTradeDD;
+  const shownStats = sessionView === 'rth' ? rangeStats : computeRangeStats(displayRows, true);
+  const shownMaxDD = sessionView === 'rth' ? maxTradeDD : worstTradeDD(displayRows);
   $('timeline-stats').innerHTML =
     '<span>Wins <b style="color:var(--green)">' + shownStats.wins + '</b></span>' +
     '<span>Losses <b style="color:var(--red)">' + shownStats.losses + '</b></span>' +
@@ -1948,9 +1964,8 @@ function renderTimeline() {
     // globexRows itself respecting Live/All) -- previously always said "No Globex trades
     // fired," which would have been misleading once some fired as SHADOW but got filtered
     // out under 'live'.
-    const emptyMsg = globexWatch
-      ? (liveAllFilter === 'live' ? 'No live Globex trades fired yet this session' : 'No Globex trades fired yet this session')
-      : (liveAllFilter === 'live' ? 'No live trades fired yet this session' : 'Nothing fired yet this session');
+    const scope = sessionView === 'globex' ? ' Globex' : sessionView === 'rth' ? ' RTH' : '';
+    const emptyMsg = liveAllFilter === 'live' ? 'No live' + scope + ' trades fired yet this session' : 'No' + scope + ' trades fired yet this session';
     $('timeline-list').innerHTML = '<div class="loading">' + emptyMsg + '</div>';
     return;
   }
@@ -2083,6 +2098,7 @@ function renderTimeline() {
       '<span class="rdot" style="background:' + dotColor + '"></span>' +
       '<span class="time mono">' + timeLabel + '</span>' +
       '<span class="type">' + (s.setup_type || '').replace(/_/g, ' ') + '</span>' +
+      (sessionView === 'all' && !isRthAdjacent(s) ? '<span class="vb-tag mild sig-tag" title="Fired in the Globex / overnight session">🌙</span>' : '') +
       clusterBadge + vbTag + wideTag + rsTag + vrTag + stTag + pcTag + t1fTag + lateTag +
       '<span class="price mono">' + price + '</span>' +
       (s.origin_status === 'ACTIVE' && s.is_cluster_primary !== false && s.broker_note && /^No broker order/.test(s.broker_note) ? '<span class="vb-tag mild sig-tag" title="' + s.broker_note.replace(/"/g, '&quot;') + '">no order</span>' : '') +
@@ -3687,8 +3703,8 @@ document.addEventListener('click', (e) => {
 // below), so the original ancestor-onclick conflict can't recur here either way, but capture
 // phase is still a safe, correct choice for a delegated listener regardless.
 document.addEventListener('click', (e) => {
-  const gwBtn = e.target.closest('[data-gw]');
-  if (gwBtn) { e.stopPropagation(); setGlobexWatch(gwBtn.dataset.gw === 'on'); return; }
+  const svBtn = e.target.closest('[data-sv]');
+  if (svBtn) { e.stopPropagation(); setSessionView(svBtn.dataset.sv); return; }
 }, true);
 
 // Timeline/Performance page tabs (2026-09-28, replaces the 2026-09-24 collapse-to-reach-
