@@ -7620,6 +7620,11 @@ export default function createACDRouter(io) {
       // after 6PM, the session that's now open belongs to the NEXT trading day already
       // (matches every other 6PM-rollover convention in this codebase).
       const currentSessionDate = nowET.getHours() >= 18 ? nextTradingDay(nowET) : todayET;
+      // Also match by fired_at >= the most recent 6PM ET (2026-10-18): GLOBEX_FLUSH_* rows carry the
+      // DEPARTURE day as trade_date, so an evening fire has the previous date and a trade_date-only match
+      // dropped it once resolved -- same bug fixed in /setups/today and quick-check the same day.
+      const sessionStartDay = new Date(Date.UTC(nowET.getFullYear(), nowET.getMonth(), nowET.getDate() - (nowET.getHours() >= 18 ? 0 : 1)));
+      const sessionStart = `${sessionStartDay.toISOString().slice(0, 10)} 18:00:00`;
 
       const setupsRes = await query(`
         SELECT id, setup_type, status, resolution, actual_pnl, bar6_checkpoint, bar6_exit_recommended,
@@ -7627,9 +7632,9 @@ export default function createACDRouter(io) {
           entry_zone_low, fired_at, TO_CHAR(fired_at, 'YYYY-MM-DD HH24:MI:SS') as fired_at_str
         FROM active_setups
         WHERE status = 'ACTIVE'
-           OR (trade_date = $1 AND status NOT IN ('SHADOW', 'ACTIVE'))
+           OR ((trade_date = $1 OR fired_at >= $2::timestamp) AND status NOT IN ('SHADOW', 'ACTIVE'))
         ORDER BY fired_at DESC
-      `, [currentSessionDate]);
+      `, [currentSessionDate, sessionStart]);
 
       // Prefix each line with weekday+date, not just HH:MM -- this list can span two
       // calendar days once past 6PM ET (today's leftover RTH entries + the new
