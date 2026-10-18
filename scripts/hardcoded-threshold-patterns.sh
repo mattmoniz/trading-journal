@@ -18,7 +18,11 @@ PATTERN_A='new Set\(\['
 # reviewed by test_invariants.mjs check [6]. (3) caseEngine.js's `tfs = [...new
 # Set([...lv.timeframes, ...])]` dedupes timeframe labels for level-stacking display, not a
 # setup-type suppression list at all.
-PATTERN_A_EXCLUDE='_suppressedSetups\|_dowSuppressToday\|DAY_TYPE_CONDITIONAL\|SHADOW_SETUP\|displayPrimary\|SHADOW_SETUP_TYPES\|IB_SWEEP_TYPES\|STOP_SWEEP_PAUSED\|UNCALIBRATED_SHADOW_TYPES\|lv\.timeframes'
+PATTERN_A_EXCLUDE='_suppressedSetups\|_dowSuppressToday\|DAY_TYPE_CONDITIONAL\|SHADOW_SETUP\|displayPrimary\|SHADOW_SETUP_TYPES\|IB_SWEEP_TYPES\|STOP_SWEEP_PAUSED\|UNCALIBRATED_SHADOW_TYPES\|lv\.timeframes\|PROMOTABLE_SUPPRESS_REASONS'
+# PROMOTABLE_SUPPRESS_REASONS excluded 2026-10-18 (git blame: dde09198, 2026-09-28, DeepSeek-reviewed): a
+# fixed 2-value reason-code ALLOWLIST ('SUPPRESSED_FADE','DOW_SUPPRESSED') deciding which suppression reasons
+# SUPPRESS_ALL_DISABLED may promote past -- a code enum, not a suppression list of setup_types and not a
+# trading threshold. Re-alerted on every whole-file Stop-hook scan since it was written.
 PATTERN_A_LABEL='hardcoded Set literal (suppression list?)'
 
 # Pattern B: hardcoded array of setup-type strings (e.g. mondaySkip = ['OR_HIGH_FADE',...])
