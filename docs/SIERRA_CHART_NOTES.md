@@ -162,3 +162,10 @@ to search for.
   a one-row `position_open` flag correction). Don't retry via another tool/encoding when
   denied — hand the exact command to the user. CLAUDE.md hard rule, "The Claude Code
   sandbox's auto-mode classifier blocks arming/enabling...".
+
+## Sierra's own fill history as a ground-truth source (researched 2026-10-18)
+
+- Sierra's DTC Server documents `HISTORICAL_ORDER_FILLS_REQUEST` (needs `TradeAccount` and a time window: `NumberOfDays` or `StartDateTime`, otherwise the server must reject it). Sources: https://www.sierrachart.com/index.php?page=doc%2FDTCMessages_TradingRelatedMessages.php and https://www.sierrachart.com/index.php?page=doc%2FDTC_TestClient.php
+- Sierra's own docs say the only fills it is sure to receive are those for orders entered FROM Sierra Chart while Sierra Chart is connected to the trading service. Trading done outside it, or while it is not running, is not guaranteed to be in the Trade Activity Log (https://www.sierrachart.com/index.php?page=doc%2FTradeActivityLog.php). Missing fills are possible.
+- Historical fill depth depends on the service: most providers keep only the current day, while Teton and the Simulated Trading Service keep much more.
+- NOT yet verified against this app's accounts (Sim1/Rithmic and the Trading Evaluator): whether a manual Flatten/Reverse clicked in Sierra's own UI shows up in a `HISTORICAL_ORDER_FILLS_REQUEST` response, and whether `dtcClient.js` can send message type 303. Test it live with one harmless manual action before building anything on it.
