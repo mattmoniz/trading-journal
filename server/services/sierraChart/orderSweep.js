@@ -390,7 +390,8 @@ async function sweepExits(dtcClient) {
       AND NOT EXISTS (
         SELECT 1 FROM order_placements x
         WHERE x.setup_id = a.id AND x.purpose = 'EXIT'
-          AND x.status IN ('PENDING_SUBMIT','SUBMITTED','ORDER_SENT','PENDING_OPEN','OPEN','PARTIALLY_FILLED','PENDING_CANCEL','PENDING_CANCEL_REPLACE','FILLED')
+          AND (x.status IN ('PENDING_SUBMIT','SUBMITTED','ORDER_SENT','PENDING_OPEN','OPEN','PARTIALLY_FILLED','PENDING_CANCEL','PENDING_CANCEL_REPLACE','FILLED')
+               OR x.client_order_id LIKE 'RETIRED-%')
       )
   `);
   for (const row of rows.rows) {

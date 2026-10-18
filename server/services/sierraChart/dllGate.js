@@ -6,11 +6,27 @@
 // (reconciliation lag/failure) used to be reported in unknownCount but never blocked -- a real loss could
 // sit hidden past the limit while reconciliation was behind. unknownCount > 0 now blocks, matching the
 // fail-closed intent this function already states for the limit variable itself.
-export function dllGateDecision({ realizedBrokerPnl, unknownCount = 0, limit }) {
+// CHANGED 2026-10-18 (user: no live trades Thu/Fri): "unknownCount > 0 blocks everything" turned ONE
+// trade missing broker P&L into a block that lasted ~36h (RTH_VWAP_FADE_SHORT 135660 never got an exit
+// row, so its broker_pnl never arrived; 67 real entries were skipped on this reason alone). The fail-
+// closed intent -- a hidden loss must not sit past the limit -- is kept, but unknown trades are now
+// counted at their WORST CASE (full stop risk, `unknownWorstCaseLoss`, positive dollars) instead of
+// blocking outright: known P&L minus that worst case must still be inside the limit. Callers that
+// don't pass `unknownWorstCaseLoss` keep the old behavior (any unknown blocks).
+import { LIVE_INSTRUMENT } from '../../config/instruments.js';
+
+export function dllGateDecision({ realizedBrokerPnl, unknownCount = 0, limit, unknownWorstCaseLoss = null }) {
   if (!Number.isFinite(limit) || limit <= 0) return { blocked: false, reason: 'no limit configured' };
   if (!Number.isFinite(realizedBrokerPnl)) return { blocked: false, reason: 'no broker P&L yet -- cannot evaluate' };
   if (realizedBrokerPnl <= -limit) {
     return { blocked: true, reason: `daily broker loss ${realizedBrokerPnl.toFixed(2)} reached limit -${limit}` };
+  }
+  if (unknownCount > 0 && Number.isFinite(unknownWorstCaseLoss)) {
+    const worst = realizedBrokerPnl - unknownWorstCaseLoss;
+    if (worst <= -limit) {
+      return { blocked: true, reason: `${unknownCount} trade(s) without broker P&L; known ${realizedBrokerPnl.toFixed(2)} minus worst-case ${unknownWorstCaseLoss.toFixed(2)} reaches limit -${limit}` };
+    }
+    return { blocked: false, reason: `within limit counting ${unknownCount} trade(s) without broker P&L at worst case (-${unknownWorstCaseLoss.toFixed(2)})` };
   }
   if (unknownCount > 0) {
     return { blocked: true, reason: `${unknownCount} trade(s) still without broker P&L -- cannot confirm the account is within limit` };
@@ -30,11 +46,16 @@ export async function evaluateDailyLossLimit(tradeAccount) {
   }
   const r = await query(`
     SELECT COALESCE(SUM(a.broker_pnl), 0)::float AS realized,
-           COUNT(*) FILTER (WHERE a.broker_pnl IS NULL AND a.status <> 'ACTIVE')::int AS unknown
+           COUNT(*) FILTER (WHERE a.broker_pnl IS NULL AND a.status <> 'ACTIVE')::int AS unknown,
+           COALESCE(SUM(ABS(e.avg_fill_price - a.stop_level) * e.filled_quantity * $2)
+             FILTER (WHERE a.broker_pnl IS NULL AND a.status <> 'ACTIVE' AND a.stop_level IS NOT NULL), 0)::float AS unknown_worst,
+           COUNT(*) FILTER (WHERE a.broker_pnl IS NULL AND a.status <> 'ACTIVE' AND a.stop_level IS NULL)::int AS unknown_no_stop
     FROM active_setups a
     JOIN order_placements e ON e.setup_id = a.id AND e.purpose = 'ENTRY' AND e.status = 'FILLED' AND e.trade_account = $1
     WHERE a.trade_date = CURRENT_DATE AND a.origin_status = 'ACTIVE'
-  `, [tradeAccount]);
+  `, [tradeAccount, LIVE_INSTRUMENT.dollarsPerPoint]);
   const row = r.rows[0];
-  return dllGateDecision({ realizedBrokerPnl: row.realized, unknownCount: row.unknown, limit });
+  // A trade with no stop on record has no computable worst case -> fall back to the old fail-closed block.
+  const worst = row.unknown_no_stop > 0 ? null : row.unknown_worst;
+  return dllGateDecision({ realizedBrokerPnl: row.realized, unknownCount: row.unknown, limit, unknownWorstCaseLoss: worst });
 }

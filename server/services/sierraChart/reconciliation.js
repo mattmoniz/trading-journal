@@ -482,6 +482,47 @@ async function cancelRestingStop(dtcClient, setupId, stopStatus, context) { retu
 // under two overlapping polls).
 const EXIT_LIVE_STATUSES = ['PENDING_SUBMIT', 'SUBMITTED', 'ORDER_SENT', 'PENDING_OPEN', 'OPEN', 'PARTIALLY_FILLED', 'PENDING_CANCEL', 'PENDING_CANCEL_REPLACE', 'FILLED'];
 
+// App-expected net position on `symbol`: signed sum of filled quantity over real broker orders (those
+// carrying a server_order_id) since the latest invariant baseline. Shared by checkPositionInvariant()
+// and placeExitOrder() so both read the same definition (see the long comment in the invariant).
+async function getAppExpectedNet(symbol) {
+  const q = await query(`
+    SELECT COALESCE(SUM(filled_quantity * (CASE WHEN side = 'BUY' THEN 1 ELSE -1 END)), 0) AS expected_net
+    FROM order_placements
+    WHERE symbol = $1
+      AND server_order_id IS NOT NULL
+      AND id > (SELECT COALESCE(MAX(baseline_order_id), 0) FROM order_placements_invariant_baseline)
+  `, [symbol]);
+  return Number(q.rows[0].expected_net);
+}
+
+// Queryable record of why a real exit did not go out (previously console-only, lost on restart).
+async function persistExitGate(setupId, gateName, reason) {
+  await query(`
+    INSERT INTO gated_candidates (trade_date, setup_type, gate_name, gate_reason)
+    SELECT CURRENT_DATE, a.setup_type, $2::varchar, $3::text FROM active_setups a WHERE a.id = $1
+      AND NOT EXISTS (SELECT 1 FROM gated_candidates g WHERE g.gate_name = $2::varchar
+        AND g.gate_reason = $3::text AND g.evaluated_at > NOW() - interval '5 minutes')
+  `, [setupId, gateName, `setup_id=${setupId} ${reason}`]).catch((err) => console.error('[sierraChart.reconciliation] failed to persist exit gate:', err.message));
+}
+
+// Permanently stop retrying an exit whose position the broker verifiably does not hold. Writes a
+// terminal EXIT row with no server_order_id (so the invariant sum ignores it) that sweepExits()'s
+// selection recognises by its RETIRED- client id. No order is sent; nothing is guessed.
+async function retireExit(params, reason, brokerQty) {
+  const clientOrderId = `RETIRED-${params.setupId}`;
+  await query(`
+    INSERT INTO order_placements
+      (setup_id, purpose, client_order_id, symbol, exchange, side, order_type, quantity, trade_account, environment_service, status, position_open)
+    SELECT $1, 'EXIT', $2, $3, $4, CASE WHEN e.side = 'BUY' THEN 'SELL' ELSE 'BUY' END, 'MARKET', 0, $5, $6, 'REJECTED', FALSE
+    FROM order_placements e WHERE e.setup_id = $1 AND e.purpose = 'ENTRY' ORDER BY e.id DESC LIMIT 1
+    ON CONFLICT DO NOTHING
+  `, [params.setupId, clientOrderId, params.symbol, params.exchange ?? '', params.tradeAccount ?? null, params.environmentService ?? null]);
+  await persistExitGate(params.setupId, 'SIERRA_EXIT_RETIRED', reason);
+  console.error(`[sierraChart.reconciliation] setup_id=${params.setupId}: exit RETIRED (no order sent) -- ${reason}. broker net=${brokerQty}.`);
+  return { action: 'RETIRED_NOT_OPEN_AT_BROKER', reason, brokerQty };
+}
+
 /**
  * Place a real exit (close) order -- ALWAYS on the OPPOSITE side of the real entry fill,
  * using ONLY this app's own per-order fill record (getRealFilledQuantity, matched via
@@ -520,11 +561,10 @@ export async function placeExitOrder(dtcClient, params) {
   );
   if (existingExit.rows.length > 0) return { action: 'ALREADY_EXITING' };
 
-  await cancelRestingStop(dtcClient, params.setupId, stopStatus, 'ahead of a flatten');
-  await cancelRestingLeg(dtcClient, params.setupId, targetStatus, 'ahead of a flatten');
-
   const { filledQuantity, side } = await getRealFilledQuantity(params.setupId);
   if (!filledQuantity || filledQuantity <= 0) {
+    await cancelRestingStop(dtcClient, params.setupId, stopStatus, 'ahead of a flatten');
+    await cancelRestingLeg(dtcClient, params.setupId, targetStatus, 'ahead of a flatten');
     const canceled = await cancelUnfilledEntry(dtcClient, params.setupId);
     if (!canceled) {
       console.error(`[sierraChart.reconciliation] setup_id=${params.setupId}: entry filled_quantity reads 0 and there's nothing left to cancel. If a real fill was actually missed, checkPositionInvariant() will catch the broker/app disagreement on the next check and halt -- this function will never guess.`);
@@ -537,13 +577,43 @@ export async function placeExitOrder(dtcClient, params) {
   // broker's position for this symbol is the only thing that knows, so it must agree with
   // this setup's expected open quantity before a market exit is sent. Used as a fail-closed
   // guard only, never to choose side or quantity (see this file's header).
-  const snapshot = await getBrokerSnapshot(dtcClient, { collectWindowMs: 3000 });
-  const brokerQty = extractPositionForSymbol(snapshot.positionMessages, params.symbol);
-  const guard = brokerExitDecision({ brokerQty, entrySide: side, filledQuantity });
+  let snapshot = await getBrokerSnapshot(dtcClient, { collectWindowMs: 3000 });
+  let brokerQty = extractPositionForSymbol(snapshot.positionMessages, params.symbol);
+  let guard = brokerExitDecision({ brokerQty, entrySide: side, filledQuantity });
+  if (!guard.ok && brokerQty != null) {
+    // One fresh re-read before concluding the position isn't open: the broker's position feed can
+    // trail an ORDER_UPDATE by a moment (same race checkPositionInvariant() retries for).
+    await new Promise(resolve => setTimeout(resolve, INVARIANT_RETRY_DELAY_MS));
+    snapshot = await getBrokerSnapshot(dtcClient, { collectWindowMs: 3000 });
+    brokerQty = extractPositionForSymbol(snapshot.positionMessages, params.symbol);
+    guard = brokerExitDecision({ brokerQty, entrySide: side, filledQuantity });
+  }
+  // CHANGED 2026-10-18 (live-trade outage Thu/Fri, found from order_placements timestamps): the
+  // old behaviour was refuse-and-retry-forever, AFTER already canceling this setup's protective
+  // stop. When a position had really been closed some other way (so the broker was flat), the
+  // refused exit stayed pending for hours and then PASSED the sign/size guard the moment an
+  // UNRELATED same-side position opened -- flattening that new position instead (135595's exit hit
+  // 135617's short 3s after it filled, then 135617's exit hit 135660's, leaving 135660 with no
+  // exit and no broker P&L, which in turn blocked every entry via the daily-loss-limit gate).
+  // Now: (1) the guard runs BEFORE the stop is canceled, so a refusal never strips protection;
+  // (2) a broker that verifiably does not hold this setup's side RETIRES the exit permanently;
+  // (3) even a passing sign/size check must agree with the app's own expected net, else the
+  // flatten is ambiguous (could belong to another setup) and is refused, never guessed.
   if (!guard.ok) {
+    await persistExitGate(params.setupId, 'SIERRA_EXIT_REFUSED', guard.reason);
     console.error(`[sierraChart.reconciliation] setup_id=${params.setupId}: REFUSED market exit -- ${guard.reason}. Nothing sent. Check the broker's position and order history directly.`);
+    if (brokerQty != null) return await retireExit(params, 'broker does not hold this setup\'s position: ' + guard.reason, brokerQty);
     return { action: 'REFUSED_BROKER_MISMATCH', reason: guard.reason, brokerQty };
   }
+  const expectedNet = await getAppExpectedNet(params.symbol);
+  if (Number(brokerQty) !== expectedNet) {
+    const reason = `broker net ${brokerQty} != app-expected net ${expectedNet} -- cannot tell which setup this position belongs to`;
+    await persistExitGate(params.setupId, 'SIERRA_EXIT_REFUSED', reason);
+    console.error(`[sierraChart.reconciliation] setup_id=${params.setupId}: REFUSED market exit -- ${reason}. Nothing sent; the stop is left in place.`);
+    return { action: 'REFUSED_BROKER_MISMATCH', reason, brokerQty };
+  }
+  await cancelRestingStop(dtcClient, params.setupId, stopStatus, 'ahead of a flatten');
+  await cancelRestingLeg(dtcClient, params.setupId, targetStatus, 'ahead of a flatten');
   const clientOrderId = exitClientOrderId(params.setupId);
   const exitParams = { ...params, side: OPPOSITE_SIDE[side], orderType: 'MARKET', quantity: filledQuantity, price1: null, price2: null };
   // onConflictDoNothing=true: the real guarantee against a double-flatten under two
@@ -1054,14 +1124,7 @@ export async function checkPositionInvariant(dtcClient, killSwitch, symbol, snap
   // made expectedNet read -2 when the real open exposure was -1. Filtering on server_order_id
   // fixes this at the root for every future reconstruction/manual-bookkeeping row of this shape,
   // not just this one instance -- no baseline bump needed.
-  const expectedQ = await query(`
-    SELECT COALESCE(SUM(filled_quantity * (CASE WHEN side = 'BUY' THEN 1 ELSE -1 END)), 0) AS expected_net
-    FROM order_placements
-    WHERE symbol = $1
-      AND server_order_id IS NOT NULL
-      AND id > (SELECT COALESCE(MAX(baseline_order_id), 0) FROM order_placements_invariant_baseline)
-  `, [symbol]);
-  const expectedNet = Number(expectedQ.rows[0].expected_net);
+  const expectedNet = await getAppExpectedNet(symbol);
 
   const resolvedSnapshot = snapshot || (dtcClient?.isLoggedOn ? await getBrokerSnapshot(dtcClient) : { positionMessages: [] });
   const { positionMessages } = resolvedSnapshot;

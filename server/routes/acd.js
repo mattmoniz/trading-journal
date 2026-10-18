@@ -7395,9 +7395,35 @@ export default function createACDRouter(io) {
         `, [allIds]);
         for (const o of entryOrdersQ.rows) entryOrderById.set(o.setup_id, o);
       }
+      // broker_note (2026-10-18, user: "hard to track how executions and interactions with Sierra
+      // if nothing is firing"): for every origin ACTIVE row, say what actually happened at the
+      // broker -- an entry order's status, or the LATEST reason the sweep logged for not placing
+      // one (SIERRA_ENTRY_SKIP) / not flattening (SIERRA_EXIT_REFUSED/RETIRED). Previously these
+      // reasons lived only in gated_candidates, invisible on the page (Thu/Fri 10/15-16: 67 entries
+      // blocked by the daily-loss-limit gate with nothing on screen saying so).
+      const noteById = new Map();
+      const activeIds = setupsRes.rows.filter(r => r.origin_status === 'ACTIVE').map(r => r.id);
+      if (activeIds.length) {
+        const notesQ = await query(`
+          SELECT DISTINCT ON (sid) sid, gate_name, gate_reason FROM (
+            SELECT (regexp_match(gate_reason, '^setup_id=([0-9]+) '))[1]::int AS sid, gate_name, gate_reason, evaluated_at
+            FROM gated_candidates
+            WHERE gate_name IN ('SIERRA_ENTRY_SKIP','SIERRA_EXIT_REFUSED','SIERRA_EXIT_RETIRED')
+              AND evaluated_at >= NOW() - interval '4 days'
+          ) g WHERE sid = ANY($1) ORDER BY sid, evaluated_at DESC
+        `, [activeIds]).catch(() => ({ rows: [] }));
+        for (const n of notesQ.rows) noteById.set(n.sid, n);
+      }
       for (const row of setupsRes.rows) {
         const eo = entryOrderById.get(row.id);
         row.broker_confirmed = !!(eo && eo.status === 'FILLED' && eo.server_order_id != null);
+        if (row.origin_status === 'ACTIVE') {
+          const n = noteById.get(row.id);
+          const why = n ? n.gate_reason.replace(/^setup_id=\d+ /, '') : null;
+          row.broker_note = eo
+            ? (eo.status === 'FILLED' ? (n && n.gate_name !== 'SIERRA_ENTRY_SKIP' ? 'Filled at broker; exit: ' + why : null) : 'Entry order ' + eo.status + (why ? ' (' + why + ')' : ''))
+            : (why ? 'No broker order: ' + why : 'No broker order placed (no skip reason logged)');
+        }
       }
       for (const row of setupsRes.rows) {
         row.entry_filled = true;

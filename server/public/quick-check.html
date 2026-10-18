@@ -2080,6 +2080,7 @@ function renderTimeline() {
       '<span class="type">' + (s.setup_type || '').replace(/_/g, ' ') + '</span>' +
       clusterBadge + vbTag + wideTag + rsTag + vrTag + stTag + pcTag + t1fTag + lateTag +
       '<span class="price mono">' + price + '</span>' +
+      (s.origin_status === 'ACTIVE' && s.is_cluster_primary !== false && s.broker_note && /^No broker order/.test(s.broker_note) ? '<span class="vb-tag mild sig-tag" title="' + s.broker_note.replace(/"/g, '&quot;') + '">no order</span>' : '') +
       '<span class="badge ' + badgeClass + '">' + badgeText + '</span>' +
       '</div>';
   };
@@ -2492,6 +2493,12 @@ function openTradeModal(id) {
   if (s.origin_status === 'SHADOW') {
     html += mSection('Why it did not fire live');
     html += '<div style="padding:4px 0 8px;font-size:12px;color:var(--dim);line-height:1.45;">' + blockedReasonText(s) + '</div>';
+  }
+  // Broker section (2026-10-18): what actually happened at Sierra Chart for a live (ACTIVE) row --
+  // an order status, or the logged reason no order went out (e.g. the daily-loss-limit gate).
+  if (s.origin_status === 'ACTIVE' && s.broker_note) {
+    html += mSection('Broker / Sierra Chart');
+    html += '<div style="padding:4px 0 8px;font-size:12px;color:var(--amber-soft);line-height:1.45;">' + s.broker_note + '</div>';
   }
   html += mSection('Outcome');
   html += mRow('Resolution', s.resolution, color);
