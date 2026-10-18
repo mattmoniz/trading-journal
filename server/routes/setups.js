@@ -15,6 +15,7 @@ import { gateSignalConfirmation } from '../services/rigorDiagnostics.js';
 import { isGlobexWeekClosed } from './acd.js';
 import { etNaiveTimestampToMs } from '../services/acdShared.js';
 import { getOrderLifecycleAlertState, dismissOrderLifecycleAlert } from '../services/orderLifecycleAlert.js';
+import { getBrokerAttention } from '../services/sierraChart/brokerAttention.js';
 
 const router = express.Router();
 
@@ -73,7 +74,15 @@ router.get('/setups/live-flags', async (req, res) => {
     orderLifecycle = await getOrderLifecycleAlertState();
   } catch (_) { /* fail visible via the catch-all below, not silently "clean" */ }
 
+  // Broker problem the app could not fix by itself, with plain-English steps (brokerAttention.js).
+  // null = nothing needs the user. A failed lookup is surfaced, not treated as "all clear".
+  let brokerAttention = null;
+  let brokerAttentionError = false;
+  try { brokerAttention = await getBrokerAttention(); } catch (_) { brokerAttentionError = true; }
+
   res.json({
+    brokerAttention,
+    brokerAttentionError,
     suppressAllDisabled: !!SUPPRESS_ALL_DISABLED.enabled,
     suppressAllDisabledSince: SUPPRESS_ALL_DISABLED.enabled ? SUPPRESS_ALL_DISABLED.addedDate : null,
     allLevelsLive: !!ALL_LEVELS_LIVE.enabled,

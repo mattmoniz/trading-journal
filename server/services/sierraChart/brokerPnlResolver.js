@@ -124,7 +124,8 @@ async function estimateRange(setup, readings) {
 }
 
 export function classify(setup, ev) {
-  const exitLeg = setup.legs.find(l => ['STOP', 'EXIT', 'TARGET'].includes(l.purpose) && l.status === 'FILLED');
+  if (setup.legs.some(l => /^RECON-FLAT-/.test(l.client_order_id || ''))) return 'SILENT_CLOSE_ESTIMATED';
+  const exitLeg =setup.legs.find(l => ['STOP', 'EXIT', 'TARGET'].includes(l.purpose) && l.status === 'FILLED');
   const retired = setup.legs.some(l => l.purpose === 'EXIT' && /^RETIRED-/.test(l.client_order_id || ''));
   const last = ev.brokerReadings[ev.brokerReadings.length - 1];
   const wentFlat = ev.brokerReadings.some(r => r.broker_net === 0);
@@ -137,6 +138,7 @@ export function classify(setup, ev) {
 }
 
 const CAUSE_TEXT = {
+  SILENT_CLOSE_ESTIMATED: 'the broker went flat with no order message; the app recorded a priceless exit and an estimate only',
   EXIT_FILLED_PRICE_MISSING: 'an exit fill exists but its price could not be read',
   EXIT_RETIRED_BROKER_FLAT: 'the exit was retired because the broker no longer held the position',
   SILENT_CLOSE_NO_ORDER_MESSAGE: 'the broker went flat with NO order message for it -- consistent with a manual Flatten/Reverse in Sierra Chart or a broker/sim-side close',
@@ -149,6 +151,31 @@ async function persistCause(setupId, setupType, text) {
   await query(`
     INSERT INTO gated_candidates (trade_date, setup_type, gate_name, gate_reason)
     VALUES (CURRENT_DATE, $1::varchar, 'PNL_UNKNOWN_CAUSE', $2::text)`, [setupType, `setup_id=${setupId} ${text}`]);
+}
+
+// NQ range since the last recorded broker reading that still showed an open position. Informational
+// estimate for a flatten-to-0 (which has no broker price); never written to broker_pnl.
+export async function estimateFlatCloseRange() {
+  const last = await query(`SELECT checked_at::text AS t FROM sierra_chart_reconciliation_log
+    WHERE broker_net IS NOT NULL AND broker_net <> 0 ORDER BY checked_at DESC LIMIT 1`);
+  if (!last.rows[0]) return null;
+  const b = await query(`SELECT MIN(low)::float AS lo, MAX(high)::float AS hi FROM price_bars_primary
+    WHERE symbol = 'NQ' AND ts BETWEEN date_trunc('minute', $1::timestamp) AND NOW()`, [last.rows[0].t]);
+  if (b.rows[0].lo == null) return null;
+  return { openReadingAt: last.rows[0].t, lo: b.rows[0].lo, hi: b.rows[0].hi };
+}
+
+export async function recordFlatCloseEstimate(cand, est) {
+  const e = await query(`SELECT side, avg_fill_price::float AS avg FROM order_placements
+    WHERE setup_id = $1 AND purpose = 'ENTRY' AND status = 'FILLED' ORDER BY id DESC LIMIT 1`, [cand.setup_id]);
+  const setup = await query(`SELECT setup_type FROM active_setups WHERE id = $1`, [cand.setup_id]);
+  let range = '';
+  if (est && e.rows[0] && Number.isFinite(e.rows[0].avg)) {
+    const a = brokerPnlFromFills({ entrySide: e.rows[0].side, entryAvg: e.rows[0].avg, exitAvg: est.lo });
+    const b = brokerPnlFromFills({ entrySide: e.rows[0].side, entryAvg: e.rows[0].avg, exitAvg: est.hi });
+    range = ` Estimate only (not broker P&L): NQ ${est.lo}-${est.hi} since ${est.openReadingAt}, P&L between ${Math.min(a, b).toFixed(0)} and ${Math.max(a, b).toFixed(0)} dollars.`;
+  }
+  await persistCause(cand.setup_id, setup.rows[0]?.setup_type || 'UNKNOWN', `SILENT_CLOSE_ESTIMATED: ${CAUSE_TEXT.SILENT_CLOSE_ESTIMATED}.${range}`);
 }
 
 export async function resolveUnknownBrokerPnl(setupId) {
@@ -194,6 +221,7 @@ export async function sweepUnknownPnl() {
       AND a.resolved_at < NOW() - interval '3 minutes' AND a.trade_date >= CURRENT_DATE - 3
       AND NOT EXISTS (SELECT 1 FROM order_placements x WHERE x.setup_id = a.id AND x.purpose = 'EXIT'
                       AND x.status IN ('PENDING_SUBMIT','SUBMITTED','ORDER_SENT','PENDING_OPEN','OPEN','PARTIALLY_FILLED','PENDING_CANCEL','PENDING_CANCEL_REPLACE'))
+      AND NOT EXISTS (SELECT 1 FROM order_placements f WHERE f.setup_id = a.id AND f.client_order_id LIKE 'RECON-FLAT-%')
       AND NOT EXISTS (SELECT 1 FROM gated_candidates g WHERE g.gate_name = 'PNL_UNKNOWN_CAUSE'
                       AND g.gate_reason LIKE 'setup_id=' || a.id || ' %' AND g.evaluated_at > NOW() - interval '30 minutes')`);
   for (const r of rows.rows) {

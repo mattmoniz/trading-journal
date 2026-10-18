@@ -50,6 +50,8 @@ import { query, getClient } from '../../db.js';
 import { getPriceMultiplier, applyPriceMultiplier, classifyFill, toTickPrice } from './priceMultiplier.js';
 import { runSerializedByKey } from './orderUpdateQueue.js';
 import { recordBrokerPnlForSetup } from './brokerPnlWriter.js';
+import { raiseBrokerAttention } from './brokerAttention.js';
+import { estimateFlatCloseRange, recordFlatCloseEstimate } from './brokerPnlResolver.js';
 
 export function entryClientOrderId(setupId) { return `E${setupId}`; }
 export function exitClientOrderId(setupId) { return `X${setupId}-${Date.now()}`; }
@@ -490,7 +492,7 @@ async function getAppExpectedNet(symbol) {
     SELECT COALESCE(SUM(filled_quantity * (CASE WHEN side = 'BUY' THEN 1 ELSE -1 END)), 0) AS expected_net
     FROM order_placements
     WHERE symbol = $1
-      AND server_order_id IS NOT NULL
+      AND (server_order_id IS NOT NULL OR client_order_id LIKE 'RECON-FLAT-%')
       AND id > (SELECT COALESCE(MAX(baseline_order_id), 0) FROM order_placements_invariant_baseline)
   `, [symbol]);
   return Number(q.rows[0].expected_net);
@@ -991,7 +993,7 @@ function _bareSymbol(symbol) {
  * to a bare-symbol match (exact match tried first, in case some account DOES echo the
  * combined form) -- this does not weaken the guard's intent (still refuses on a genuine
  * quantity/side mismatch), it only fixes which broker message counts as "this symbol". */
-function extractPositionForSymbol(positionMessages, symbol) {
+export function extractPositionForSymbol(positionMessages, symbol) {
   const bare = _bareSymbol(symbol);
   const msg = positionMessages.find((p) => p.Symbol === symbol || p.Symbol === bare);
   if (!msg) return null;
@@ -1336,8 +1338,39 @@ export async function attemptSilentCloseReconciliation(dtcClient, { snapshot, in
   }
 
   if (invariantCheck.brokerNet === 0) {
-    console.log(`[sierraChart.reconciliation] silent-close auto-reconciliation: setup_id=${cand.setup_id} confidently identified as flattened to 0, but a flat position carries no recoverable price -- cannot auto-write a P&L. Leaving halted for a human.`);
-    return { attempted: false, reason: 'flattened to 0 -- no price to recover', setupId: cand.setup_id };
+    // CHANGED 2026-10-18 (user-approved: handle the ONE-trade case automatically). A flatten-to-0 carries no
+    // broker price, so the exit is recorded WITHOUT a price (avg_fill_price NULL, so recordBrokerPnlForSetup()
+    // never turns it into broker_pnl) and the NQ range since the last position reading that showed it open is
+    // stored as an ESTIMATE only. The synthetic row's RECON-FLAT- id makes getAppExpectedNet() count it, so app
+    // and broker agree again. Any resting protective stop/target is canceled (a leftover stop on a position that
+    // no longer exists could open an unwanted one later). The halt rules themselves are untouched.
+    const stopStatus = await getStopStatus(cand.setup_id);
+    const targetStatus = await getLegStatus(cand.setup_id, 'TARGET');
+    await cancelRestingStop(dtcClient, cand.setup_id, stopStatus, 'position closed at the broker without an order message');
+    await cancelRestingLeg(dtcClient, cand.setup_id, targetStatus, 'position closed at the broker without an order message');
+    const est = await estimateFlatCloseRange();
+    const exitClientOrderId = `RECON-FLAT-X${cand.setup_id}-${Date.now()}`;
+    const exitSide = cand.side === 'BUY' ? 'SELL' : 'BUY';
+    const provenance = {
+      _synthetic: true,
+      note: 'Auto-reconciled flatten-to-0: the broker confirmed this position is gone but sent no order message. NOT a real broker fill; no exit price is known. estimate is informational only.',
+      detectedAt: new Date().toISOString(),
+      invariantCheck: { brokerNet: invariantCheck.brokerNet, expectedNet: invariantCheck.expectedNet },
+      estimate: est,
+    };
+    const ins = await query(`
+      INSERT INTO order_placements
+        (setup_id, purpose, client_order_id, symbol, exchange, side, order_type, quantity,
+         trade_account, environment_service, status, filled_quantity, avg_fill_price, position_open, raw_last_order_update)
+      VALUES ($1,'EXIT',$2,$3,$4,$5,'MARKET',$6,$7,$8,'FILLED',$6,NULL,FALSE,$9)
+      ON CONFLICT DO NOTHING RETURNING id`,
+      [cand.setup_id, exitClientOrderId, cand.symbol, cand.exchange, exitSide, cand.filled_quantity,
+       cand.trade_account, cand.environment_service, JSON.stringify(provenance)]);
+    if (ins.rows.length === 0) return { attempted: false, reason: 'flat-close EXIT insert conflicted', setupId: cand.setup_id };
+    await query(`UPDATE order_placements SET position_open = FALSE WHERE setup_id = $1 AND purpose = 'ENTRY'`, [cand.setup_id]);
+    await recordFlatCloseEstimate(cand, est);
+    console.error(`[sierraChart.reconciliation] SILENT-CLOSE (flat) AUTO-RECONCILED setup_id=${cand.setup_id}: the broker is flat with no order message; recorded a priceless synthetic exit${est ? ` (NQ range since last open reading ${est.lo}-${est.hi}, estimate only)` : ''}. broker_pnl NOT written.`);
+    return { attempted: true, kind: 'FLAT_ESTIMATED', setupId: cand.setup_id, estimate: est };
   }
 
   // Flatten-and-reverse: a real, non-zero, priced settled position exists for the NEW
@@ -1460,6 +1493,16 @@ export async function runReconciliation(dtcClient, killSwitch, symbol, trigger) 
         console.error('[sierraChart.reconciliation] silent-close auto-reconciliation threw (halt remains in place, no bookkeeping change applied):', err.message);
         return { attempted: false, reason: `threw: ${err.message}` };
       });
+    }
+
+    // Tell the user as soon as something could not be fixed automatically -- before a second issue stacks on
+    // it. (A confirmed mismatch also halts real orders above, exactly as before.)
+    if (invariantCheck.checked && !invariantCheck.match && !(silentCloseResult && silentCloseResult.attempted)) {
+      const why = silentCloseResult?.reason || '';
+      const { brokerNet, expectedNet } = invariantCheck;
+      const moreThanExpected = Math.abs(brokerNet) > Math.abs(expectedNet) || (brokerNet !== 0 && Math.sign(brokerNet) !== Math.sign(expectedNet));
+      const kind = /candidates \(need exactly 1\)/.test(why) ? 'MULTIPLE_OPEN_TRADES_UNCLEAR' : moreThanExpected ? 'EXTRA_EXPOSURE' : 'CLOSE_NOT_FIXABLE';
+      await raiseBrokerAttention(kind, { brokerNet, expectedNet, why: why || null });
     }
 
     await persistReconciliationFinding(trigger, reconciliationReport, invariantCheck, silentCloseResult)

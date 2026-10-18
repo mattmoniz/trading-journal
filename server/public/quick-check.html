@@ -145,6 +145,10 @@
      the user wants one alert concept shown in two places. */
   #order-lifecycle-banner { display: none; border: 1.5px solid rgba(248,113,113,0.5); border-radius: 8px; padding: 12px 14px; background: rgba(248,113,113,0.08); margin-bottom: 14px; }
   #order-lifecycle-banner.visible { display: block; }
+  #broker-attention-banner { display: none; border: 1.5px solid rgba(250,204,21,0.55); border-radius: 8px; padding: 12px 14px; background: rgba(250,204,21,0.08); margin-bottom: 14px; font-size: 12px; line-height: 1.5; color: var(--text); }
+  #broker-attention-banner.visible { display: block; }
+  #broker-attention-banner .ba-title { font-weight: 700; margin: 6px 0 4px; }
+  #broker-attention-banner ol { margin: 4px 0 0 18px; padding: 0; }
   .ol-banner-tag { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: var(--red); background: rgba(248,113,113,0.15); padding: 2px 7px; border-radius: 4px; flex-shrink: 0; }
 
   /* Session timeline -- .tab-head/.tab-body added 2026-09-29 (Shadow/Blocked tabs) so those
@@ -356,6 +360,7 @@
 
 <div class="wrap">
   <div id="order-lifecycle-banner"></div>
+  <div id="broker-attention-banner"></div>
   <div id="info-chips-row">
     <div id="vol-regime-card" onclick="openVolRegimeHistoryModal()"></div>
     <div id="pulse-reading-card"></div>
@@ -3823,10 +3828,41 @@ function renderOrderLifecycleBanner(d) {
   el.className = 'visible';
 }
 
+// "Sierra needs you" banner (2026-10-18): a broker problem the app could not fix by itself, with plain
+// steps. Built with textContent only (the message text comes from the server). Clears on its own once the
+// app and broker positions agree again; a failed lookup says so rather than showing nothing.
+function renderBrokerAttentionBanner(d) {
+  const el = $('broker-attention-banner');
+  if (!el) return;
+  el.textContent = '';
+  if (d.brokerAttentionError) {
+    el.textContent = 'Could not check for broker problems -- do not assume everything is fine.';
+    el.className = 'visible';
+    return;
+  }
+  const a = d.brokerAttention;
+  if (!a) { el.className = ''; return; }
+  const tag = document.createElement('span');
+  tag.className = 'ol-banner-tag';
+  tag.style.color = 'var(--amber)';
+  tag.textContent = 'SIERRA NEEDS YOU';
+  const since = document.createElement('span');
+  since.style.cssText = 'margin-left:8px;color:var(--dim);';
+  since.textContent = 'since ' + a.since;
+  const title = document.createElement('div');
+  title.className = 'ba-title';
+  title.textContent = a.title;
+  const ol = document.createElement('ol');
+  for (const step of a.steps || []) { const li = document.createElement('li'); li.textContent = step; ol.appendChild(li); }
+  el.appendChild(tag); el.appendChild(since); el.appendChild(title); el.appendChild(ol);
+  el.className = 'visible';
+}
+
 async function checkFlagsBanner() {
   try {
     const d = await fetch('/api/setups/live-flags', { cache: 'no-store' }).then(r => r.json());
     renderOrderLifecycleBanner(d);
+    renderBrokerAttentionBanner(d);
     const lines = [];
     let color = '#4ade80';
     if (d.sierraArmed === false) {

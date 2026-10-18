@@ -13,7 +13,7 @@
 
 import { DtcClient } from './dtcClient.js';
 import { killSwitch } from './orderEligibility.js';
-import { handleOrderUpdate, runReconciliation } from './reconciliation.js';
+import { handleOrderUpdate, runReconciliation, extractPositionForSymbol } from './reconciliation.js';
 import { resolveMnqFrontMonthSymbolFromEnv } from './contractSymbol.js';
 import { query } from '../../db.js';
 
@@ -29,6 +29,40 @@ const RECONNECT_DELAY_MS = 10000;
 // covers a quiet night with zero real order activity at all, where the event-driven
 // (terminal-transition-triggered) path below would otherwise never fire.
 const PERIODIC_RECONCILE_MS = 15 * 60 * 1000;
+
+// Position sampler (2026-10-18, user-approved): the app only read the broker's position on order events and
+// every 15 min, so Friday's silent close was only bracketed to an 86-second window. This asks for POSITIONS
+// ONLY every 15s (never open orders -- those replies would be replayed through handleOrderUpdate() and
+// appended to the order-message log every tick) and writes a reconciliation-log row only when the net
+// CHANGES, so the log stays small while the time a position changed is known to ~15s. It never halts,
+// places, or cancels anything; brokerPnlResolver.js reads these rows as extra broker readings.
+const POSITION_SAMPLE_MS = 15 * 1000;
+let positionSampleTimer = null;
+let lastSampledNet;
+
+async function samplePosition() {
+  if (!client || !client.isLive()) return;
+  try {
+    const todayQ = await query(`SELECT CURRENT_DATE::text as today`);
+    const symbol = resolveMnqFrontMonthSymbolFromEnv(todayQ.rows[0].today).orderSymbol;
+    const positionMessages = [];
+    const onPosition = (msg) => { positionMessages.push(msg); };
+    client.on('positionUpdate', onPosition);
+    client.requestCurrentPositions();
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    client.off('positionUpdate', onPosition);
+    const net = extractPositionForSymbol(positionMessages, symbol);
+    if (net == null || net === lastSampledNet) return;
+    lastSampledNet = net;
+    await query(`INSERT INTO sierra_chart_reconciliation_log (trigger, report, broker_net) VALUES ('POSITION_SAMPLE', '{}'::jsonb, $1)`, [net]);
+  } catch (err) {
+    console.error('[sierraChart.connectionManager] position sample failed:', err.message);
+  }
+}
+
+function stopPositionSampler() {
+  if (positionSampleTimer) { clearInterval(positionSampleTimer); positionSampleTimer = null; }
+}
 
 function buildClient() {
   const host = process.env.DTC_HOST;
@@ -115,6 +149,12 @@ async function triggerReconciliation(trigger) {
     // just on the next full reconnect. See this function's own header for the full reasoning
     // and the DTC_AUTO_REARM_SAFE scope gate that still fully applies here.
     maybeAutoRearmAfterReconcile();
+    // After the app closed out a trade the broker had already closed, re-check right away so app and broker
+    // are seen agreeing and the existing sim auto-rearm gate can act within seconds, not on the next tick.
+    // One follow-up only (never chains from itself).
+    if (result.silentCloseResult?.attempted && trigger !== 'POST_SILENT_CLOSE') {
+      setTimeout(() => triggerReconciliation('POST_SILENT_CLOSE'), 2000);
+    }
   } catch (err) {
     console.error(`[sierraChart.connectionManager] runReconciliation (${trigger}) failed:`, err);
   }
@@ -142,6 +182,7 @@ async function connectOnce() {
   client.on('disconnected', (reason) => {
     console.error(`[sierraChart.connectionManager] disconnected: ${reason} -- reconnecting in ${RECONNECT_DELAY_MS / 1000}s`);
     stopPeriodicReconcile();
+    stopPositionSampler();
     scheduleReconnect();
   });
   client.on('logon', async (msg) => {
@@ -157,6 +198,9 @@ async function connectOnce() {
     // it fresh on every (re)logon so a reconnect never ends up with two overlapping timers.
     stopPeriodicReconcile();
     periodicReconcileTimer = setInterval(() => triggerReconciliation('PERIODIC'), PERIODIC_RECONCILE_MS);
+    stopPositionSampler();
+    lastSampledNet = undefined;
+    positionSampleTimer = setInterval(samplePosition, POSITION_SAMPLE_MS);
   });
   try { await client.connect(); }
   catch (err) { console.error('[sierraChart.connectionManager] connect failed:', err.message); scheduleReconnect(); }
