@@ -7408,7 +7408,7 @@ export default function createACDRouter(io) {
           SELECT DISTINCT ON (sid) sid, gate_name, gate_reason FROM (
             SELECT (regexp_match(gate_reason, '^setup_id=([0-9]+) '))[1]::int AS sid, gate_name, gate_reason, evaluated_at
             FROM gated_candidates
-            WHERE gate_name IN ('SIERRA_ENTRY_SKIP','SIERRA_EXIT_REFUSED','SIERRA_EXIT_RETIRED')
+            WHERE gate_name IN ('SIERRA_ENTRY_SKIP','SIERRA_EXIT_REFUSED','SIERRA_EXIT_RETIRED','PNL_UNKNOWN_CAUSE')
               AND evaluated_at >= NOW() - interval '4 days'
           ) g WHERE sid = ANY($1) ORDER BY sid, evaluated_at DESC
         `, [activeIds]).catch(() => ({ rows: [] }));
@@ -7421,7 +7421,7 @@ export default function createACDRouter(io) {
           const n = noteById.get(row.id);
           const why = n ? n.gate_reason.replace(/^setup_id=\d+ /, '') : null;
           row.broker_note = eo
-            ? (eo.status === 'FILLED' ? (n && n.gate_name !== 'SIERRA_ENTRY_SKIP' ? 'Filled at broker; exit: ' + why : null) : 'Entry order ' + eo.status + (why ? ' (' + why + ')' : ''))
+            ? (eo.status === 'FILLED' ? (n && n.gate_name !== 'SIERRA_ENTRY_SKIP' ? 'Filled at broker; ' + (n.gate_name === 'PNL_UNKNOWN_CAUSE' ? 'broker P&L unknown -- ' : 'exit: ') + why : null) : 'Entry order ' + eo.status + (why ? ' (' + why + ')' : ''))
             : (why ? 'No broker order: ' + why : 'No broker order placed (no skip reason logged)');
         }
       }

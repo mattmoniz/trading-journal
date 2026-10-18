@@ -15,7 +15,7 @@
 // don't pass `unknownWorstCaseLoss` keep the old behavior (any unknown blocks).
 import { LIVE_INSTRUMENT } from '../../config/instruments.js';
 
-export function dllGateDecision({ realizedBrokerPnl, unknownCount = 0, limit, unknownWorstCaseLoss = null }) {
+export function dllGateDecision({ realizedBrokerPnl, unknownCount = 0, limit, unknownWorstCaseLoss = null, unknownNote = '' }) {
   if (!Number.isFinite(limit) || limit <= 0) return { blocked: false, reason: 'no limit configured' };
   if (!Number.isFinite(realizedBrokerPnl)) return { blocked: false, reason: 'no broker P&L yet -- cannot evaluate' };
   if (realizedBrokerPnl <= -limit) {
@@ -24,12 +24,12 @@ export function dllGateDecision({ realizedBrokerPnl, unknownCount = 0, limit, un
   if (unknownCount > 0 && Number.isFinite(unknownWorstCaseLoss)) {
     const worst = realizedBrokerPnl - unknownWorstCaseLoss;
     if (worst <= -limit) {
-      return { blocked: true, reason: `${unknownCount} trade(s) without broker P&L; known ${realizedBrokerPnl.toFixed(2)} minus worst-case ${unknownWorstCaseLoss.toFixed(2)} reaches limit -${limit}` };
+      return { blocked: true, reason: `${unknownCount} trade(s) without broker P&L${unknownNote}; known ${realizedBrokerPnl.toFixed(2)} minus worst-case ${unknownWorstCaseLoss.toFixed(2)} reaches limit -${limit}` };
     }
     return { blocked: false, reason: `within limit counting ${unknownCount} trade(s) without broker P&L at worst case (-${unknownWorstCaseLoss.toFixed(2)})` };
   }
   if (unknownCount > 0) {
-    return { blocked: true, reason: `${unknownCount} trade(s) still without broker P&L -- cannot confirm the account is within limit` };
+    return { blocked: true, reason: `${unknownCount} trade(s) still without broker P&L -- cannot confirm the account is within limit${unknownNote}` };
   }
   return { blocked: false, reason: 'within limit' };
 }
@@ -49,7 +49,8 @@ export async function evaluateDailyLossLimit(tradeAccount) {
            COUNT(*) FILTER (WHERE a.broker_pnl IS NULL AND a.status <> 'ACTIVE')::int AS unknown,
            COALESCE(SUM(ABS(e.avg_fill_price - a.stop_level) * e.filled_quantity * $2)
              FILTER (WHERE a.broker_pnl IS NULL AND a.status <> 'ACTIVE' AND a.stop_level IS NOT NULL), 0)::float AS unknown_worst,
-           COUNT(*) FILTER (WHERE a.broker_pnl IS NULL AND a.status <> 'ACTIVE' AND a.stop_level IS NULL)::int AS unknown_no_stop
+           COUNT(*) FILTER (WHERE a.broker_pnl IS NULL AND a.status <> 'ACTIVE' AND a.stop_level IS NULL)::int AS unknown_no_stop,
+           COALESCE(ARRAY_AGG(a.id) FILTER (WHERE a.broker_pnl IS NULL AND a.status <> 'ACTIVE'), '{}') AS unknown_ids
     FROM active_setups a
     JOIN order_placements e ON e.setup_id = a.id AND e.purpose = 'ENTRY' AND e.status = 'FILLED' AND e.trade_account = $1
     WHERE a.trade_date = CURRENT_DATE AND a.origin_status = 'ACTIVE'
@@ -57,5 +58,17 @@ export async function evaluateDailyLossLimit(tradeAccount) {
   const row = r.rows[0];
   // A trade with no stop on record has no computable worst case -> fall back to the old fail-closed block.
   const worst = row.unknown_no_stop > 0 ? null : row.unknown_worst;
-  return dllGateDecision({ realizedBrokerPnl: row.realized, unknownCount: row.unknown, limit, unknownWorstCaseLoss: worst });
+  // Say WHY the P&L is unknown (brokerPnlResolver.js), so this reads as a data problem, not a loss-limit one.
+  let unknownNote = '';
+  if (row.unknown_ids.length) {
+    const c = await query(`
+      SELECT DISTINCT ON (sid) sid, gate_reason FROM (
+        SELECT (regexp_match(gate_reason, '^setup_id=([0-9]+) '))[1]::int AS sid, gate_reason, evaluated_at
+        FROM gated_candidates WHERE gate_name = 'PNL_UNKNOWN_CAUSE' AND evaluated_at >= NOW() - interval '4 days') g
+      WHERE sid = ANY($1) ORDER BY sid, evaluated_at DESC`, [row.unknown_ids]);
+    unknownNote = c.rows.length
+      ? ' [NOT a loss-limit breach; cause: ' + c.rows.map(x => x.gate_reason.replace(/^setup_id=\d+ /, '').split(':')[0]).join(', ') + ']'
+      : ' [cause not diagnosed yet]';
+  }
+  return dllGateDecision({ realizedBrokerPnl: row.realized, unknownCount: row.unknown, limit, unknownWorstCaseLoss: worst, unknownNote });
 }
