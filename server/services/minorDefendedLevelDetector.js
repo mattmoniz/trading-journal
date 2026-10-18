@@ -86,6 +86,7 @@ import { getVolumeBaseline } from './touchQuality.js';
 import { cacheGet, cacheSet } from '../lib/cache.js';
 import { getBetClass } from '../config/setupTypes.js';
 import { dropToTimeline, etNaiveTimestampToMs, bucketTo5mBars, buildRollWeekDateSet, walkZigZagAcceptance, isInNewEntryDeadZone, isInRthOpenDeadZone } from './acdShared.js';
+import { getCanonicalLiveStatus } from './setupEligibility.js';
 
 const SWING_WIDTH = 5;
 // Light pre-filter sitting in front of the order-flow signature -- see file header for why
@@ -354,17 +355,27 @@ export async function computeMinorDefendedLevelSignal(todayET, etMin) {
       const expiresAt = new Date(entryDate.getTime() + CONFIG.holdMin * 60000);
       const t1Label = `Minor defended level, order-flow rejection: ${CONFIG.targetMult}x ATR target, ${CONFIG.holdMin}min hold, stop ${CONFIG.stopMult}x touch-extreme`.slice(0, 100);
 
+      // Dynamic live-eligibility check added 2026-10-18 (user request: "give them all the
+      // ability to be promoted" -- this file previously hardcoded 'SHADOW','SHADOW' with NO
+      // promotion path at all. See majorPivotDefendedBreakDetector.js's own version of this
+      // comment for the full context -- same fix, same precedent (ibLowPnrDetector.js/
+      // overnightOrderflowEntryDetector.js), no session-split caveat here (this file is
+      // RTH-only by design, isRTHMod already restricts detection to 570-960).
+      const liveStatus = await getCanonicalLiveStatus(setupType);
+
       const ins = await query(`
         INSERT INTO active_setups (
           trade_date, setup_type, fired_at, expires_at, status, origin_status,
           entry_zone_low, entry_zone_high, stop_level, t1_level, t1_label,
-          price_at_detection, structural_level_touched, structural_level_type, bet_class
-        ) VALUES ($1,$2,$3,$4,'SHADOW','SHADOW',$5,$5,$6,$7,$8,$5,$9,'MINOR_RAW_PIVOT',$10)
+          price_at_detection, structural_level_touched, structural_level_type, bet_class,
+          suppression_reason
+        ) VALUES ($1,$2,$3,$4,$11,$11,$5,$5,$6,$7,$8,$5,$9,'MINOR_RAW_PIVOT',$10,$12)
         ON CONFLICT DO NOTHING
         RETURNING id, trade_date, fired_at::text as fired_at, expires_at::text as expires_at, entry_zone_low, stop_level, t1_level, t1_label
       `, [
         s.entryTsStr.slice(0, 10), setupType, s.entryTsStr, expiresAt.toISOString().slice(0, 19).replace('T', ' '),
         s.entryPrice, stopPx, targetPx, t1Label, s.pivotPrice, getBetClass(setupType),
+        liveStatus.status, liveStatus.reason,
       ]);
       if (ins.rows[0]) {
         try { await dropToTimeline(ins.rows[0]); } catch (_) {}

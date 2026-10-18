@@ -2148,6 +2148,7 @@ function blockedReasonText(s) {
     UNCALIBRATED_TRAIL_VARIANT: 'This setup uses a trailing-exit variant that hasn\'t cleared its own statistical validation yet.',
     LIVE_TIME_WINDOW: 'This setup type is restricted to a specific time-of-day window, and this touch fell outside it.',
     NEW_SIGNAL_UNDER_LIVE_EVALUATION: 'Still being evaluated for live eligibility -- not enough real data yet to decide either way.',
+    PERFORMANCE_BELOW_THRESHOLD: 'A real statistical check on this setup type\'s own trade history found it net-negative -- suppressed until the data improves.',
     SUPPRESSED_OTHER: 'This setup type is currently suppressed (a prior real backtest found it net-negative, or it\'s still under a day-type-specific hold).',
   };
   if (reason && MAP[reason]) return MAP[reason];

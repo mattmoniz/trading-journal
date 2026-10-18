@@ -57,6 +57,7 @@ import { findSwingPoints } from './swingPivots.js';
 import { cacheGet, cacheSet } from '../lib/cache.js';
 import { getBetClass } from '../config/setupTypes.js';
 import { dropToTimeline, etNaiveTimestampToMs, bucketTo5mBars, buildRollWeekDateSet, walkZigZagAcceptance, isInNewEntryDeadZone, isInRthOpenDeadZone } from './acdShared.js';
+import { getCanonicalLiveStatus } from './setupEligibility.js';
 
 const SWING_WIDTH = 5;
 const ZIGZAG_THRESHOLD = 1.5; // x ATR20 -- confirmed sweet spot, both configs peak here
@@ -295,17 +296,39 @@ export async function computeMajorPivotDefendedBreakSignal(todayET) {
       const setupType = `MAJOR_PIVOT_DEFENDED_BREAK_${b.direction}`;
       const t1Label = `${session}-config ${cfg.targetMult}x ATR target, ${cfg.holdMin}min hold (uncapped past session boundary -- see file header)`.slice(0, 100);
 
+      // Dynamic live-eligibility check added 2026-10-18 (user request: "give them all the
+      // ability to be promoted" -- this file previously hardcoded 'SHADOW','SHADOW' with NO
+      // promotion path at all, unlike every other detector in this codebase, which is the
+      // literal reason the user couldn't see why it never went live despite real wins).
+      // getCanonicalLiveStatus() reads backtest_setup_status.mjs's real SETUP_STATUS
+      // recommendation (PROMOTE_ALL_MODE's day-blocked-bootstrap stat gate, same mechanism
+      // the main candidates array uses) -- NOT a bespoke N/EV re-check, matching the
+      // already-established precedent in ibLowPnrDetector.js/overnightOrderflowEntryDetector.js
+      // rather than inventing a 4th copy of this logic.
+      //
+      // CAVEAT, specific to the Globex ("A") config only: OPEN_DECISION
+      // major_pivot_globex_shadow_reeval_pending_20260914 explicitly says this config should
+      // NOT silently go ACTIVE anywhere without a fresh rigor re-check (a strict day-blocked-
+      // bootstrap-vs-full-placebo-range standard found 0/64 stop/target/hold cells cleared the
+      // bar at the real N=24 that existed then). This fix does not special-case that -- both
+      // sessions now go through the same real SETUP_STATUS-driven check, which means the
+      // Globex arm CAN go ACTIVE once real N clears PROMOTE_ALL_MODE's day floor, same as
+      // every other thin-N type. Flagged to the user rather than silently decided either way.
+      const liveStatus = await getCanonicalLiveStatus(setupType);
+
       const ins = await query(`
         INSERT INTO active_setups (
           trade_date, setup_type, fired_at, expires_at, status, origin_status,
           entry_zone_low, entry_zone_high, stop_level, t1_level, t1_label,
-          price_at_detection, structural_level_touched, structural_level_type, bet_class
-        ) VALUES ($1,$2,$3,$4,'SHADOW','SHADOW',$5,$5,$6,$7,$8,$5,$9,'MAJOR_SWING_PIVOT',$10)
+          price_at_detection, structural_level_touched, structural_level_type, bet_class,
+          suppression_reason
+        ) VALUES ($1,$2,$3,$4,$11,$11,$5,$5,$6,$7,$8,$5,$9,'MAJOR_SWING_PIVOT',$10,$12)
         ON CONFLICT DO NOTHING
         RETURNING id, trade_date, fired_at::text as fired_at, expires_at::text as expires_at, entry_zone_low, stop_level, t1_level, t1_label
       `, [
         b.entryTsStr.slice(0, 10), setupType, b.entryTsStr, expiresAt.toISOString().slice(0, 19).replace('T', ' '),
         b.entryPrice, stopPx, targetPx, t1Label, b.pivotPrice, getBetClass(setupType),
+        liveStatus.status, liveStatus.reason,
       ]);
       if (ins.rows[0]) {
         try { await dropToTimeline(ins.rows[0]); } catch (_) {}

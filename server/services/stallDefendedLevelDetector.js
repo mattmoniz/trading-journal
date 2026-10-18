@@ -67,6 +67,7 @@ import { findSwingPoints } from './swingPivots.js';
 import { cacheGet, cacheSet } from '../lib/cache.js';
 import { getBetClass } from '../config/setupTypes.js';
 import { dropToTimeline, etNaiveTimestampToMs, bucketTo5mBars, buildRollWeekDateSet, isInNewEntryDeadZone, isInRthOpenDeadZone } from './acdShared.js';
+import { getCanonicalLiveStatus } from './setupEligibility.js';
 
 // EARNED literals below -- each was chosen from a real parameter sweep tested against
 // real-stop/target EV (not guessed), same category as majorPivotDefendedBreakDetector.js's
@@ -361,17 +362,27 @@ export async function computeStallDefendedLevelSignal(todayET) {
       const setupType = `STALL_DEFENDED_LEVEL_${s.direction}`;
       const t1Label = `RTH stall, ${TARGET_ATR_MULT}x ATR target, ${HOLD_MIN}min hold (uncapped past session boundary)`.slice(0, 100);
 
+      // Dynamic live-eligibility check added 2026-10-18 (user request: "give them all the
+      // ability to be promoted" -- this file previously hardcoded 'SHADOW','SHADOW' with NO
+      // promotion path at all. See majorPivotDefendedBreakDetector.js's own version of this
+      // comment for the full context -- same fix, same precedent (ibLowPnrDetector.js/
+      // overnightOrderflowEntryDetector.js), no session-split caveat here (this file is
+      // RTH-only by design).
+      const liveStatus = await getCanonicalLiveStatus(setupType);
+
       const ins = await query(`
         INSERT INTO active_setups (
           trade_date, setup_type, fired_at, expires_at, status, origin_status,
           entry_zone_low, entry_zone_high, stop_level, t1_level, t1_label,
-          price_at_detection, structural_level_touched, structural_level_type, bet_class
-        ) VALUES ($1,$2,$3,$4,'SHADOW','SHADOW',$5,$5,$6,$7,$8,$5,$9,'STALL_DEFENDED_LEVEL',$10)
+          price_at_detection, structural_level_touched, structural_level_type, bet_class,
+          suppression_reason
+        ) VALUES ($1,$2,$3,$4,$11,$11,$5,$5,$6,$7,$8,$5,$9,'STALL_DEFENDED_LEVEL',$10,$12)
         ON CONFLICT DO NOTHING
         RETURNING id, trade_date, fired_at::text as fired_at, expires_at::text as expires_at, entry_zone_low, stop_level, t1_level, t1_label
       `, [
         s.entryTsStr.slice(0, 10), setupType, s.entryTsStr, expiresAt.toISOString().slice(0, 19).replace('T', ' '),
         s.entryPrice, stopPx, targetPx, t1Label, s.pivotPrice, getBetClass(setupType),
+        liveStatus.status, liveStatus.reason,
       ]);
       if (ins.rows[0]) {
         try { await dropToTimeline(ins.rows[0]); } catch (_) {}
