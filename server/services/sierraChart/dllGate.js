@@ -48,8 +48,10 @@ export async function evaluateDailyLossLimit(tradeAccount) {
     SELECT COALESCE(SUM(a.broker_pnl), 0)::float AS realized,
            COUNT(*) FILTER (WHERE a.broker_pnl IS NULL AND a.status <> 'ACTIVE')::int AS unknown,
            COALESCE(SUM(ABS(e.avg_fill_price - a.stop_level) * e.filled_quantity * $2)
-             FILTER (WHERE a.broker_pnl IS NULL AND a.status <> 'ACTIVE' AND a.stop_level IS NOT NULL), 0)::float AS unknown_worst,
-           COUNT(*) FILTER (WHERE a.broker_pnl IS NULL AND a.status <> 'ACTIVE' AND a.stop_level IS NULL)::int AS unknown_no_stop,
+             FILTER (WHERE a.broker_pnl IS NULL AND a.status <> 'ACTIVE' AND a.stop_level IS NOT NULL AND e.avg_fill_price IS NOT NULL), 0)::float AS unknown_worst,
+           -- A trade with no stop OR no recorded entry fill price has no computable worst case (ABS(NULL - x) is NULL and
+           -- SUM would silently drop it as $0 risk -- DeepSeek review finding 1), so it falls back to block-everything.
+           COUNT(*) FILTER (WHERE a.broker_pnl IS NULL AND a.status <> 'ACTIVE' AND (a.stop_level IS NULL OR e.avg_fill_price IS NULL))::int AS unknown_no_stop,
            COALESCE(ARRAY_AGG(a.id) FILTER (WHERE a.broker_pnl IS NULL AND a.status <> 'ACTIVE'), '{}') AS unknown_ids
     FROM active_setups a
     JOIN order_placements e ON e.setup_id = a.id AND e.purpose = 'ENTRY' AND e.status = 'FILLED' AND e.trade_account = $1

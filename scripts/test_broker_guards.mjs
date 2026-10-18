@@ -8,7 +8,8 @@ assert.equal(brokerExitDecision({ brokerQty: -1, entrySide: 'SELL', filledQuanti
 assert.equal(brokerExitDecision({ brokerQty: 0, entrySide: 'SELL', filledQuantity: 1 }).ok, false); // flat -> refuse
 assert.equal(brokerExitDecision({ brokerQty: 1, entrySide: 'SELL', filledQuantity: 1 }).ok, false); // opposite -> refuse
 assert.equal(brokerExitDecision({ brokerQty: null, entrySide: 'BUY', filledQuantity: 1 }).ok, false); // unknown -> refuse
-assert.equal(brokerExitDecision({ brokerQty: 2, entrySide: 'BUY', filledQuantity: 1 }).ok, false); // wrong size -> refuse
+assert.equal(brokerExitDecision({ brokerQty: 2, entrySide: 'BUY', filledQuantity: 1 }).ok, true); // larger same-direction net is valid under stacking (relaxed 2026-10-13)
+assert.equal(brokerExitDecision({ brokerQty: 1, entrySide: 'BUY', filledQuantity: 2 }).ok, false); // smaller than this setup's own open qty -> refuse
 // DLL: over-limit blocks; within limit with no unknowns passes; unknown P&L now blocks (fixed 2026-10-07,
 // DeepSeek review finding M2) since an unresolved loss could be hiding past the limit.
 assert.equal(dllGateDecision({ realizedBrokerPnl: -400, limit: 400 }).blocked, true);

@@ -223,7 +223,7 @@ export async function sweepUnknownPnl() {
                       AND x.status IN ('PENDING_SUBMIT','SUBMITTED','ORDER_SENT','PENDING_OPEN','OPEN','PARTIALLY_FILLED','PENDING_CANCEL','PENDING_CANCEL_REPLACE'))
       AND NOT EXISTS (SELECT 1 FROM order_placements f WHERE f.setup_id = a.id AND f.client_order_id LIKE 'RECON-FLAT-%')
       AND NOT EXISTS (SELECT 1 FROM gated_candidates g WHERE g.gate_name = 'PNL_UNKNOWN_CAUSE'
-                      AND g.gate_reason LIKE 'setup_id=' || a.id || ' %' AND g.evaluated_at > NOW() - interval '30 minutes')`);
+                      AND g.gate_reason LIKE 'setup_id=' || a.id || ' %' AND g.evaluated_at > NOW() - interval '6 hours')`);
   for (const r of rows.rows) {
     await resolveUnknownBrokerPnl(r.id).catch((err) => console.error(`[sierraChart.pnlResolver] setup_id=${r.id} failed:`, err.message));
   }

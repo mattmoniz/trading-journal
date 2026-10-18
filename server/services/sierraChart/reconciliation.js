@@ -487,14 +487,18 @@ const EXIT_LIVE_STATUSES = ['PENDING_SUBMIT', 'SUBMITTED', 'ORDER_SENT', 'PENDIN
 // App-expected net position on `symbol`: signed sum of filled quantity over real broker orders (those
 // carrying a server_order_id) since the latest invariant baseline. Shared by checkPositionInvariant()
 // and placeExitOrder() so both read the same definition (see the long comment in the invariant).
-async function getAppExpectedNet(symbol) {
+async function getAppExpectedNet(symbol, tradeAccount = null) {
+  // `tradeAccount` (2026-10-18, DeepSeek review): RTH and Globex orders go to DIFFERENT broker accounts and a
+  // broker position read is per account, so the app-side sum must be per account too -- summing both against
+  // one account's read made every exit refuse (and the invariant false-halt) whenever both held the symbol.
   const q = await query(`
     SELECT COALESCE(SUM(filled_quantity * (CASE WHEN side = 'BUY' THEN 1 ELSE -1 END)), 0) AS expected_net
     FROM order_placements
     WHERE symbol = $1
+      AND ($2::text IS NULL OR trade_account = $2::text)
       AND (server_order_id IS NOT NULL OR client_order_id LIKE 'RECON-FLAT-%')
       AND id > (SELECT COALESCE(MAX(baseline_order_id), 0) FROM order_placements_invariant_baseline)
-  `, [symbol]);
+  `, [symbol, tradeAccount]);
   return Number(q.rows[0].expected_net);
 }
 
@@ -511,7 +515,13 @@ async function persistExitGate(setupId, gateName, reason) {
 // Permanently stop retrying an exit whose position the broker verifiably does not hold. Writes a
 // terminal EXIT row with no server_order_id (so the invariant sum ignores it) that sweepExits()'s
 // selection recognises by its RETIRED- client id. No order is sent; nothing is guessed.
-async function retireExit(params, reason, brokerQty) {
+async function retireExit(dtcClient, params, reason, brokerQty, stopStatus, targetStatus) {
+  // The broker is confirmed flat, so any still-resting protective stop/target for this setup is now a naked
+  // order that could open an unwanted position, and its position slot is stale -- clean both up (the same
+  // two things the flat-close branch does; DeepSeek review finding 4).
+  await cancelRestingStop(dtcClient, params.setupId, stopStatus, 'exit retired: broker is flat');
+  await cancelRestingLeg(dtcClient, params.setupId, targetStatus, 'exit retired: broker is flat');
+  await query(`UPDATE order_placements SET position_open = FALSE WHERE setup_id = $1 AND purpose = 'ENTRY'`, [params.setupId]);
   const clientOrderId = `RETIRED-${params.setupId}`;
   await query(`
     INSERT INTO order_placements
@@ -579,16 +589,22 @@ export async function placeExitOrder(dtcClient, params) {
   // broker's position for this symbol is the only thing that knows, so it must agree with
   // this setup's expected open quantity before a market exit is sent. Used as a fail-closed
   // guard only, never to choose side or quantity (see this file's header).
-  let snapshot = await getBrokerSnapshot(dtcClient, { collectWindowMs: 3000 });
-  let brokerQty = extractPositionForSymbol(snapshot.positionMessages, params.symbol);
-  let guard = brokerExitDecision({ brokerQty, entrySide: side, filledQuantity });
-  if (!guard.ok && brokerQty != null) {
-    // One fresh re-read before concluding the position isn't open: the broker's position feed can
-    // trail an ORDER_UPDATE by a moment (same race checkPositionInvariant() retries for).
+  // Read the broker position for THIS setup's own trade account (2026-10-18, DeepSeek review): the old read
+  // always asked the client's logon (RTH) account, so a Globex-account position was invisible here.
+  const acct = params.tradeAccount || undefined;
+  const readOnce = async () => {
+    const snap = await getBrokerSnapshot(dtcClient, { collectWindowMs: 3000, tradeAccount: acct });
+    const qty = extractPositionForSymbol(snap.positionMessages, params.symbol, acct);
+    const g = brokerExitDecision({ brokerQty: qty, entrySide: side, filledQuantity });
+    const exp = await getAppExpectedNet(params.symbol, acct ?? null);
+    return { brokerQty: qty, guard: g, expectedNet: exp };
+  };
+  let { brokerQty, guard, expectedNet } = await readOnce();
+  if (brokerQty != null && (!guard.ok || Number(brokerQty) !== expectedNet)) {
+    // One fresh re-read before refusing or retiring: the broker's position feed can trail an ORDER_UPDATE (or
+    // another setup's just-recorded exit) by a moment -- same race checkPositionInvariant() retries for.
     await new Promise(resolve => setTimeout(resolve, INVARIANT_RETRY_DELAY_MS));
-    snapshot = await getBrokerSnapshot(dtcClient, { collectWindowMs: 3000 });
-    brokerQty = extractPositionForSymbol(snapshot.positionMessages, params.symbol);
-    guard = brokerExitDecision({ brokerQty, entrySide: side, filledQuantity });
+    ({ brokerQty, guard, expectedNet } = await readOnce());
   }
   // CHANGED 2026-10-18 (live-trade outage Thu/Fri, found from order_placements timestamps): the
   // old behaviour was refuse-and-retry-forever, AFTER already canceling this setup's protective
@@ -604,10 +620,11 @@ export async function placeExitOrder(dtcClient, params) {
   if (!guard.ok) {
     await persistExitGate(params.setupId, 'SIERRA_EXIT_REFUSED', guard.reason);
     console.error(`[sierraChart.reconciliation] setup_id=${params.setupId}: REFUSED market exit -- ${guard.reason}. Nothing sent. Check the broker's position and order history directly.`);
-    if (brokerQty != null) return await retireExit(params, 'broker does not hold this setup\'s position: ' + guard.reason, brokerQty);
+    // Retire ONLY on an explicit flat reading (a NoPositions reply == 0), never on a sign mismatch or a null:
+    // DeepSeek review -- a wrong retirement leaves a real position with no exit ever placed.
+    if (brokerQty === 0) return await retireExit(dtcClient, params, 'broker reports flat: ' + guard.reason, brokerQty, stopStatus, targetStatus);
     return { action: 'REFUSED_BROKER_MISMATCH', reason: guard.reason, brokerQty };
   }
-  const expectedNet = await getAppExpectedNet(params.symbol);
   if (Number(brokerQty) !== expectedNet) {
     const reason = `broker net ${brokerQty} != app-expected net ${expectedNet} -- cannot tell which setup this position belongs to`;
     await persistExitGate(params.setupId, 'SIERRA_EXIT_REFUSED', reason);
@@ -862,8 +879,26 @@ async function applyOrderUpdate(msg, dtcClient) {
       if (existingStop) {
         console.log(`[sierraChart.reconciliation] setup_id=${row.setup_id}: ENTRY filled, STOP row already exists (bracket child) -- skipping standalone STOP placement.`);
       } else {
-        const stopQ = await query(`SELECT stop_level FROM active_setups WHERE id = $1`, [row.setup_id]);
-        const stopLevel = stopQ.rows[0]?.stop_level != null ? Number(stopQ.rows[0].stop_level) : null;
+        const stopQ = await query(`SELECT stop_level, entry_zone_low FROM active_setups WHERE id = $1`, [row.setup_id]);
+        let stopLevel = stopQ.rows[0]?.stop_level != null ? Number(stopQ.rows[0].stop_level) : null;
+        // Gap guard (DeepSeek review finding 7): a MARKET entry can fill past the pre-computed stop level
+        // (stop_level was derived from the detection price). Placing it as-is puts a marketable stop on the
+        // wrong side of the fill, which stops the position out instantly. If so, keep the calibrated RISK
+        // DISTANCE (|entry_zone_low - stop_level|) but measure it from the real fill price instead.
+        const fillQ = await query(`SELECT avg_fill_price FROM order_placements WHERE id = $1`, [row.id]);
+        const fillPx = fillQ.rows[0]?.avg_fill_price != null ? Number(fillQ.rows[0].avg_fill_price) : null;
+        const entryLevel = stopQ.rows[0]?.entry_zone_low != null ? Number(stopQ.rows[0].entry_zone_low) : null;
+        if (stopLevel != null && Number.isFinite(fillPx) && Number.isFinite(entryLevel)) {
+          const isLong = row.side === 'BUY';
+          const inverted = isLong ? stopLevel >= fillPx : stopLevel <= fillPx;
+          if (inverted) {
+            const dist = Math.abs(entryLevel - stopLevel);
+            const adjusted = isLong ? fillPx - dist : fillPx + dist;
+            console.error(`[sierraChart.reconciliation] setup_id=${row.setup_id}: entry filled at ${fillPx}, past the planned stop ${stopLevel} -- placing the stop at ${adjusted} (same ${dist}pt risk distance from the real fill) instead of an instantly-triggering one.`);
+            await persistExitGate(row.setup_id, 'SIERRA_STOP_ADJUSTED', `fill ${fillPx} past planned stop ${stopLevel}; stop placed at ${adjusted} (risk distance ${dist}pt kept)`);
+            stopLevel = adjusted;
+          }
+        }
         if (stopLevel == null) {
           console.error(`[sierraChart.reconciliation] setup_id=${row.setup_id}: ENTRY filled but active_setups.stop_level is null -- NO real broker-side stop placed. Position is UNPROTECTED at the broker; this app's own internal exit logic is the only remaining protection. Investigate directly.`);
         } else {
@@ -943,7 +978,21 @@ export async function checkEntryGates(side) {
  * could make the reconciliation report and the invariant check disagree with each other,
  * both claiming to describe "right now").
  */
-export function getBrokerSnapshot(dtcClient, { collectWindowMs = 4000 } = {}) {
+// Snapshots are SERIALIZED (2026-10-18, DeepSeek review of the exit fix): every snapshot listens on the one
+// shared 'positionUpdate'/'orderUpdate' stream, so two overlapping snapshots for DIFFERENT trade accounts
+// (RTH account + Globex account are both in real use) would see each other's replies. One at a time.
+let snapshotChain = Promise.resolve();
+
+// `tradeAccount` (optional): which account to ask about; defaults to the client's own logon account, which
+// is what every pre-2026-10-18 caller got -- so a Globex-account position was NEVER visible to the exit
+// guard, and 135275's exit sat refused ~8h until an unrelated RTH-account position opened.
+export function getBrokerSnapshot(dtcClient, opts = {}) {
+  const run = snapshotChain.then(() => collectBrokerSnapshot(dtcClient, opts));
+  snapshotChain = run.catch(() => {});
+  return run;
+}
+
+function collectBrokerSnapshot(dtcClient, { collectWindowMs = 4000, tradeAccount } = {}) {
   return new Promise((resolve) => {
     const openOrders = [];
     const positionMessages = [];
@@ -958,8 +1007,15 @@ export function getBrokerSnapshot(dtcClient, { collectWindowMs = 4000 } = {}) {
     const onPositionUpdate = (msg) => { positionMessages.push(msg); };
     dtcClient.on('orderUpdate', onOrderUpdate);
     dtcClient.on('positionUpdate', onPositionUpdate);
-    dtcClient.requestOpenOrders();
-    dtcClient.requestCurrentPositions();
+    try {
+      dtcClient.requestOpenOrders(tradeAccount);
+      dtcClient.requestCurrentPositions(tradeAccount);
+    } catch (err) {
+      dtcClient.off('orderUpdate', onOrderUpdate);
+      dtcClient.off('positionUpdate', onPositionUpdate);
+      resolve({ openOrders, positionMessages });
+      return;
+    }
     setTimeout(() => {
       dtcClient.off('orderUpdate', onOrderUpdate);
       dtcClient.off('positionUpdate', onPositionUpdate);
@@ -993,9 +1049,12 @@ function _bareSymbol(symbol) {
  * to a bare-symbol match (exact match tried first, in case some account DOES echo the
  * combined form) -- this does not weaken the guard's intent (still refuses on a genuine
  * quantity/side mismatch), it only fixes which broker message counts as "this symbol". */
-export function extractPositionForSymbol(positionMessages, symbol) {
+export function extractPositionForSymbol(positionMessages, symbol, tradeAccount) {
   const bare = _bareSymbol(symbol);
-  const msg = positionMessages.find((p) => p.Symbol === symbol || p.Symbol === bare);
+  // `tradeAccount` (2026-10-18): ignore a reply that names a DIFFERENT account (a message with no account
+  // field is accepted -- snapshots are serialized, so it belongs to the request just made).
+  const msg = positionMessages.find((p) => (p.Symbol === symbol || p.Symbol === bare)
+    && (!tradeAccount || !p.TradeAccount || p.TradeAccount === tradeAccount));
   if (!msg) return null;
   return msg.NoPositions ? 0 : msg.Quantity;
 }
@@ -1126,11 +1185,15 @@ export async function checkPositionInvariant(dtcClient, killSwitch, symbol, snap
   // made expectedNet read -2 when the real open exposure was -1. Filtering on server_order_id
   // fixes this at the root for every future reconstruction/manual-bookkeeping row of this shape,
   // not just this one instance -- no baseline bump needed.
-  const expectedNet = await getAppExpectedNet(symbol);
+  // Scoped to the client's own logon account (2026-10-18, DeepSeek review): this snapshot is requested for that
+  // one account, so the app-side sum must be that account's only -- summing RTH + Globex fills against one
+  // account's reading false-halted whenever both held the symbol. Other accounts are checked below.
+  const mainAcct = dtcClient?.tradeAccount || null;
+  const expectedNet = await getAppExpectedNet(symbol, mainAcct);
 
   const resolvedSnapshot = snapshot || (dtcClient?.isLoggedOn ? await getBrokerSnapshot(dtcClient) : { positionMessages: [] });
   const { positionMessages } = resolvedSnapshot;
-  const brokerNet = extractPositionForSymbol(positionMessages, symbol);
+  const brokerNet = extractPositionForSymbol(positionMessages, symbol, mainAcct);
   if (brokerNet == null) return { checked: false, reason: 'no broker response' };
 
   let match = brokerNet === expectedNet;
@@ -1157,7 +1220,7 @@ export async function checkPositionInvariant(dtcClient, killSwitch, symbol, snap
     // firing on a timing artifact that resolves itself within about a second.
     await new Promise(resolve => setTimeout(resolve, INVARIANT_RETRY_DELAY_MS));
     const retrySnapshot = await getBrokerSnapshot(dtcClient);
-    const retryBrokerNet = extractPositionForSymbol(retrySnapshot.positionMessages, symbol);
+    const retryBrokerNet = extractPositionForSymbol(retrySnapshot.positionMessages, symbol, mainAcct);
     if (retryBrokerNet === expectedNet) {
       console.log(`[sierraChart.reconciliation] position invariant mismatch on ${symbol} resolved on retry (broker now reports ${retryBrokerNet}, matches expected ${expectedNet}) -- a timing race against the broker's own position feed, not a real mismatch. Not halting.`);
       match = true;
@@ -1173,7 +1236,36 @@ export async function checkPositionInvariant(dtcClient, killSwitch, symbol, snap
     killSwitch.halt(`position invariant mismatch on ${symbol}: broker=${finalBrokerNet}, app-expected=${expectedNet}`, 'system-invariant-check');
     console.error(`[sierraChart.reconciliation] POSITION INVARIANT MISMATCH on ${symbol}: broker reports net ${finalBrokerNet}, this app's own fill records expect ${expectedNet}. Kill switch halted. Investigate directly in Sierra Chart before re-arming.`);
   }
+  await checkOtherAccountsInvariant(dtcClient, killSwitch, symbol, mainAcct);
   return { checked: true, match, brokerNet: finalBrokerNet, expectedNet, freshSnapshot };
+}
+
+// Every OTHER trade account this app has placed orders on (the Globex account is a real, separate broker
+// account) gets the same halt-on-mismatch check, but only when the app believes it holds a position there --
+// a flat expectation with no broker reply is "unknown", not a mismatch, same as the main account. One fresh
+// re-read before halting. Never throws (a failure here must not abort the reconciliation).
+async function checkOtherAccountsInvariant(dtcClient, killSwitch, symbol, mainAcct) {
+  try {
+    if (!dtcClient?.isLoggedOn) return;
+    const others = await query(`
+      SELECT DISTINCT trade_account FROM order_placements
+      WHERE symbol = $1 AND trade_account IS NOT NULL AND ($2::text IS NULL OR trade_account <> $2::text)
+        AND id > (SELECT COALESCE(MAX(baseline_order_id), 0) FROM order_placements_invariant_baseline)`, [symbol, mainAcct]);
+    for (const { trade_account: acct } of others.rows) {
+      const expected = await getAppExpectedNet(symbol, acct);
+      if (expected === 0) continue;
+      let net = extractPositionForSymbol((await getBrokerSnapshot(dtcClient, { tradeAccount: acct })).positionMessages, symbol, acct);
+      if (net == null || net === expected) continue;
+      await new Promise(resolve => setTimeout(resolve, INVARIANT_RETRY_DELAY_MS));
+      net = extractPositionForSymbol((await getBrokerSnapshot(dtcClient, { tradeAccount: acct })).positionMessages, symbol, acct);
+      if (net == null || net === expected) continue;
+      killSwitch.halt(`position invariant mismatch on ${symbol} (account ${acct}): broker=${net}, app-expected=${expected}`, 'system-invariant-check');
+      console.error(`[sierraChart.reconciliation] POSITION INVARIANT MISMATCH on ${symbol} for account ${acct}: broker net ${net}, app expects ${expected}. Kill switch halted.`);
+      await raiseBrokerAttention('EXTRA_EXPOSURE', { symbol, account: acct, brokerNet: net, expectedNet: expected });
+    }
+  } catch (err) {
+    console.error('[sierraChart.reconciliation] other-account invariant check failed (ignored):', err.message);
+  }
 }
 
 /**
@@ -1344,6 +1436,16 @@ export async function attemptSilentCloseReconciliation(dtcClient, { snapshot, in
     // stored as an ESTIMATE only. The synthetic row's RECON-FLAT- id makes getAppExpectedNet() count it, so app
     // and broker agree again. Any resting protective stop/target is canceled (a leftover stop on a position that
     // no longer exists could open an unwanted one later). The halt rules themselves are untouched.
+    // Second, independent flat confirmation BEFORE any protection is canceled (DeepSeek review finding 5: one
+    // stale NoPositions reading would have canceled the only stop on a position that was still open, recorded
+    // it closed, and let auto-rearm resume trading). Needs an explicit 0 again from a fresh snapshot.
+    await new Promise(resolve => setTimeout(resolve, INVARIANT_RETRY_DELAY_MS));
+    const confirmSnap = await getBrokerSnapshot(dtcClient, { collectWindowMs: 3000, tradeAccount: cand.trade_account });
+    const confirmNet = extractPositionForSymbol(confirmSnap.positionMessages, symbol, cand.trade_account);
+    if (confirmNet !== 0) {
+      console.error(`[sierraChart.reconciliation] silent-close (flat): setup_id=${cand.setup_id} -- second confirmation read ${confirmNet} instead of an explicit flat; NOT canceling protection or recording a close. Leaving halted for a human.`);
+      return { attempted: false, reason: `second flat confirmation failed (read ${confirmNet})`, setupId: cand.setup_id };
+    }
     const stopStatus = await getStopStatus(cand.setup_id);
     const targetStatus = await getLegStatus(cand.setup_id, 'TARGET');
     await cancelRestingStop(dtcClient, cand.setup_id, stopStatus, 'position closed at the broker without an order message');

@@ -48,10 +48,13 @@ async function samplePosition() {
     const positionMessages = [];
     const onPosition = (msg) => { positionMessages.push(msg); };
     client.on('positionUpdate', onPosition);
-    client.requestCurrentPositions();
-    await new Promise((resolve) => setTimeout(resolve, 1500));
-    client.off('positionUpdate', onPosition);
-    const net = extractPositionForSymbol(positionMessages, symbol);
+    try {
+      client.requestCurrentPositions();
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+    } finally {
+      client.off('positionUpdate', onPosition); // always, even if the request throws (DeepSeek review finding 8)
+    }
+    const net = extractPositionForSymbol(positionMessages, symbol, client.tradeAccount);
     if (net == null || net === lastSampledNet) return;
     lastSampledNet = net;
     await query(`INSERT INTO sierra_chart_reconciliation_log (trigger, report, broker_net) VALUES ('POSITION_SAMPLE', '{}'::jsonb, $1)`, [net]);
