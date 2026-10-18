@@ -122,8 +122,27 @@ const MARKET_ENTRY_SETUP_TYPES = new Set([
   'GLOBEX_VWAP_FADE_LONG', 'GLOBEX_VWAP_FADE_SHORT',
   'RTH_VWAP_FADE_LONG', 'RTH_VWAP_FADE_SHORT',
 ]);
+// EXTENDED 2026-10-18 (user: "I want to see all [non-level trades] fire and fill"). Setups whose entry is
+// simply the price at detection (no fixed level to wait for) fire at MARKET so they fill. In the 21 days
+// before this change those families left 9/19 POC_ROTATION_JOIN, 6/24 STACK_VOL_BREAK_LIVE, 6/31 VWAP_MAGNET
+// and 18/45 case-engine/breakout (18/24 of A_UP_STRONG alone) live rows NOT_FILLED. This deliberately
+// overrides the 2026-10-13 review's "pure slippage, no staleness problem" exclusion (see the EXCLUDED notes
+// above): a limit at the current price can miss the trade entirely, which costs more than a point of
+// slippage. Real LEVEL fades (PD_/CAM_/FLOOR_/OR*/IB_/WS/MS/PW/_OVERNIGHT) are NOT in this list -- the level
+// is the trade, so they stay LIMIT at the level. Prefix match so new LONG/SHORT variants are covered.
+// Tradeoff noted in the review above still applies: stop/target stay at their pre-computed levels, so a
+// market fill can differ from the calibrated stop/target distance.
+const MARKET_ENTRY_PREFIXES = [
+  'POC_ROTATION_JOIN_', 'STACK_VOL_BREAK_LIVE_', 'GLOBEX_VWAP_MAGNET_', 'VWAP_MAGNET_',
+  'MOMENTUM_CHASE_', 'GLOBEX_FLUSH_', 'RTH_FLUSH_',
+  'MAJOR_PIVOT_DEFENDED_BREAK_', 'STALL_DEFENDED_LEVEL_', 'MINOR_DEFENDED_LEVEL_',
+  'OVERNIGHT_ORDERFLOW_', 'OPEN_DRIVE_', 'OPENING_DRIVE_15MIN_', 'FAILED_SWEEP_REVERSAL_',
+  'IB_LOW_PNR_', 'STOP_SWEEP_', 'VWAP_RECLAIM_',
+  'A_UP_STRONG', 'A_DOWN_WEAK', 'C_PAIRED_', 'C_REVERSAL_', 'C_STANDALONE_', 'TRT_', 'FAILED_AUCTION_',
+  'ZONE_EDGE_FADE', 'BRACKET_BREAKOUT_',
+];
 export function wantsMarketEntry(row) {
-  if (!MARKET_ENTRY_SETUP_TYPES.has(row.setup_type)) return false;
+  if (!MARKET_ENTRY_SETUP_TYPES.has(row.setup_type) && !MARKET_ENTRY_PREFIXES.some(p => row.setup_type.startsWith(p))) return false;
   if (row.setup_type.startsWith('GLOBEX_VWAP_FADE_') && row.is_rth === true) return false; // the fixed-entry RTH-hours copy, not the moving-reference Globex-hours one
   return true;
 }
