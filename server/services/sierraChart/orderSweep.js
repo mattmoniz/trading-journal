@@ -217,6 +217,16 @@ async function sweepEntries(dtcClient) {
       AND fired_at > NOW() - make_interval(mins => $1)
       AND NOT EXISTS (SELECT 1 FROM order_placements WHERE setup_id = active_setups.id AND purpose = 'ENTRY')
   `, [ENTRY_LOOKBACK_MINUTES]);
+  // Visibility for a live row that is simply too OLD to enter (2026-10-18: POC_ROTATION_JOIN_LONG 136052 was
+  // inserted 9 minutes after its fire time -- bar/ingest lag or a restart -- so the query above never saw it
+  // and NOTHING recorded why it got no order). Logged as a skip so quick-check's broker note says so.
+  const tooOld = await query(`
+    SELECT id, setup_type FROM active_setups
+    WHERE origin_status = 'ACTIVE' AND status = 'ACTIVE'
+      AND fired_at <= NOW() - make_interval(mins => $1) AND fired_at > NOW() - interval '60 minutes'
+      AND NOT EXISTS (SELECT 1 FROM order_placements WHERE setup_id = active_setups.id AND purpose = 'ENTRY')
+  `, [ENTRY_LOOKBACK_MINUTES]);
+  for (const r of tooOld.rows) await recordEntrySkip(r, `signal older than the ${ENTRY_LOOKBACK_MINUTES}-minute entry window (inserted late, e.g. after a restart or a bar delay) -- not entered`);
   for (const row of rows.rows) {
     try {
       const direction = resolveDirection(row);
@@ -412,6 +422,14 @@ async function sweepExits(dtcClient) {
     FROM active_setups a
     JOIN order_placements e ON e.setup_id = a.id AND e.purpose = 'ENTRY'
     WHERE a.origin_status = 'ACTIVE' AND a.status IN ('RESOLVED','EXPIRED')
+      -- A FILLED entry whose position slot is already released (position_open=FALSE) has nothing left to
+      -- exit: it was closed, retired, or cleared by a baseline reset. Without this, setup 135660 was
+      -- re-checked against the broker every 15s forever (a flat broker sends no position message, so the
+      -- guard could never conclude) -- 2026-10-18.
+      AND NOT (e.status = 'FILLED' AND e.position_open = FALSE)
+      -- Same for an entry that was canceled/rejected with zero fill: no position ever existed (32 old rows
+      -- were logging "nothing left to cancel" every poll).
+      AND NOT (e.status IN ('CANCELED','REJECTED') AND COALESCE(e.filled_quantity, 0) = 0)
       AND NOT EXISTS (
         SELECT 1 FROM order_placements x
         WHERE x.setup_id = a.id AND x.purpose = 'EXIT'
