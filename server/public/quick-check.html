@@ -1267,6 +1267,20 @@ function currentSessionDateET() {
   return nowET.getHours() >= 18 ? nextTradingDayET(nowET) : todayET();
 }
 
+// Start of the current trading session = the most recent 6PM ET, as 'YYYY-MM-DD 18:00:00'
+// (2026-10-18). A row belongs to the current session if its trade_date matches OR it fired since
+// this moment -- GLOBEX_FLUSH_* rows deliberately carry the DEPARTURE day as trade_date, so a
+// 6:10PM fire has the PREVIOUS date and vanished from the timeline once resolved (user: "its 8:32
+// and the globex flush short is not listed"). Same cutoff the /api/setups/today query now uses.
+function currentSessionStartET() {
+  const nowET = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
+  const d = new Date(Date.UTC(nowET.getFullYear(), nowET.getMonth(), nowET.getDate() - (nowET.getHours() >= 18 ? 0 : 1)));
+  return d.toISOString().slice(0, 10) + ' 18:00:00';
+}
+function inCurrentSession(s, sessionDate, sessionStart) {
+  return s.trade_date === sessionDate || s.status === 'SHADOW' || s.status === 'ACTIVE' || (s.fired_at_str || '') >= sessionStart;
+}
+
 let lastRotBadge = null;
 let lastVolPile = null;
 // Live NQ price, kept for computing unrealized P&L on still-open trade cards (2026-09-22,
@@ -1775,7 +1789,7 @@ function renderTimeline() {
   // from piling up past 6PM, but was never scoped to also protect a trade that's still
   // genuinely open when the session rolls. A trade that hasn't resolved yet should never just
   // disappear because of a date boundary.
-  const scoped = allTimelineRows.filter(s => s.trade_date === sessionDate || s.status === 'SHADOW' || s.status === 'ACTIVE');
+  const scoped = allTimelineRows.filter(s => inCurrentSession(s, sessionDate, currentSessionStartET()));
   // Base filter chain shared by BOTH the 'live' and 'all' populations -- everything except the
   // origin_status condition itself, which is what actually distinguishes them. Extracted 2026-
   // 09-22 (user request: show each tab's own count, same as the Globex tab already does) so
@@ -2138,7 +2152,7 @@ function renderTimeline() {
 function getShadowRows() {
   const sessionDate = currentSessionDateET();
   return allTimelineRows
-    .filter(s => s.trade_date === sessionDate || s.status === 'SHADOW' || s.status === 'ACTIVE')
+    .filter(s => inCurrentSession(s, sessionDate, currentSessionStartET()))
     .filter(s => s.origin_status === 'SHADOW')
     .filter(s => !s.stale_entry_price_basis)
     .filter(s => !s.late_fill_past_expiry_basis)

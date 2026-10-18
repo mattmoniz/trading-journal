@@ -7324,6 +7324,13 @@ export default function createACDRouter(io) {
       // After 6 PM ET Globex starts — include both today's RTH setups AND next day's Globex setups
       const dates = [todayET];
       if (nowET.getHours() >= 18) dates.push(nextTradingDay(nowET));
+      // Start of the CURRENT trading session = the most recent 6PM ET. Rows fired since then are
+      // returned even when their trade_date doesn't match `dates` (2026-10-18, user: "its 8:32 and the
+      // globex flush short is not listed"): globexFlushDetector.js deliberately stamps trade_date with
+      // the DEPARTURE day, so a 6:10PM fire carries the PREVIOUS date and was dropped as soon as it
+      // resolved (and again by the next morning). 17 evening GLOBEX_FLUSH* rows in 30 days.
+      const sessionStartDay = new Date(Date.UTC(nowET.getFullYear(), nowET.getMonth(), nowET.getDate() - (nowET.getHours() >= 18 ? 0 : 1)));
+      const sessionStart = `${sessionStartDay.toISOString().slice(0, 10)} 18:00:00`;
 
       const setupsRes = await query(`
         SELECT s.*,
@@ -7339,8 +7346,8 @@ export default function createACDRouter(io) {
           -- predates fired_at for any other reason) both collapse to 0 via GREATEST.
           GREATEST(0, ROUND(EXTRACT(EPOCH FROM (s.created_at - s.fired_at)) / 60))::int as late_backfill_min
         FROM active_setups s
-        WHERE s.trade_date = ANY($1) ORDER BY s.fired_at
-      `, [dates]);
+        WHERE s.trade_date = ANY($1) OR s.fired_at >= $2::timestamp ORDER BY s.fired_at
+      `, [dates, sessionStart]);
 
       // Cluster-sibling fill check (2026-10-05). A sibling's entry is its own resting level, not the
       // touch price, so an OPEN sibling is only a position once a bar has traded through that entry.
