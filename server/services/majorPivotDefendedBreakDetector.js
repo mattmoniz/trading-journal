@@ -278,14 +278,13 @@ export async function computeMajorPivotDefendedBreakSignal(todayET) {
       // Globex N could never grow past 24 no matter how long the code sat unchanged -- the
       // opposite of every other thin-N mechanism in this codebase, which keeps accumulating real
       // outcome data via SHADOW while suppressed. Re-enabled specifically to fix that: same
-      // (still-disproven) CONFIG.GLOBEX below, still zero live-capital risk (SHADOW is hardcoded,
-      // not eligibility-derived), purely to let real N start growing again from today forward.
-      // OPEN_DECISION major_pivot_globex_shadow_reeval_pending_20260914 tracks re-running the
-      // same rigor standard (major_pivot_globex_regrid_0of64_20260910's method) once real SHADOW
-      // N clears 20 -- do NOT treat any pre-20260914 pooled number as still representative once
-      // this has accumulated new data, and do NOT let this silently go ACTIVE anywhere else in
-      // the codebase without that fresh check (this file itself has no such path, but don't add
-      // one elsewhere without it). RTH arm (config "B") is unaffected, was already SHADOW-only.
+      // (still-disproven) CONFIG.GLOBEX below, purely to let real N start growing again.
+      // UPDATE 2026-10-18 (explicit user decision, OPEN_DECISION major_pivot_globex_shadow_reeval_
+      // pending_20260914 resolved): this arm is NOT held back -- status now comes from
+      // getCanonicalLiveStatus() below, so it can go ACTIVE through the normal PROMOTE_ALL_MODE stat
+      // gate and is suppressed by that same gate if its real day-blocked EV turns confidently
+      // negative. The weak backtest (0/64 cells cleared at N=24) is acknowledged and accepted. Do NOT
+      // treat any pre-20260914 pooled number as representative of the post-re-enable population.
       const cfg = CONFIG[session];
 
       const sign = b.direction === 'LONG' ? 1 : -1;
@@ -306,14 +305,9 @@ export async function computeMajorPivotDefendedBreakSignal(todayET) {
       // already-established precedent in ibLowPnrDetector.js/overnightOrderflowEntryDetector.js
       // rather than inventing a 4th copy of this logic.
       //
-      // CAVEAT, specific to the Globex ("A") config only: OPEN_DECISION
-      // major_pivot_globex_shadow_reeval_pending_20260914 explicitly says this config should
-      // NOT silently go ACTIVE anywhere without a fresh rigor re-check (a strict day-blocked-
-      // bootstrap-vs-full-placebo-range standard found 0/64 stop/target/hold cells cleared the
-      // bar at the real N=24 that existed then). This fix does not special-case that -- both
-      // sessions now go through the same real SETUP_STATUS-driven check, which means the
-      // Globex arm CAN go ACTIVE once real N clears PROMOTE_ALL_MODE's day floor, same as
-      // every other thin-N type. Flagged to the user rather than silently decided either way.
+      // Globex ("A") config: its backtest was weak (0/64 cells cleared a strict standard at N=24), and
+      // the user explicitly chose on 2026-10-18 NOT to hold it back -- both sessions go through the same
+      // SETUP_STATUS-driven check, so the Globex arm can go ACTIVE like every other thin-N type.
       const liveStatus = await getCanonicalLiveStatus(setupType);
 
       const ins = await query(`
