@@ -185,7 +185,22 @@ fi
 # The detection pass / shared-query files are where an innocent-looking change costs seconds per 15s poll (Postgres JIT, VIEW anchors, uncached
 # per-pass lookups: see CLAUDE.md "Detection speed lessons"). Advisory only: it fires when one of the hot files changed (working tree or unpushed).
 hot_re='^server/(routes/acd\.js|db\.js|index\.js|services/(queries|acdCandidateBuilder|touchQuality|levelProximityService|marketPulse)\.js)$'
-hot_changed="$( { printf '%s\n' "$changed_files"; printf '%s\n' "${unpushed_files:-}"; } | grep -E "$hot_re" | sort -u | tr '\n' ' ')"
+# Fires only for a hot-file change that is NOT running yet: an uncommitted edit, or a commit newer than the live server's start. A change the running server
+# already loaded is being watched by the in-server perf watch, so repeating this every turn (76 unpushed commits kept it firing forever, 2026-10-19) is noise.
+hot_wt="$(git status --porcelain 2>/dev/null | awk '{ $1=""; print substr($0,2) }' | grep -E "$hot_re" | sort -u)"
+hot_pending="$hot_wt"
+srv_etimes="$(ps -eo etimes=,args= 2>/dev/null | awk '/node( .*)? server\/index\.js/ && !/grep/ {print $1; exit}')"
+if [ -n "$srv_etimes" ] && [ -n "${upstream:-}" ]; then
+  srv_start=$(( $(date +%s) - srv_etimes ))
+  while IFS= read -r hf; do
+    [ -z "$hf" ] && continue
+    ct="$(git log -1 --format=%ct "$upstream"..HEAD -- "$hf" 2>/dev/null)"
+    [ -n "$ct" ] && [ "$ct" -gt "$srv_start" ] && hot_pending="$(printf '%s\n%s' "$hot_pending" "$hf")"
+  done < <(printf '%s\n' "${unpushed_files:-}" | grep -E "$hot_re" | sort -u)
+else
+  hot_pending="$(printf '%s\n%s' "$hot_pending" "$(printf '%s\n' "${unpushed_files:-}" | grep -E "$hot_re")")"   # no live server found: keep the old, conservative behaviour
+fi
+hot_changed="$(printf '%s\n' "$hot_pending" | sed '/^$/d' | sort -u | tr '\n' ' ')"
 if [ -n "${hot_changed// /}" ]; then
   warnings+=("PERFORMANCE GUARD — hot-path file(s) changed: ${hot_changed}. After the restart the app watches this change itself until RTH and Globex have each been seen for an hour (perf_snapshots, compared with the previous sha's numbers). If the change is meant to make something faster, register that BEFORE restarting: node scripts/perf_expect.mjs <metric> down \"why\". Afterwards run 'node scripts/perf_report.mjs' (per-git-sha medians for DB busy %, detection pass ms, loop stalls, poll outages, row-to-order delay). Any new query on this path should be checked with 'node scripts/explain_check.mjs \"<sql>\"' (flags full scans of big tables and cast-wrapped filters), and a per-pass lookup that is stable for the day belongs in getCached(DAY_CACHE_TTL). The in-server watch raises the 'SLOWER SINCE LAST CHANGE' banner on its own if a metric leaves its pre-change range for 2+ snapshots, and writes a VERDICT when the watch ends.")
 fi
