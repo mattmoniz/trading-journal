@@ -53,6 +53,7 @@ import { resolveDirection } from '../config/setupTypes.js';
 import { LIVE_INSTRUMENT } from '../config/instruments.js';
 import { getCurrentRotationDirection } from './rotation65ptGateShadow.js';
 import { dropToTimeline } from './acdShared.js';
+import { isRotationGateExempt } from '../config/rotationGateExemptions.js';
 
 export async function closeOnRotationFlip(io) {
   try {
@@ -65,6 +66,9 @@ export async function closeOnRotationFlip(io) {
       WHERE a.origin_status = 'ACTIVE' AND a.status = 'ACTIVE' AND a.resolved_at IS NULL
         AND e.filled_quantity > 0
     `).catch(() => ({ rows: [] }));
+    // Exempt families (major defended breaks, RTH/Globex flushes -- user directive 2026-10-19, see config/rotationGateExemptions.js): a 65pt rotation flip never
+    // force-closes them; they exit through their own stop / time exit.
+    openQ.rows = openQ.rows.filter(r => !isRotationGateExempt(r.setup_type));
     if (!openQ.rows.length) return;
 
     // No caching (DeepSeek, item in "getCurrentRotationDirection() caching -- answered"):

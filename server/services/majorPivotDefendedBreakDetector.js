@@ -73,7 +73,9 @@ const ZIGZAG_THRESHOLD = 1.5; // x ATR20 -- confirmed sweet spot, both configs p
 const LOOKBACK_DAYS = 120;
 const RECENT_BREAK_WINDOW_MIN = 60; // only attempt inserting breaks from the last hour -- avoids repeatedly re-processing old breaks every poll
 const CACHE_KEY = 'majorPivotDefendedBreak:zones';
-const CACHE_TTL_MS = 4 * 60 * 1000; // ~once per 5-min bar close, not every 15s poll
+// 60 s (was 4 min, 2026-10-19): with the old 4-minute TTL a break was picked up up to 4 minutes after its bar closed, so the row was always older than the order
+// sweep's 3-minute entry window by the time it existed. The detection query is ~1 s, so once a minute is cheap; it can only find something new when a bar completes.
+const CACHE_TTL_MS = 60 * 1000;
 
 // RTH-config ("B"): stop=1.5x real distance, target=2.5x ATR, hold=720min.
 // Globex-config ("A"): stop=1.0x real distance, target=1.5x ATR, hold=240min.
@@ -81,6 +83,11 @@ const CONFIG = {
   RTH: { stopMult: 1.5, targetMult: 2.5, holdMin: 720 },
   GLOBEX: { stopMult: 1.0, targetMult: 1.5, holdMin: 240 },
 };
+
+// A 5-minute bucket is labelled by its START; the break is only known, and the entry only possible, at the bucket's CLOSE (start + 5 min). Naive ET string arithmetic.
+function plus5m(tsStr) {
+  return new Date(new Date(tsStr.replace(' ', 'T') + 'Z').getTime() + 5 * 60000).toISOString().slice(0, 19).replace('T', ' ');
+}
 
 function etModOf(dateObj) {
   return dateObj.getUTCHours() * 60 + dateObj.getUTCMinutes();
@@ -121,6 +128,11 @@ export async function computeDefendedBreaks(zigzagThreshold = ZIGZAG_THRESHOLD, 
   if (bars1m.length < 50) return [];
 
   const bars5m = bucketTo5mBars(bars1m, { trackOpen: true });
+  // COMPLETED 5-minute bars only (2026-10-19, OPEN_DECISION major_pivot_live_rows_always_miss_3min_entry_window_20261019). bucketTo5mBars() always keeps the
+  // last, unfinished bucket, so a live call used to evaluate a "5-minute bar close" from 2 of its 5 minutes (setup 136299: entry 29947.25 was the 11:26
+  // one-minute close; the bar actually closed 29950). The validated backtest only ever saw completed bars. The last bucket is complete only once its 5th
+  // minute (minute % 5 === 4) has arrived; historical callers are unaffected (their data ends on a complete bucket, or the dropped bucket is the current one).
+  if (bars5m.length && parseInt(bars1m[bars1m.length - 1].tc.substring(14, 16), 10) % 5 !== 4) bars5m.pop();
   if (bars5m.length < SWING_WIDTH * 2 + 5) return [];
 
   const rollDates = buildRollWeekDateSet(bars5m);
@@ -203,7 +215,7 @@ export async function computeDefendedBreaks(zigzagThreshold = ZIGZAG_THRESHOLD, 
           if (bar.close < bot) {
             barsHeld++;
             if (barsHeld === 2) {
-              completedBreaks.push({ pivotPrice: pivot.price, entryTsStr: bar.tsStr, entryPrice: bar.close, direction: 'SHORT', stopPrice: extremePrice + band, streak: denialStreak, atr });
+              completedBreaks.push({ pivotPrice: pivot.price, entryTsStr: bar.tsStr, closeTsStr: plus5m(bar.tsStr), entryPrice: bar.close, direction: 'SHORT', stopPrice: extremePrice + band, streak: denialStreak, atr });
               break;
             }
           } else if (bar.close > top) { denialStreak++; state = 'IDLE'; }
@@ -212,7 +224,7 @@ export async function computeDefendedBreaks(zigzagThreshold = ZIGZAG_THRESHOLD, 
           if (bar.close > top) {
             barsHeld++;
             if (barsHeld === 2) {
-              completedBreaks.push({ pivotPrice: pivot.price, entryTsStr: bar.tsStr, entryPrice: bar.close, direction: 'LONG', stopPrice: extremePrice - band, streak: denialStreak, atr });
+              completedBreaks.push({ pivotPrice: pivot.price, entryTsStr: bar.tsStr, closeTsStr: plus5m(bar.tsStr), entryPrice: bar.close, direction: 'LONG', stopPrice: extremePrice - band, streak: denialStreak, atr });
               break;
             }
           } else if (bar.close < bot) { denialStreak++; state = 'IDLE'; }
@@ -246,16 +258,18 @@ export async function computeMajorPivotDefendedBreakSignal(todayET) {
       // code review 2026-09-10, confirmed by direct calculation before fixing. entryDate below
       // (used for etModOf/expiresAt) is deliberately left as the naive-mislabeled parse -- that
       // usage is self-consistent naive-ET arithmetic and was never actually wrong.
-      const entryMs = etNaiveTimestampToMs(b.entryTsStr);
+      const entryMs = etNaiveTimestampToMs(b.closeTsStr);   // the break is known at the bar CLOSE, not its start
       return nowMs - entryMs <= RECENT_BREAK_WINDOW_MIN * 60000 && nowMs - entryMs >= 0;
     });
     if (!recent.length) return null;
 
     const inserted = [];
     for (const b of recent) {
-      const entryDate = new Date(b.entryTsStr.replace(' ', 'T') + 'Z');
+      const entryDate = new Date(b.closeTsStr.replace(' ', 'T') + 'Z');            // when the entry can actually happen (bar close)
       const entryMod = etModOf(entryDate);
-      const session = isGlobexMod(entryMod) ? 'GLOBEX' : 'RTH';
+      // Session (which stop/target CONFIG) stays classified by the bucket START, exactly as every validating backtest did; the dead zones below use the
+      // entry (close) time, because that is when an order would really go in (a 9:30 bucket closes at 9:35, a 15:55 bucket at 16:00).
+      const session = isGlobexMod(etModOf(new Date(b.entryTsStr.replace(' ', 'T') + 'Z'))) ? 'GLOBEX' : 'RTH';
       // No-new-entries dead zones, RTH only (found 2026-09-26 auditing OPEN_DECISION
       // dead_zone_full_skip_live_verification_pending_20260916 -- user confirmed the intent
       // directly: "the 4-6 area is just a volumeless deadzone that fires random trades that
@@ -320,7 +334,7 @@ export async function computeMajorPivotDefendedBreakSignal(todayET) {
         ON CONFLICT DO NOTHING
         RETURNING id, trade_date, fired_at::text as fired_at, expires_at::text as expires_at, entry_zone_low, stop_level, t1_level, t1_label
       `, [
-        b.entryTsStr.slice(0, 10), setupType, b.entryTsStr, expiresAt.toISOString().slice(0, 19).replace('T', ' '),
+        b.entryTsStr.slice(0, 10), setupType, b.closeTsStr, expiresAt.toISOString().slice(0, 19).replace('T', ' '),
         b.entryPrice, stopPx, targetPx, t1Label, b.pivotPrice, getBetClass(setupType),
         liveStatus.status, liveStatus.reason,
       ]);
