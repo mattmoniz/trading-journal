@@ -1425,7 +1425,8 @@ export async function computeLevelFadeFactors(ctx) {
         // contributor to /api/acd/setup-detection's remaining latency (1.8-6.7s of a
         // ~9-15s total, see docs/OPEN_THREADS.md) — collapsed into one Promise.all,
         // same pattern already applied to the Unified Level Fade Setups section above.
-        const _cachedVwapSigmaPre = getCached(todayET, 'lfVwapSigma');
+        // DAY_CACHE_TTL (2026-10-19): strictly-prior-20-day statistic; the 60 s default made it recompute (~1.5 s) every minute. Only non-null results are ever cached.
+        const _cachedVwapSigmaPre = getCached(todayET, 'lfVwapSigma', DAY_CACHE_TTL);
         const [_lfArRow, _lfPriorQ, _lfSameDirCountQ, _lfNl30Q, _lfVwapSigmaQ, _lfRecencyQ] = await Promise.all([
           query(`SELECT overnight_inventory, open_vs_prior_value FROM auction_reads WHERE trade_date=$1`, [todayET]).catch(() => ({ rows: [] })),
           // origin_status='ACTIVE' added 2026-07-27 (unify_sizemultiplier_into_validated_score) --
@@ -1630,7 +1631,8 @@ export async function computeLevelFadeFactors(ctx) {
         // Against-flow is slightly better than with-flow overall (overextension reversal logic) — only magnitude matters.
         const _lfSessionDelta = allRthBarsRow.rows.reduce((sum, b) => sum + ((b.ask_vol || 0) - (b.bid_vol || 0)), 0);
         const _lfAbsDelta = Math.abs(_lfSessionDelta);
-        const _cachedDeltaPerc = getCached(todayET, 'lfDeltaPerc');
+        // DAY_CACHE_TTL (2026-10-19): percentiles over the prior 60 sessions; the 60 s default recomputed it (~1.9 s) every minute. Only non-null results are cached.
+        const _cachedDeltaPerc = getCached(todayET, 'lfDeltaPerc', DAY_CACHE_TTL);
         let _lfDeltaP25 = _cachedDeltaPerc?.p25 ?? null;
         let _lfDeltaP75 = _cachedDeltaPerc?.p75 ?? null;
         if (_lfDeltaP25 == null) {

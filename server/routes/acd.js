@@ -1302,7 +1302,11 @@ async function fetchDetectionInputs(todayET) {
 
   // Prior-month VA + month open — cached (changes only between months)
   let pmVAH = null, pmVAL = null, pmPOC = null, monthOpen = null;
-  const cachedPmVA = getCached(todayET, 'pmVA');
+  // DAY_CACHE_TTL (2026-10-19): prior-month VA + this month's open cannot change within a day, but the 60 s default recomputed it (~2 s) every
+  // minute. A result still missing the month open or the prior-month VA (e.g. first trading day of a month before the 9:30 bar) is treated as a
+  // miss, so a not-yet-available value can never stick for the whole day.
+  const _pmCached = getCached(todayET, 'pmVA', DAY_CACHE_TTL);
+  const cachedPmVA = _pmCached && _pmCached.monthOpen != null && _pmCached.pmVAH != null ? _pmCached : null;
   if (cachedPmVA) {
     ({ pmVAH, pmVAL, pmPOC, monthOpen } = cachedPmVA);
   } else {
