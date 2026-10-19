@@ -91,15 +91,22 @@ const WATCHDOG_KILL_WINDOW_MS = 30 * 60 * 1000;
 const WATCHDOG_MAX_KILLS_IN_WINDOW = 4;
 let watchdogTimer = null;
 let consecutiveHealthFailures = 0;
+let lastHealthOkAtMs = null;
+let lastHealthCheckOk = null; // null until the first check has run
 const watchdogKillTimes = [];
+
+/** For the live-flags banner (2026-10-18): the ML VETO gate fails closed, so an unhealthy scorer silently turns every live candidate into SHADOW. */
+export function getMlScoringStatus() {
+  return { healthy: lastHealthCheckOk, childAlive: !!child, consecutiveHealthFailures, secondsSinceHealthy: lastHealthOkAtMs ? Math.round((Date.now() - lastHealthOkAtMs) / 1000) : null };
+}
 
 async function checkHealthOnce() {
   try {
     const res = await fetch(`${ML_SCORING_SERVICE_URL}/health`, { signal: AbortSignal.timeout(3000) });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    consecutiveHealthFailures = 0;
+    consecutiveHealthFailures = 0; lastHealthCheckOk = true; lastHealthOkAtMs = Date.now();
   } catch (e) {
-    consecutiveHealthFailures++;
+    consecutiveHealthFailures++; lastHealthCheckOk = false;
     console.error(`[mlScoringServiceManager] health check failed (${consecutiveHealthFailures}/${WATCHDOG_FAIL_THRESHOLD}): ${e.message}`);
     if (consecutiveHealthFailures >= WATCHDOG_FAIL_THRESHOLD && child) {
       const now = Date.now();

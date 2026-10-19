@@ -3921,6 +3921,11 @@ async function checkFlagsBanner() {
       color = color === '#f87171' ? color : '#facc15';
       lines.push('Could not verify price data freshness');
     }
+    // ML VETO scorer (2026-10-18): the gate fails CLOSED, so scorer-down means every live candidate is forced to SHADOW with no other visible sign.
+    if (d.mlScorerHealthy === false) {
+      color = '#f87171';
+      lines.push('ML VETO SCORER DOWN — new candidates are forced to SHADOW (no live orders)');
+    }
     sierraStatus = { color, title: lines.join(' | '), armed: d.sierraArmed === false ? false : true };
   } catch (e) {
     // Visible, not silent (2026-10-05): a failed check shows as a yellow "unknown" dot.
