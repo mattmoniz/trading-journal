@@ -144,7 +144,16 @@ export async function getPriorWeekRange(date) {
 // layer down (a raw bar aggregation instead of a level_prices lookup) -- the RTH-hour
 // requirement now lives INSIDE the subquery that picks the date, so it can only ever pick a
 // date that genuinely has RTH bars, same fix shape as that convention's own >=/ASC pattern.
+const _pdRangeCache = new Map(); // date -> { v, exp } -- strictly-before-date answer, cannot change within a day (2026-10-19: 15 calls x ~3 s in 11 min)
 export async function getPriorDayRthRange(date) {
+  const hit = _pdRangeCache.get(String(date));
+  if (hit && hit.exp > Date.now()) return hit.v;
+  const v = await _getPriorDayRthRangeUncached(date);
+  // Cache only a real answer: the function swallows query errors into nulls, and a transient failure must not stick for 6 hours.
+  if (v.pdHigh != null && v.pdLow != null) _pdRangeCache.set(String(date), { v, exp: Date.now() + 6 * 60 * 60 * 1000 });
+  return v;
+}
+async function _getPriorDayRthRangeUncached(date) {
   // pdClose added 2026-10-12 (marketPulse.js's "net change on the day" chip, user request) --
   // reuses this function's own already-correct prior-trading-day resolution (the inner
   // MAX(ts::date) subquery, which already handles the Monday-after-holiday case per the

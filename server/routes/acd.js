@@ -1144,19 +1144,12 @@ async function detectGlobexSetup(sessionDate, io) {
 // block-scoping footgun) or the write path. Pure relocation of existing logic,
 // behavior-identical -- verified line-for-line via diff before removing the originals.
 
-// Fetches the 10 parallel data-source queries plus the 5 day-cached derived values
-// (prior-day VA, floor pivots, PD-2 VA, prior-month VA + month-open, NL30 state) that
-// runSetupDetection needs before it can do anything else. One-directional: reads inputs,
-// returns a bundle, mutates nothing (the getCached/setCached calls inside are the existing
-// day-cache convention, not a mutation of anything the caller owns).
-async function fetchDetectionInputs(todayET) {
-  const [acdRow, arRow, ltRow, ibBarsRow, latestBarRow, volumeCtxRow, timelineRow, sessionHiLoRow, first15Row, allRthBarsRow] = await Promise.all([
-    // Today's OR levels + ACD/C state
-    query(`SELECT or_high::float, or_low::float, a_up_fired, a_up_level::float, c_up_confirmed, a_down_fired, a_down_level::float, c_down_confirmed FROM acd_daily_log WHERE trade_date=$1`, [todayET]),
-    // Auction reads for today
-    query(`SELECT opening_call_type, open_vs_prior_value FROM auction_reads WHERE trade_date=$1`, [todayET]),
-    // Prior 5 bracket states using actual session High/Low (9:30–16:00)
-    query(`
+// Day-cached (strictly prior days: `ts::date < todayET`, cannot change within the day). The row object is cached whole because
+// getCached() returns null on a miss and the caller reads `.rows`.
+async function getPriorFiveBracketRows(todayET) {
+  const hit = getCached(todayET, 'priorFiveBrackets', DAY_CACHE_TTL);
+  if (hit != null) return hit;
+  const r = await query(`
       WITH dates AS (
         SELECT DISTINCT ts::date as dt FROM price_bars_primary
         WHERE symbol='NQ' AND ts::date < $1
@@ -1170,7 +1163,23 @@ async function fetchDetectionInputs(todayET) {
         AND EXTRACT(hour FROM ts)*60 + EXTRACT(minute FROM ts) BETWEEN 570 AND 960
       GROUP BY ts::date
       ORDER BY trade_date DESC
-    `, [todayET]),
+    `, [todayET]);
+  return setCached(todayET, 'priorFiveBrackets', r);
+}
+
+// Fetches the 10 parallel data-source queries plus the 5 day-cached derived values
+// (prior-day VA, floor pivots, PD-2 VA, prior-month VA + month-open, NL30 state) that
+// runSetupDetection needs before it can do anything else. One-directional: reads inputs,
+// returns a bundle, mutates nothing (the getCached/setCached calls inside are the existing
+// day-cache convention, not a mutation of anything the caller owns).
+async function fetchDetectionInputs(todayET) {
+  const [acdRow, arRow, ltRow, ibBarsRow, latestBarRow, volumeCtxRow, timelineRow, sessionHiLoRow, first15Row, allRthBarsRow] = await Promise.all([
+    // Today's OR levels + ACD/C state
+    query(`SELECT or_high::float, or_low::float, a_up_fired, a_up_level::float, c_up_confirmed, a_down_fired, a_down_level::float, c_down_confirmed FROM acd_daily_log WHERE trade_date=$1`, [todayET]),
+    // Auction reads for today
+    query(`SELECT opening_call_type, open_vs_prior_value FROM auction_reads WHERE trade_date=$1`, [todayET]),
+    // Prior 5 bracket states using actual session High/Low (9:30–16:00). Strictly prior days => day-cached (2026-10-19: ran every poll, ~1.8 s each).
+    getPriorFiveBracketRows(todayET),
     // IB bars (9:30–10:30, the real 60-min Initial Balance, matching ibHighToday/
     // ibLowToday's own BETWEEN 570 AND 629 elsewhere in this file) with bid/ask
     // volume, fed to computeIbBullBear() for the IB_BULLISH/IB_BEARISH read.

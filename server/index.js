@@ -96,6 +96,7 @@ import { run as runMonthlyReport } from '../scripts/monthly_report.js';
 import { runDailyCoaching } from '../scripts/daily_coaching.js';
 
 import { query, getQueryProfile } from './db.js';
+import { cacheGet, cacheSet } from './lib/cache.js';
 import { logProcess } from './lib/processLog.js';
 import { recordDetectionPollResult } from './services/detectionHeartbeat.js';
 import { computeACDFromBars, getBestACDParams, scanAndSaveSetupEvents, computeORLevelsOnly } from './services/acdService.js';
@@ -434,6 +435,10 @@ app.get('/api/errors/recent', (req, res) => {
 app.get('/api/vol-alert', async (req, res) => {
   try {
     const todayET = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+    // 60 s response cache (2026-10-19): ~1.9 s of DB time per call (measured with the query profiler) and it is polled by open pages;
+    // the overnight range and 20-day stats move slowly, so a minute-old answer is indistinguishable for this banner.
+    const cachedBody = cacheGet('vol-alert|' + todayET);
+    if (cachedBody) return res.json(cachedBody);
     const r = await query(`
       WITH today_on AS (
         SELECT
@@ -496,7 +501,7 @@ app.get('/api/vol-alert', async (req, res) => {
     const orSigma = row.or_bar_count > 0 ? (parseFloat(row.or_sigma) || 0) : null;
     const orAlert = orSigma !== null && orSigma >= 1.0;
     const both = onSigma >= 1.0 && orAlert;
-    res.json({
+    const volAlertBody = {
       alert: onSigma >= 1.0 || orAlert,
       // Overnight
       sigma: parseFloat(onSigma.toFixed(2)),
@@ -515,7 +520,9 @@ app.get('/api/vol-alert', async (req, res) => {
       or_threshold: Math.round(parseFloat(row.or_avg_20d) + parseFloat(row.or_std_20d)),
       // Combined flag
       double_alert: both,
-    });
+    };
+    cacheSet('vol-alert|' + todayET, volAlertBody, 60_000);
+    res.json(volAlertBody);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 

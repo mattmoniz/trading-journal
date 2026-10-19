@@ -13,16 +13,29 @@
 // Volume baseline reuses the existing VOLUME_SPIKE convention already in acd.js
 // (90-day trailing per-minute-of-day avg/std z-score) — not a new static threshold.
 
+// Cached per date (2026-10-19): the baseline is a trailing 90-day average strictly BEFORE `date`, so it cannot change within a day, yet
+// it was recomputed 415 times in 11 minutes of RTH (median ~156 ms, up to 3 s) by the live detectors and shadow taggers. The in-flight
+// promise is cached (not the awaited value) so concurrent callers for the same date share one query. Predicates are sargable
+// (`ts >= ..` instead of `ts::date >= ..`): identical rows, lets Postgres use the index on the underlying table.
+const _volBaselineCache = new Map(); // date -> { p: Promise<Map>, exp }
 async function getVolumeBaseline(queryFn, date) {
-  const res = await queryFn(`
-    SELECT (EXTRACT(hour FROM ts)*60 + EXTRACT(minute FROM ts))::int AS mod,
-           AVG(COALESCE(bid_volume,0)+COALESCE(ask_volume,0))::float AS avg_vol,
-           STDDEV(COALESCE(bid_volume,0)+COALESCE(ask_volume,0))::float AS std_vol
-    FROM price_bars_primary
-    WHERE ts::date >= $1::date - INTERVAL '90 days' AND ts::date < $1::date
-    GROUP BY 1
-  `, [date]);
-  return new Map(res.rows.map(r => [r.mod, r]));
+  const key = String(date);
+  const hit = _volBaselineCache.get(key);
+  if (hit && hit.exp > Date.now()) return hit.p;
+  const p = (async () => {
+    const res = await queryFn(`
+      SELECT (EXTRACT(hour FROM ts)*60 + EXTRACT(minute FROM ts))::int AS mod,
+             AVG(COALESCE(bid_volume,0)+COALESCE(ask_volume,0))::float AS avg_vol,
+             STDDEV(COALESCE(bid_volume,0)+COALESCE(ask_volume,0))::float AS std_vol
+      FROM price_bars_primary
+      WHERE ts >= $1::date - INTERVAL '90 days' AND ts < $1::date
+      GROUP BY 1
+    `, [date]);
+    return new Map(res.rows.map(r => [r.mod, r]));
+  })();
+  _volBaselineCache.set(key, { p, exp: Date.now() + 6 * 60 * 60 * 1000 });
+  p.catch(() => _volBaselineCache.delete(key)); // never keep a failed lookup
+  return p;
 }
 
 // windowBars: [{ mod, bid_volume, ask_volume }] — bars 1..W since touch, W = the
