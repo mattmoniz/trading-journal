@@ -24,7 +24,8 @@ export async function loadSessions({ from = '2025-11-20 18:00', to = '2026-10-17
     const bars = S.get(d), g = bars.filter((b) => b.m >= 1080 || b.m < 570), r = bars.filter((b) => b.m >= 570 && b.m < 960);
     if (g.length < 300 || r.length < 300) continue;
     const rng = (a) => Math.max(...a.map((b) => b.h)) - Math.min(...a.map((b) => b.l));
-    sessions.push({ d, roll: isInsideNqRollWeek(d), g, r, gOpen: g[0].o, gClose: g[g.length - 1].c, rOpen: r[0].o, rClose: r[r.length - 1].c, gRng: rng(g), rRng: rng(r), dayRng: rng(bars), lo: Math.min(...bars.map((b) => b.l)), hi: Math.max(...bars.map((b) => b.h)) });
+    const post = bars.filter((b) => b.m >= 960), ext = (a, f, dflt) => (a.length ? f(...a.map((b) => (f === Math.min ? b.l : b.h))) : dflt);
+    sessions.push({ d, roll: isInsideNqRollWeek(d), g, r, postLo: ext(post, Math.min, Infinity), postHi: ext(post, Math.max, -Infinity), gLo: ext(g, Math.min, Infinity), gHi: ext(g, Math.max, -Infinity), rLo: ext(r, Math.min, Infinity), rHi: ext(r, Math.max, -Infinity), lastClose: bars[bars.length - 1].c, gOpen: g[0].o, gClose: g[g.length - 1].c, rOpen: r[0].o, rClose: r[r.length - 1].c, gRng: rng(g), rRng: rng(r), dayRng: rng(bars), lo: Math.min(...bars.map((b) => b.l)), hi: Math.max(...bars.map((b) => b.h)) });
   }
   sessions.forEach((s, i) => { s.i = i; });
   return sessions;
@@ -64,3 +65,18 @@ export function openZonesAsOf(sessions, zones, checkpointMs, px, side) {
   return out.sort((a, b) => a.dist - b.dist);
 }
 export const nextSessionBars = (sessions, i, kind) => (sessions[i + 1] ? sessions[i + 1][kind] : null);
+
+// FAST fill-state: zone fill as of a checkpoint described by (cpIdx, includeG). RTH plan: cpIdx = session index, includeG = true (that session's Globex
+// is before the 09:30 checkpoint). Globex plan: cpIdx = i + 1, includeG = false (nothing of the new session precedes 18:00).
+export function openZonesFast(sessions, zones, cpIdx, includeG, px, side) {
+  const out = [];
+  for (const z of zones) {
+    if (z.i >= cpIdx) continue; if (side === 'BELOW' ? z.hi >= px : z.lo <= px) continue;
+    let reach = side === 'BELOW' ? sessions[z.i].postLo : sessions[z.i].postHi;
+    for (let k = z.i + 1; k < cpIdx; k++) { const s = sessions[k]; const lo = Math.min(s.gLo, s.rLo, s.postLo), hi = Math.max(s.gHi, s.rHi, s.postHi); reach = side === 'BELOW' ? Math.min(reach, lo) : Math.max(reach, hi); }
+    if (includeG && z.i < cpIdx) { const s = sessions[cpIdx]; reach = side === 'BELOW' ? Math.min(reach, s.gLo) : Math.max(reach, s.gHi); }
+    const depth = side === 'BELOW' ? Math.max(0, Math.min(1, (z.hi - Math.min(reach, z.hi)) / (z.hi - z.lo))) : Math.max(0, Math.min(1, (Math.max(reach, z.lo) - z.lo) / (z.hi - z.lo)));
+    if (depth < 1) out.push({ ...z, depth, dist: side === 'BELOW' ? px - z.hi : z.lo - px });
+  }
+  return out.sort((a, b) => a.dist - b.dist);
+}

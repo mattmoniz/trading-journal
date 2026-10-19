@@ -110,3 +110,10 @@ labelled as such, and never replaces these locked results. The 2026-10-11+ holdo
 - L2 (exploratory-or-confirmatory per kill rule): roster rows from active_setups fired after the checkpoint, same session window,
   declustered (siblings kept, user lens) with primaries-only alongside; arms: all, aligned-only, counter-only; ACTIVE+SHADOW, BACKFILL as a separate labelled simulation arm;
   POC_ROTATION_JOIN reported separately; benchmarks: always-short and always-long on the same days (structural-advantage control).
+
+### 10.1 Amendment v1.1 — 2026-10-18 ~21:40 ET, still BEFORE any run
+Arithmetic check on the locked windows: the 60-session percentile baseline plus the 2-session lookback and 20-session normaliser would leave only
+~130 evaluable sessions of the 213 clean ones (roughly 10 episodes per plan), too few to inform anything. Amendment, made without seeing any result:
+every "prior 60 sessions" baseline (Cpct, zone-size median) is an EXPANDING window of the prior sessions up to 60, with a minimum of 25 sessions (zone-size median: 15);
+S's 120-session baseline expands up to 120 with a minimum of 40. Nothing else changes. Honest consequence stated up front: even so the test has tens of
+episodes at best and is underpowered for anything but a large effect; a null here will be "not detectable at this N", not "no effect".
