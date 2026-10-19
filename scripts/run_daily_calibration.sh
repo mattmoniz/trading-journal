@@ -16,6 +16,8 @@ echo "=== Daily calibration: $(date) ==="
 # 2026-09-15 contract-calendar fix, OPEN_DECISION contract_calendar_roll_race_stale_price_20260915).
 
 timed_step daily /usr/bin/node scripts/refresh_price_bars_dedup_hist.mjs
+# Completed-session high/low/range table (2026-10-19, docs/PRICE_BARS_AND_STARTUP_SPEED_SPEC.md Part B1): refresh right after the bar store so tomorrow's ATR / gap lookups read 20 indexed rows.
+timed_step daily /usr/bin/node scripts/build_daily_rth_stats.mjs
 
 # NQ contract-roll health check (2026-09-15, T3-c per OPUS_AUDIT_PROMPT_13's strategic review
 # of the contract-calendar fix, scratch/opus_audit_13_results.md) -- runs right after the
