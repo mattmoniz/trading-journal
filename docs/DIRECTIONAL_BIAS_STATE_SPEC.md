@@ -139,3 +139,21 @@ the only dose-response hint, thin.
 2-session direction beat counter trades regardless of crack size; this is a different, broader hypothesis (a multi-session version of the existing observation-only DirGate/MomFade
 idea), it does NOT replicate in the real/shadow era for RTH, and its simulation arm needs independent verification (BACKFILL quirks) before anything is built. (3) Nothing is wired.
 Held back until the off-peak DeepSeek review of the whole process: any redefinition is post-hoc and must not replace v1.
+
+## 12. POST-HOC REVIEW + ARTIFACT CHECKS (2026-10-19, off-peak DeepSeek review; section 11 results above are UNCHANGED and remain the locked v1 record)
+DeepSeek (full-process review, scratch/deepseek_response_bias_review_20261019.md): no lookahead found in the as-of construction; kill rule legitimate; what was
+killed is "2-session momentum continuation", not "crack size" (C = 2-session return, so d = sign of the prior 2-session direction); nothing should be built;
+SIM-vs-REAL discrepancy is the open question, leading hypothesis BACKFILL artifact (marked by the reviewer as speculation).
+Claims audited against code/data: (1) Globex primary horizon: spec wording "next session's RTH close" is ambiguous; code uses the second RTH close after the 18:00
+checkpoint (S[i+2]); the first-RTH-close horizon (H1) numbers were already printed and give the same null (GLX C-only -90, CI [-229,41]; C&P -125, CI [-425,161]). Not material.
+(2) i.i.d. episode bootstrap vs pre-registered blocking: re-done with a calendar-week CLUSTER bootstrap (scripts/study_bias_state_l2c_artifact_checks.mjs): RTH C-only -5 [-167,153],
+RTH C&P -121 [-269,23], GLX C-only -80 [-302,150], GLX C&P -167 [-550,284]: essentially unchanged, null stands. (3) drift control pools other crack-ON sessions: conservative, not material.
+(4) confirmed (core confound, already in section 11). (5) BACKFILL artifact: tested three ways. The SIM RTH effect is NOT the known BACKFILL timestamp bug (excluding VWAP_MAGNET types: +29.8 vs
++26.9), NOT a time fluke (first half +23.0, second half +30.7), NOT one-directional (crack DOWN +33.7, UP +21.7). But it does NOT replicate in the real era for the same setup families
+with adequate N: OR5_HIGH_FADE SIM +41.0 (n=38/51) vs REAL -2.1 (n=89/84); OR5_LOW_FADE SIM +35.9 vs REAL +2.3 (n=94/53); PD_VAL_FADE SIM +39.9 vs REAL -4.6 (n=47/42); PD_POC_FADE SIM +78.1 vs REAL -0.4
+(n=33/23); mixed elsewhere (OR30_HIGH_FADE REAL +57.1 n=33/34; OR10/OR15 negative). The SIM/REAL same-day overlap is only 5 (type,day) cells: uninformative. Reading: a simulation-era effect that vanishes when the same
+families are traded for real; consistent with a BACKFILL artifact or a regime change, not distinguishable here. Do not build anything on it.
+Part 2 (ML scoring supervisor): the "double restart timer" is latent, not live (the watchdog only kills a child that exists, so a backoff timer can't coexist with a watchdog kill; startMlScoringService is called once at boot) but the guard
+was added anyway (spawnChild returns if a child exists and clears a pending timer); stopMlScoringService now SIGKILLs; the banner now shows "unknown" (yellow) before the first health check and a red line for any ML-gate fail-closed event in the last
+10 minutes (covers /health OK but /score wedged). Visibility only; the gate's decisions are unchanged.
+Decision: the observation-only bias_state tag planned for 6:07 AM is NOT built (the review and the artifact checks give a strong reason not to; crack size has no support and the aligned-direction effect does not replicate in REAL).

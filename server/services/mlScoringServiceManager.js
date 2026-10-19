@@ -62,6 +62,8 @@ export function reapStaleScorers(port = ML_SCORING_SERVICE_PORT) {
 }
 
 function spawnChild() {
+  if (child) return; // a stale timer must never start a second scorer (DeepSeek review 2026-10-19, latent today: startMlScoringService is called once at boot)
+  if (restartTimer) { clearTimeout(restartTimer); restartTimer = null; }
   reapStaleScorers();
   child = spawn(PYTHON_BIN, [SCORING_SERVICE_PY, String(ML_SCORING_SERVICE_PORT)], {
     cwd: REPO_ROOT,
@@ -135,5 +137,5 @@ export function startMlScoringService() {
 export function stopMlScoringService() {
   if (watchdogTimer) { clearInterval(watchdogTimer); watchdogTimer = null; }
   if (restartTimer) { clearTimeout(restartTimer); restartTimer = null; }
-  if (child) { child.kill(); child = null; }
+  if (child) { child.kill('SIGKILL'); child = null; } // SIGKILL: a wedged scorer can ignore SIGTERM
 }

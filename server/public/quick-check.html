@@ -3925,6 +3925,14 @@ async function checkFlagsBanner() {
     if (d.mlScorerHealthy === false) {
       color = '#f87171';
       lines.push('ML VETO SCORER DOWN — new candidates are forced to SHADOW (no live orders)');
+    } else if (d.mlScorerHealthy === null || d.mlScorerHealthy === undefined) {
+      color = color === '#f87171' ? color : '#facc15';
+      lines.push('ML veto scorer status unknown');
+    }
+    // /health can be OK while /score is wedged: also show the gate's own last fail-closed event if it was recent (<10 min).
+    if (typeof d.mlGateFailClosedSecondsAgo === 'number' && d.mlGateFailClosedSecondsAgo < 600) {
+      color = '#f87171';
+      lines.push(`ML gate failed closed ${Math.round(d.mlGateFailClosedSecondsAgo / 60)}min ago (${d.mlGateFailClosedReason || 'unknown'}) — that candidate was forced to SHADOW`);
     }
     sierraStatus = { color, title: lines.join(' | '), armed: d.sierraArmed === false ? false : true };
   } catch (e) {

@@ -98,6 +98,15 @@ const SCORE_TIMEOUT_MS = 500;       // DeepSeek's recommended budget -- local IP
 // Set 2026-10-04 after the forward check showed the VETO population averaging slightly positive.
 export const ML_VETO_GATE = { enabled: true, enforce: false };
 
+// Visibility only (2026-10-18): the gate fails CLOSED, which is invisible on the dashboard unless the scorer's /health also fails (a wedged /score
+// with a healthy /health would not show). live-flags exposes the last fail-closed event so the quick-check banner can show it. No behaviour change.
+let lastFailClosedAtMs = null;
+let lastFailClosedReason = null;
+function noteFailClosed(reason) { lastFailClosedAtMs = Date.now(); lastFailClosedReason = reason; }
+export function getMlGateFailClosedStatus() {
+  return { secondsAgo: lastFailClosedAtMs ? Math.round((Date.now() - lastFailClosedAtMs) / 1000) : null, reason: lastFailClosedReason };
+}
+
 export function isInMlVetoGateWindow(etMin) {
   return etMin >= GATE_WINDOW_START_MOD || etMin < GATE_WINDOW_END_MOD;
 }
@@ -164,6 +173,7 @@ async function scoreMlVetoGateInner({ entry, tradeDate, confluenceScore, minutes
     ({ pdFeatures, intradayFeatures } = await computeInlineFeatures({ entry, tradeDate, boundaryMod: isRth ? RTH_OPEN_MOD : GLOBEX_OPEN_MOD }));
   } catch (e) {
     console.error('[mlLiveVetoGate] feature computation failed -- failing closed (force-SHADOW):', e.message);
+    noteFailClosed('ML_VETO_GATE_FEATURE_ERROR');
     return { shadow: true, reason: 'ML_VETO_GATE_FEATURE_ERROR', verdict: null, probability: null, modelVersion: null };
   }
 
@@ -185,12 +195,14 @@ async function scoreMlVetoGateInner({ entry, tradeDate, confluenceScore, minutes
     });
   } catch (e) {
     console.error('[mlLiveVetoGate] scoring service unreachable/timed out -- failing closed (force-SHADOW):', e.message);
+    noteFailClosed('ML_VETO_GATE_SERVICE_UNREACHABLE');
     return { shadow: true, reason: 'ML_VETO_GATE_SERVICE_UNREACHABLE', verdict: null, probability: null, modelVersion: null };
   }
 
   if (!res.ok) {
     const body = await res.text().catch(() => '');
     console.error(`[mlLiveVetoGate] scoring service returned ${res.status} -- failing closed (force-SHADOW):`, body);
+    noteFailClosed('ML_VETO_GATE_SERVICE_ERROR');
     return { shadow: true, reason: 'ML_VETO_GATE_SERVICE_ERROR', verdict: null, probability: null, modelVersion: null };
   }
 
@@ -208,11 +220,13 @@ async function scoreMlVetoGateInner({ entry, tradeDate, confluenceScore, minutes
     body = await res.json();
   } catch (e) {
     console.error('[mlLiveVetoGate] scoring service returned a non-JSON/malformed body -- failing closed (force-SHADOW):', e.message);
+    noteFailClosed('ML_VETO_GATE_MALFORMED_RESPONSE');
     return { shadow: true, reason: 'ML_VETO_GATE_MALFORMED_RESPONSE', verdict: null, probability: null, modelVersion: null };
   }
   const { probability, verdict, model_version: modelVersion } = body;
   if (verdict !== 'TAKE' && verdict !== 'VETO') {
     console.error('[mlLiveVetoGate] scoring service returned an unrecognized verdict shape -- failing closed (force-SHADOW):', JSON.stringify(body));
+    noteFailClosed('ML_VETO_GATE_UNRECOGNIZED_VERDICT');
     return { shadow: true, reason: 'ML_VETO_GATE_UNRECOGNIZED_VERDICT', verdict: null, probability: null, modelVersion: null };
   }
   return {

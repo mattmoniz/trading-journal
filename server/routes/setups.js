@@ -17,6 +17,7 @@ import { etNaiveTimestampToMs } from '../services/acdShared.js';
 import { getOrderLifecycleAlertState, dismissOrderLifecycleAlert } from '../services/orderLifecycleAlert.js';
 import { getBrokerAttention } from '../services/sierraChart/brokerAttention.js';
 import { getMlScoringStatus } from '../services/mlScoringServiceManager.js';
+import { getMlGateFailClosedStatus } from '../services/mlLiveVetoGate.js';
 
 const router = express.Router();
 
@@ -99,6 +100,8 @@ router.get('/setups/live-flags', async (req, res) => {
     // ML VETO scorer health (2026-10-18). The gate fails closed, so scorer down = every live candidate force-SHADOWed.
     mlScorerHealthy: getMlScoringStatus().healthy,
     mlScorerSecondsSinceHealthy: getMlScoringStatus().secondsSinceHealthy,
+    mlGateFailClosedSecondsAgo: getMlGateFailClosedStatus().secondsAgo,
+    mlGateFailClosedReason: getMlGateFailClosedStatus().reason,
   });
 });
 
