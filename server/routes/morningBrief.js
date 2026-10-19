@@ -740,6 +740,18 @@ router.get('/scalp-recap/:date', async (req, res) => {
 
 const vaCache = new Map();
 
+// Per-day cache for queries that only look at STRICTLY EARLIER days (`ts::date < $1`), so the answer cannot change within `date`
+// (2026-10-19, query profiler: live-session-context ran ~3.7 s per call, polled by open pages). Not cached when empty/all-null, and
+// `date` is part of the key so a new day recomputes. Same result as the inline queries it replaces.
+async function dayStableQ(name, date, sql) {
+  const key = `dsq|${name}|${date}`;
+  const hit = cacheGet(key);
+  if (hit) return hit;
+  const r = await query(sql, [date]).catch(() => ({ rows: [{}] }));
+  if (r.rows?.[0] && Object.values(r.rows[0]).some(v => v != null)) cacheSet(key, r, 6 * 60 * 60 * 1000);
+  return r;
+}
+
 router.get('/live-session-context/:date', async (req, res) => {
   try {
     const { date } = req.params;
@@ -871,7 +883,7 @@ router.get('/live-session-context/:date', async (req, res) => {
       getTrailingRotations(date, 90),
       // IB range classification thresholds — derived from rolling p33/p67 of last 90 sessions.
       // Replaces former hardcoded < 50 (never fired, p10=93pt) and > 100 (fired 80% of days, p20=114pt).
-      query(`
+      dayStableQ('ibPerc', date, `
         SELECT
           PERCENTILE_CONT(0.33) WITHIN GROUP (ORDER BY (ib_high - ib_low)) AS p33,
           PERCENTILE_CONT(0.67) WITHIN GROUP (ORDER BY (ib_high - ib_low)) AS p67
@@ -882,14 +894,14 @@ router.get('/live-session-context/:date', async (req, res) => {
             AND EXTRACT(hour FROM ts)*60 + EXTRACT(minute FROM ts) BETWEEN 570 AND 630
           GROUP BY ts::date ORDER BY ts::date DESC LIMIT 90
         ) t
-      `, [date]).catch(() => ({ rows: [{}] })),
+      `),
       query(`SELECT a_up_fired, a_down_fired, c_up_confirmed, c_down_confirmed FROM acd_daily_log WHERE trade_date=$1`, [date]),
       query(`SELECT setup_type, status, resolution, actual_pnl::float as pnl FROM active_setups WHERE trade_date=$1`, [date]),
       query(`SELECT poc::float, vah::float, val::float FROM developing_value_log WHERE trade_date < $1 ORDER BY trade_date DESC LIMIT 1`, [date]),
       computeVAForDate('1 month'),
       computeVAForDate('3 months'),
       // Dynamic proximity bands — scale with rolling 10-session median IB range.
-      query(`
+      dayStableQ('ibMedian', date, `
         SELECT PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY (ib_high - ib_low)) as median_ib
         FROM (
           SELECT MAX(high)::float as ib_high, MIN(low)::float as ib_low
@@ -898,22 +910,22 @@ router.get('/live-session-context/:date', async (req, res) => {
             AND EXTRACT(hour FROM ts)*60 + EXTRACT(minute FROM ts) BETWEEN 570 AND 630
           GROUP BY ts::date ORDER BY ts::date DESC LIMIT 10
         ) t
-      `, [date]).catch(() => ({ rows: [{}] })),
-      query(`
+      `),
+      dayStableQ('pdIb', date, `
         SELECT MAX(high)::float as ibh, MIN(low)::float as ibl
         FROM price_bars_primary WHERE symbol='NQ' AND ts::date = (
           SELECT MAX(ts::date) FROM price_bars_primary WHERE symbol='NQ' AND ts::date < $1
           AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 630
-        ) AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 630`, [date]).catch(() => ({ rows: [{}] })),
+        ) AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 630`),
       query(`SELECT or_high::float, or_low::float FROM acd_daily_log WHERE trade_date < $1 ORDER BY trade_date DESC LIMIT 1`, [date]).catch(() => ({ rows: [{}] })),
-      query(`
+      dayStableQ('ib10', date, `
         SELECT MAX(ibh) as hi, MIN(ibl) as lo FROM (
           SELECT ts::date as d, MAX(high)::float as ibh, MIN(low)::float as ibl
           FROM price_bars_primary WHERE symbol='NQ'
           AND ts::date >= $1::date - 14 AND ts::date < $1
           AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 630
           GROUP BY ts::date ORDER BY d DESC LIMIT 10
-        ) t`, [date]).catch(() => ({ rows: [{}] })),
+        ) t`),
       query(`
         SELECT MAX(orh) as hi, MIN(orl) as lo FROM (
           SELECT or_high::float as orh, or_low::float as orl

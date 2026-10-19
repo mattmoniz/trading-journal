@@ -2898,6 +2898,10 @@ export default function createACDRouter(io) {
   // always exited before ever reaching this block. Per the standing rule (never
   // ship RTH-only and call it done without checking Globex), this now actually
   // runs in both.
+  // PERF NOTE (2026-10-19, query profiler): the `ts >= (SELECT MAX(ts) FROM price_bars ...) - interval '..'` windows below and in the
+  // bigMoveSignal / sigmaContinuation / marketPulse queries anchor on the RAW indexed `price_bars` table, not the price_bars_primary
+  // VIEW: anchoring on the view made Postgres scan far more of it (801 ms vs 72 ms for the same 481 rows, identical output). The two
+  // MAX(ts) values are equal in normal live operation (the raw max can only be later during a contract-roll overlap, by minutes).
   async function computeStackVolSignal(todayET) {
     let stackVolSignal = { active: false, direction: null, sigma: null, oneSidedRatio: null, levelDensity: 0, levels: [], paceZ: null, consecutiveCount: null, calibratedStop: null, calibratedStopType: null, calibratedTarget: null, manageGuidance: null };
     try {
@@ -2907,7 +2911,7 @@ export default function createACDRouter(io) {
                bid_volume::int, ask_volume::int,
                EXTRACT(EPOCH FROM (ts - LAG(ts) OVER (ORDER BY ts))) / 60 AS gap
         FROM price_bars_primary
-        WHERE symbol='NQ' AND ts >= (SELECT MAX(ts) FROM price_bars_primary WHERE symbol='NQ') - interval '3 hours'
+        WHERE symbol='NQ' AND ts >= (SELECT MAX(ts) FROM price_bars WHERE symbol='NQ') - interval '3 hours'
         ORDER BY ts ASC
       `);
       const svBars = svBarsQ.rows;
@@ -3750,6 +3754,17 @@ export default function createACDRouter(io) {
           // own variable null, same as before). The two cache-backed ones (lpQ, poc2Q)
           // skip their query entirely on a cache hit, matching antigravityEdges.js's
           // existing `isCached ? Promise.resolve(...) : query(...)` convention.
+          // Day-stable memo (2026-10-19, query profiler): these values cannot change once formed, yet each was re-queried against the
+          // price-bar view on EVERY detection poll (pdIbQ ~3.3 s, ib10Q ~2.5 s, ibTodayQ/or*Q ~2.3 s each) -- the bulk of a ~10 s pass.
+          // `minEt` = earliest ET minute at which the value is safely FINAL: cached only from there on, so a call made in the few
+          // seconds before the window's last bar is ingested can never freeze a value that is missing that bar for the rest of the day.
+          // An empty/failed result is never cached (the original per-query .catch(() => ({ rows: [] })) behaviour is unchanged).
+          const stableOfDay = async (name, run, minEt = 0) => {
+            const hit = etMinNow >= minEt ? getCached(todayET, 'stable:' + name, DAY_CACHE_TTL) : null;
+            if (hit != null) return hit;
+            const r = await run();
+            return (etMinNow >= minEt && r?.rows?.length) ? setCached(todayET, 'stable:' + name, r) : r;
+          };
           const cachedLP = getCached(todayET, 'lpAll');
           const cached2DPOC = getCached(todayET, '2dPOC');
           const [or5Q, pdIbQ, pdOrQ, ib10Q, ibTodayQ, or10Q, or15Q, or30Q, lpQ, poc2Q] = await Promise.all([
@@ -3768,12 +3783,12 @@ export default function createACDRouter(io) {
             // the level value could shift, firing what looked like a "new" setup with a
             // fake 50-60min retroactive detection lag (root cause of PD_IB_MID_FADE_SHORT's
             // recurring lag in docs/OPEN_THREADS.md's execution-quality thread).
-            query(`SELECT MAX(high)::float as ibh, MIN(low)::float as ibl FROM price_bars_primary WHERE symbol='NQ' AND ts::date = (SELECT MAX(ts::date) FROM price_bars_primary WHERE symbol='NQ' AND ts::date < $1 AND ts::date >= $1::date - 30 AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 629) AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 629`, [todayET]).catch(() => ({ rows: [] })),
+            stableOfDay('pdIbQ', () => query(`SELECT MAX(high)::float as ibh, MIN(low)::float as ibl FROM price_bars_primary WHERE symbol='NQ' AND ts::date = (SELECT MAX(ts::date) FROM price_bars_primary WHERE symbol='NQ' AND ts::date < $1 AND ts::date >= $1::date - 30 AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 629) AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 629`, [todayET]).catch(() => ({ rows: [] }))),
             query(`SELECT or_high::float, or_low::float FROM acd_daily_log WHERE trade_date < $1 ORDER BY trade_date DESC LIMIT 1`, [todayET]).catch(() => ({ rows: [] })),
             // Bounded lower end (2026-07-15, same fix as pdIbQ above) — unbounded
             // ts::date < $1 in the inner DISTINCT lookback forces a full historical scan
             // before the ORDER BY...LIMIT 10 can apply.
-            query(`
+            stableOfDay('ib10Q', () => query(`
               SELECT AVG((ibh + ibl) / 2.0)::float as mid FROM (
                 SELECT MAX(high)::float as ibh, MIN(low)::float as ibl
                 FROM price_bars_primary
@@ -3785,37 +3800,37 @@ export default function createACDRouter(io) {
                 ) AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 629
                 GROUP BY ts::date
               ) t
-            `, [todayET]).catch(() => ({ rows: [] })),
+            `, [todayET]).catch(() => ({ rows: [] }))),
             // Today's IB high/low — only valid after IB closes at 10:30 (etMinNow >= 630)
-            etMinNow >= 630 ? query(`
+            etMinNow >= 630 ? stableOfDay('ibTodayQ', () => query(`
               SELECT MAX(high)::float as ibh, MIN(low)::float as ibl
               FROM price_bars_primary
               WHERE symbol='NQ' AND ts::date = $1
                 AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 629
-            `, [todayET]).catch(() => ({ rows: [] })) : Promise.resolve({ rows: [] }),
+            `, [todayET]).catch(() => ({ rows: [] })), 632) : Promise.resolve({ rows: [] }),
             // Today's OR10/OR15/OR30 high/low, each self-gated to its own formation window
             // (bars 570..570+N-1, available at 570+N) — added 2026-08-12 alongside the OR5
             // rename, per docs/OR_LENGTH_SEASONALITY_SPEC.md. Mirrors ibTodayQ's pattern
             // exactly (real-time bar query, not level_prices, since these same-day-forming
             // windows may not have a level_prices row yet mid-session).
-            etMinNow >= 580 ? query(`
+            etMinNow >= 580 ? stableOfDay('or10Q', () => query(`
               SELECT MAX(high)::float as orh, MIN(low)::float as orl
               FROM price_bars_primary
               WHERE symbol='NQ' AND ts::date = $1
                 AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 579
-            `, [todayET]).catch(() => ({ rows: [] })) : Promise.resolve({ rows: [] }),
-            etMinNow >= 585 ? query(`
+            `, [todayET]).catch(() => ({ rows: [] })), 582) : Promise.resolve({ rows: [] }),
+            etMinNow >= 585 ? stableOfDay('or15Q', () => query(`
               SELECT MAX(high)::float as orh, MIN(low)::float as orl
               FROM price_bars_primary
               WHERE symbol='NQ' AND ts::date = $1
                 AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 584
-            `, [todayET]).catch(() => ({ rows: [] })) : Promise.resolve({ rows: [] }),
-            etMinNow >= 600 ? query(`
+            `, [todayET]).catch(() => ({ rows: [] })), 587) : Promise.resolve({ rows: [] }),
+            etMinNow >= 600 ? stableOfDay('or30Q', () => query(`
               SELECT MAX(high)::float as orh, MIN(low)::float as orl
               FROM price_bars_primary
               WHERE symbol='NQ' AND ts::date = $1
                 AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 599
-            `, [todayET]).catch(() => ({ rows: [] })) : Promise.resolve({ rows: [] }),
+            `, [todayET]).catch(() => ({ rows: [] })), 602) : Promise.resolve({ rows: [] }),
             // All static levels from level_prices — single batch query, cached daily.
             // Replaces individual PW_HIGH/PW_LOW, PM_VAH, etc. queries.
             // OR5_HIGH/OR5_LOW/IB_HIGH/IB_LOW/IB_MID/OR5_MID stay as real-time bar values
@@ -6253,7 +6268,7 @@ export default function createACDRouter(io) {
             SELECT ts, high::float, low::float,
                    ts - LAG(ts) OVER (ORDER BY ts) AS gap
             FROM price_bars_primary
-            WHERE symbol='NQ' AND ts >= (SELECT MAX(ts) FROM price_bars_primary WHERE symbol='NQ') - interval '30 hours'
+            WHERE symbol='NQ' AND ts >= (SELECT MAX(ts) FROM price_bars WHERE symbol='NQ') - interval '30 hours'
           ),
           session_start AS (
             SELECT COALESCE(MAX(ts), (SELECT MIN(ts) FROM recent)) AS start_ts FROM recent WHERE gap > interval '45 minutes'
@@ -6295,7 +6310,7 @@ export default function createACDRouter(io) {
             SELECT ts, close::float,
                    EXTRACT(EPOCH FROM (ts - LAG(ts) OVER (ORDER BY ts))) / 60 AS gap
             FROM price_bars_primary
-            WHERE symbol='NQ' AND ts >= (SELECT MAX(ts) FROM price_bars_primary WHERE symbol='NQ') - interval '8 hours'
+            WHERE symbol='NQ' AND ts >= (SELECT MAX(ts) FROM price_bars WHERE symbol='NQ') - interval '8 hours'
           ) t ORDER BY ts ASC
         `);
         const sBars = sigBarsQ.rows;

@@ -1561,6 +1561,39 @@ export async function attemptSilentCloseReconciliation(dtcClient, { snapshot, in
   return { attempted: true, setupId: cand.setup_id, exitOrderId: insertQ.rows[0].id, recoveredPrice, pnlResult };
 }
 
+/**
+ * Splits broker orders the report called "unknown" into (a) the app's OWN orders that reached a terminal state in the last 30 s
+ * (candidates for a snapshot-lag race) and (b) everything else. Pure, so it can be tested without a broker.
+ */
+export function splitUnknownOrders(unknownToApp, recentTerminalOwnClientIds) {
+  const own = new Set(recentTerminalOwnClientIds);
+  const isOwn = (o) => !!(o.ClientOrderID && own.has(o.ClientOrderID));
+  return { raceCandidates: unknownToApp.filter(isOwn), other: unknownToApp.filter((o) => !isOwn(o)) };
+}
+
+/**
+ * Confirm-then-halt for the open-orders check (2026-10-19). Returns the orders that are STILL unknown after confirmation -- empty
+ * means "it was a snapshot lag, do not halt".
+ *   - any unknown order that is NOT one of the app's own recently-terminal orders (foreign, or no ClientOrderID, or terminal long ago)
+ *     is returned immediately: halt exactly as before, no retry.
+ *   - if every unknown order is an app-own order that was filled/canceled/rejected within the last 30 s, wait, take a FRESH broker
+ *     snapshot and recompute. Anything still open at the broker then (including a resting order the app believes is dead) is real
+ *     and is returned, so the halt still fires. The position-invariant check does the same retry for the same reason.
+ */
+async function confirmUnknownToApp(dtcClient, unknownToApp) {
+  const ids = unknownToApp.map((o) => o.ClientOrderID).filter(Boolean);
+  if (ids.length !== unknownToApp.length) return unknownToApp;
+  const r = await query(`
+    SELECT client_order_id FROM order_placements
+    WHERE client_order_id = ANY($1) AND status IN ('FILLED','CANCELED','REJECTED')
+      AND last_update_at > NOW()::timestamp - interval '30 seconds'`, [ids]);
+  const { other } = splitUnknownOrders(unknownToApp, r.rows.map((x) => x.client_order_id));
+  if (other.length > 0) return unknownToApp;
+  await new Promise((resolve) => setTimeout(resolve, INVARIANT_RETRY_DELAY_MS * 2));
+  const fresh = await getBrokerSnapshot(dtcClient, { collectWindowMs: 3000 });
+  return (await reconcileAgainstBroker(dtcClient, { snapshot: fresh })).unknownToApp;
+}
+
 // Single-flight guard (docs/OPEN_THREADS.md's 2026-09-29 "Item 1" spec: "a reconciliation
 // already in progress must not start a second overlapping one") -- module-level, so it
 // covers every trigger (logon, a terminal order-status transition, the periodic
@@ -1593,6 +1626,18 @@ export async function runReconciliation(dtcClient, killSwitch, symbol, trigger) 
     const reconciliationReport = await reconcileAgainstBroker(dtcClient, { snapshot });
     const invariantCheck = await checkPositionInvariant(dtcClient, killSwitch, symbol, snapshot);
 
+    if (reconciliationReport.unknownToApp.length > 0) {
+      // Confirm-then-halt (2026-10-19, see confirmUnknownToApp()'s header): in a burst of stop fills the broker's open-orders reply lags
+      // the fills by seconds, so the app's OWN just-filled stops showed up as "unknown" and halted entries for ~10 minutes (setups
+      // 136204-136210 got no orders). Only a still-open-after-retry or a genuinely foreign order halts, exactly as before.
+      const originalUnknown = reconciliationReport.unknownToApp;
+      reconciliationReport.unknownToApp = await confirmUnknownToApp(dtcClient, originalUnknown);
+      if (reconciliationReport.unknownToApp.length === 0) {
+        reconciliationReport.raceResolvedUnknownToApp = originalUnknown;
+        reconciliationReport.clean = reconciliationReport.staleInApp.length === 0;
+        console.log(`[sierraChart.reconciliation] ${originalUnknown.length} order(s) first reported as unknown to the app (${originalUnknown.map(o => o.ClientOrderID).join(', ')}) are the app's own, filled/closed within the last 30 s, and a fresh broker snapshot no longer lists them -- a timing lag in the broker's open-orders reply, not a foreign order. No halt.`);
+      }
+    }
     if (reconciliationReport.unknownToApp.length > 0) {
       killSwitch.halt(
         `reconciliation (${trigger}): ${reconciliationReport.unknownToApp.length} broker order(s) on ${symbol} unknown to this app`,

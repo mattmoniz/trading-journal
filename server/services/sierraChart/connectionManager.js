@@ -149,6 +149,18 @@ function maybeAutoRearmAfterReconcile() {
   console.log(`[sierraChart.connectionManager] DTC_AUTO_REARM_SAFE=true for trade account "${process.env.DTC_TRADE_ACCOUNT}" and a fresh reconciliation came back clean -- auto-armed (was halted: ${previousHaltReason || '(no reason recorded)'}).`);
 }
 
+// While the switch is halted by a SYSTEM check (a reconciliation / position-invariant mismatch, never the user's own Stop button) on a
+// sim-safe profile, look again in 45 s instead of waiting for the next 15-minute periodic tick (2026-10-19: a benign snapshot-lag halt at
+// 10:32:53 kept real entries off until 10:43:30). Logged as 'PERIODIC' (the trigger column is a CHECK list); a recheck that is still
+// mismatched halts again and schedules the next one, a clean one re-arms through the existing maybeAutoRearmAfterReconcile() gate.
+let haltRecheckTimer = null;
+function scheduleHaltRecheckIfNeeded() {
+  if (process.env.DTC_AUTO_REARM_SAFE !== 'true' || haltRecheckTimer) return;
+  const st = killSwitch.getState();
+  if (st.armed || st.haltedBy === 'user') return;
+  haltRecheckTimer = setTimeout(() => { haltRecheckTimer = null; triggerReconciliation('PERIODIC'); }, 45 * 1000);
+}
+
 /**
  * The one place this module actually runs a reconciliation pass -- resolves today's
  * front-month symbol and delegates to reconciliation.js's runReconciliation() (which
@@ -174,6 +186,7 @@ async function triggerReconciliation(trigger) {
     // just on the next full reconnect. See this function's own header for the full reasoning
     // and the DTC_AUTO_REARM_SAFE scope gate that still fully applies here.
     maybeAutoRearmAfterReconcile();
+    scheduleHaltRecheckIfNeeded();
     // After the app closed out a trade the broker had already closed, re-check right away so app and broker
     // are seen agreeing and the existing sim auto-rearm gate can act within seconds, not on the next tick.
     // One follow-up only (never chains from itself).

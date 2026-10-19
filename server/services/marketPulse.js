@@ -66,7 +66,7 @@ export async function computeMarketPulse() {
         SELECT ts, close::float,
                ts - LAG(ts) OVER (ORDER BY ts) AS gap
         FROM price_bars_primary
-        WHERE symbol='NQ' AND ts >= (SELECT MAX(ts) FROM price_bars_primary WHERE symbol='NQ') - interval '30 hours'
+        WHERE symbol='NQ' AND ts >= (SELECT MAX(ts) FROM price_bars WHERE symbol='NQ') - interval '30 hours'
       ),
       session_start AS (
         SELECT COALESCE(MAX(ts), (SELECT MIN(ts) FROM recent)) AS start_ts FROM recent WHERE gap > interval '45 minutes'

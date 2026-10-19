@@ -1592,7 +1592,11 @@ export async function computeLevelFadeFactors(ctx) {
         // bars were silently misclassified as pre-9:30 "overnight" bars, contaminating both the
         // today_on and prior_on ranges. Fixed to EXTRACT directly, matching every other correct
         // et_min computation in this file (e.g. the _lfVwapSigmaQ query above).
-        const _lfOnGapQ = await query(`
+        // Day-cached (2026-10-19, query profiler: ~1.85 s per detection pass). This block only runs in the RTH level-fade path, i.e. after
+        // the 9:30-9:32 bars exist, so every pre-9:30 bar is already final; the 60-session p33 side never changes within a day. A result
+        // with no today_on_range (nothing to compare) is not cached.
+        const _lfOnGapCached = getCached(todayET, 'lfOnGap', DAY_CACHE_TTL);
+        const _lfOnGapQ = _lfOnGapCached != null ? _lfOnGapCached : await query(`
           WITH today_on AS (
             SELECT MAX(high)::float - MIN(low)::float AS on_range
             FROM price_bars_primary
@@ -1616,6 +1620,7 @@ export async function computeLevelFadeFactors(ctx) {
             PERCENTILE_CONT(0.33) WITHIN GROUP (ORDER BY on_range) AS p33_60d
           FROM prior_on
         `, [todayET]).catch(() => ({ rows: [{}] }));
+        if (_lfOnGapCached == null && _lfOnGapQ.rows[0]?.today_on_range != null) setCached(todayET, 'lfOnGap', _lfOnGapQ);
         const _lfTodayOnRange = _lfOnGapQ.rows[0]?.today_on_range ?? null;
         const _lfOnRangeP33   = _lfOnGapQ.rows[0]?.p33_60d ?? null;
         const _lfSmallGap = _lfTodayOnRange != null && _lfOnRangeP33 != null && _lfTodayOnRange < _lfOnRangeP33;
