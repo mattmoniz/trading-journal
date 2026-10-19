@@ -20,7 +20,7 @@ const median = (a) => { if (!a.length) return 0; const s = [...a].sort((x, y) =>
 const fmt = (x) => (x == null || Number.isNaN(x) ? '   n/a' : (x >= 0 ? '+' : '') + x.toFixed(0)).padStart(6);
 const pct = (x) => (x == null || Number.isNaN(x) ? '  n/a' : (100 * x).toFixed(0) + '%').padStart(5);
 
-const breaks = await computeDefendedBreaks(1.0, 365);
+const breaks = await computeDefendedBreaks(1.0, Number(process.env.LOOKBACK_DAYS) || 365);
 const isGlobex = (b) => { const [h, m] = b.entryTsStr.split(' ')[1].split(':').map(Number); const mod = h * 60 + m; return mod >= 1080 || mod < 510; };
 const trades = [];
 for (const b of breaks) {

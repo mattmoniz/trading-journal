@@ -15,7 +15,7 @@ const sum = (a) => a.reduce((s, x) => s + x, 0);
 const median = (a) => { if (!a.length) return 0; const s = [...a].sort((x, y) => x - y); const m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
 const money = (x) => (x >= 0 ? '+$' : '-$') + Math.abs(Math.round(x)).toLocaleString();
 
-const breaks = await computeDefendedBreaks(1.0, 365);
+const breaks = await computeDefendedBreaks(1.0, Number(process.env.LOOKBACK_DAYS) || 365);
 const isGlobex = (b) => { const [h, m] = b.entryTsStr.split(' ')[1].split(':').map(Number); const mod = h * 60 + m; return mod >= 1080 || mod < 510; };
 const raw = [];
 for (const b of breaks) {

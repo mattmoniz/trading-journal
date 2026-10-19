@@ -23,7 +23,7 @@ import { computeDefendedBreaks } from '../server/services/majorPivotDefendedBrea
 import { dayBlockedBootstrapCI, hashSeed, mulberry32 } from '../server/services/rigorDiagnostics.js';
 
 const PT = 2, COMMISSION = 2;
-const LOOKBACK_DAYS = 365;
+const LOOKBACK_DAYS = Number(process.env.LOOKBACK_DAYS) || 365;   // override: LOOKBACK_DAYS=1300 for the full rebuilt history (2023-03 onward)
 const STOPS = [1.0, 1.5];
 const RULES = [{ k: 'HOLD', min: 720 }, { k: 'HOLD', min: 1440 }, { k: 'OPEN', h: 1 }, { k: 'OPEN', h: 2 }, { k: 'OPEN', h: 4 }];
 const LIVE = { stop: 1.5, rule: RULES[0] };

@@ -8,13 +8,18 @@ Validated 2026-10-05 against Sierra Chart's own 1-minute text export (NQZ5.CME.s
 over 4,545 overlapping minutes: Open/High/Low/Close match exactly on every minute; Volume, bid,
 ask and trade count match on all but 2 minutes (a 53-contract difference, 2025-11-19 16:35).
 
-Usage: python3 build_1m_bars_from_scid.py <file.scid> <start YYYY-MM-DD ET> <end YYYY-MM-DD ET> <out.csv>
+Usage: python3 build_1m_bars_from_scid.py <file.scid> <start YYYY-MM-DD ET> <end YYYY-MM-DD ET> <out.csv> [price_scale]
+
+price_scale (added 2026-10-19): the divisor applied to the raw price field. Default = SCID_PRICE_SCALE (100), correct for the standard NQxx.CME.scid / NQxx.scid files. A few
+alternate copies (e.g. NQU24-CME.scid, the DTC folder's NQZ24.scid) store the plain price, so they need price_scale=1 -- with the default their bars come out 100x too small. The build
+REFUSES to write if the first bars' prices are outside a plausible NQ range (5,000-60,000), so a wrong scale can never silently produce a CSV.
 """
 import sys, csv, datetime
 sys.path.insert(0, '/home/mmoniz/trading-journal/scripts/tick_microstructure')
 from scid_reader import _raw_records, _to_et, SCID_PRICE_SCALE, FIRST_SUB_TRADE, LAST_SUB_TRADE, _SENTINEL_TOL
 
 filepath, start, end, out = sys.argv[1], datetime.date.fromisoformat(sys.argv[2]), datetime.date.fromisoformat(sys.argv[3]), sys.argv[4]
+PRICE_SCALE = float(sys.argv[5]) if len(sys.argv) > 5 else SCID_PRICE_SCALE
 bars, order = {}, []
 n_rec = 0
 for dt_utc, o, h, l, c, numtr, totvol, bidvol, askvol in _raw_records(filepath, start_date=start):
@@ -26,7 +31,9 @@ for dt_utc, o, h, l, c, numtr, totvol, bidvol, askvol in _raw_records(filepath, 
     if not (o == 0.0 or abs(o - FIRST_SUB_TRADE) < _SENTINEL_TOL or abs(o - LAST_SUB_TRADE) < _SENTINEL_TOL):
         raise SystemExit(f'anomalous record at {ts}: open={o}')
     n_rec += 1
-    px = c / SCID_PRICE_SCALE
+    px = c / PRICE_SCALE
+    if n_rec == 200 and not (5000 < px < 60000):
+        raise SystemExit(f'price {px} at {ts} is outside a plausible NQ range -- wrong price_scale ({PRICE_SCALE}) for this file?')
     m = ts.replace(second=0, microsecond=0)
     b = bars.get(m)
     if b is None:

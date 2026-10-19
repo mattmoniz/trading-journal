@@ -153,6 +153,10 @@ run /usr/bin/node scripts/analyze_execution_efficiency.mjs
 # code as a build-breaking signal in this cron; read its output instead.
 run /usr/bin/node scripts/data_sanity_audit.mjs
 
+# Real 1-minute NQ history coverage by month (2026-10-19): flags any month under 800 bars/day in price_bars_primary -- see scripts/check_nq_history_coverage.mjs.
+# Non-zero exit = a gap was found (informational here, same convention as data_sanity_audit.mjs); repair with the tick-file rebuild + load_nq_bars_from_scid_csv.mjs.
+run /usr/bin/node scripts/check_nq_history_coverage.mjs
+
 # Pipeline freshness/consumption audit (built 2026-07-17, scheduled 2026-09-07) -- was
 # manual-only until now, ironically the one script in this audit family not following its
 # own no-dead-ends rule. Cross-references every performance_audit signal_type against

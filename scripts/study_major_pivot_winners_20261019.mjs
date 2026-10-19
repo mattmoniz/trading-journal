@@ -93,7 +93,7 @@ function levelContext(t, levels) {
 }
 
 console.log('Loading the real defended breaks (zigzag 1.0, 365 days)...');
-const breaks = await computeDefendedBreaks(1.0, 365);
+const breaks = await computeDefendedBreaks(1.0, Number(process.env.LOOKBACK_DAYS) || 365);
 const trades = [];
 for (const b of breaks) {
   const entryTime = b.closeTsStr;

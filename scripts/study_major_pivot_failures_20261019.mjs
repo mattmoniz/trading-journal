@@ -20,7 +20,7 @@ function priorSessions(date) {          // index of the last COMPLETED RTH sessi
 }
 
 console.log('Loading breaks (zigzag 1.0, 365 days)...');
-const breaks = await computeDefendedBreaks(1.0, 365);
+const breaks = await computeDefendedBreaks(1.0, Number(process.env.LOOKBACK_DAYS) || 365);
 const T = [];
 for (const b of breaks) {
   const entryTime = b.closeTsStr, dir = b.direction === 'LONG' ? 1 : -1, atr = b.atr, structDist = Math.abs(b.entryPrice - b.stopPrice);

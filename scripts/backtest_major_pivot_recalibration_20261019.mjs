@@ -24,7 +24,7 @@ import { computeDefendedBreaks } from '../server/services/majorPivotDefendedBrea
 import { dayBlockedBootstrapCI, computeRigor, hashSeed, mulberry32 } from '../server/services/rigorDiagnostics.js';
 
 const PT = 2, COMMISSION = 2;                 // MNQ $2/pt, $2 round trip (server/config/instruments.js)
-const LOOKBACK_DAYS = 365;
+const LOOKBACK_DAYS = Number(process.env.LOOKBACK_DAYS) || 365;   // override: LOOKBACK_DAYS=1300 for the full rebuilt history (2023-03 onward)
 const MAX_HOLD = 2880;                         // 2 days: a multi-rotation move can outlast one session
 const STOP_MULTS = [1.0, 1.5];                 // x the pivot's structural distance
 const EXITS = [{ type: 'FIXED', mult: 2.5 }, { type: 'NONE' }, { type: 'OPP' }, { type: 'TRAIL', mult: 1.0 }, { type: 'TRAIL', mult: 1.5 }, { type: 'TRAIL', mult: 2.0 }, { type: 'TRAIL', mult: 3.0 }];
