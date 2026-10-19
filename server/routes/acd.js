@@ -6188,6 +6188,13 @@ export default function createACDRouter(io) {
                 btCanPromote ? 'ACTIVE' : 'SHADOW',
                 btCanPromote ? 'SUPPRESS_ALL_DISABLED' : btBlockedByExposureOverride ? 'CAPITAL_EXPOSURE_OVERRIDE' : null,
               ]);
+              // Cause for a SHADOW row (2026-10-19) -- see the shadowCandidates twin (SHADOW_CAUSE): this site is
+              // hardwired SHADOW (its fired_at is the past touch bar, so a real order could never be entered).
+              if (btIns.rows[0] && !btCanPromote) {
+                logGatedCandidate({ tradeDate: todayET, setupType: bt.type, gateName: 'SHADOW_CAUSE',
+                  gateReason: `setup_id=${btIns.rows[0].id} EARLY_TOUCH_BACKFILL${btBlockedByExposureOverride ? ' + CAPITAL_EXPOSURE_OVERRIDE' : ''}`,
+                  entry: bt.entry, stop: bt.stop, target: bt.target });
+              }
               // Cluster role claimed AFTER the insert above actually succeeded -- see
               // acdShared.js's claimClusterRole() header and this loop's own comment (top of
               // the backfilledTouches block) for the gated-out-position-0 bug this ordering
@@ -7109,6 +7116,26 @@ export default function createACDRouter(io) {
               isBreakevenStopEligible(shadow.type),
             ]).catch(() => ({ rows: [] }));
             if (shadowIns.rows[0]) {
+              // Cause for a SHADOW row (2026-10-19): this INSERT has no suppression_reason column, so a row gated here
+              // was indistinguishable from "no reason" -- 190 such rows 10-09..10-16. Recorded in gated_candidates
+              // (SHADOW_CAUSE), NOT in suppression_reason: calibration (EDGE_ATTRIBUTABLE_TRADE_FILTER) and the
+              // recent-fire check near line 6469 treat a NULL reason as meaningful, so labeling the column would
+              // silently change them. First matching reason only (labeling, never gating).
+              if (st === 'SHADOW') {
+                const shadowCause = STOP_SWEEP_PAUSED.has(shadow.type) ? 'STOP_SWEEP_PAUSED'
+                  : !shadowIsLive ? 'NOT_LIVE_ELIGIBLE (setup_status suppress/thin/unknown/manual list)'
+                  : shadowCrossDirectionCooldownMin ? `CROSS_DIRECTION_FAST_FLIP_${shadowCrossDirectionCooldownMin}min`
+                  : shadowPostWinBlocked ? 'POST_WIN_OPP_FAMILY_REV'
+                  : shadowOppositeDirectionOpen ? 'OPPOSITE_DIRECTION_OPEN'
+                  : shadowSameTypeRefireBlocked ? 'SAME_TYPE_REFIRE'
+                  : shadowOpeningDriveCounter ? 'OPENING_DRIVE_COUNTER_TRADE'
+                  : shadowRotationDirectionConflict ? 'ROTATION_DIRECTION_CONFLICT'
+                  : shadowLiveTimeWindowBlocked ? 'LIVE_TIME_WINDOW'
+                  : shadowMlVetoBlocked ? (shadowMlGateResult?.reason || 'ML_VETO_GATE')
+                  : 'UNKNOWN_SHOULD_NOT_HAPPEN';
+                logGatedCandidate({ tradeDate: todayET, setupType: shadow.type, gateName: 'SHADOW_CAUSE',
+                  gateReason: `setup_id=${shadowIns.rows[0].id} ${shadowCause}`, entry: shadow.entry, stop: shadow.stop, target: sT1 });
+              }
               await tagDirectionGateShadow(shadowIns.rows[0].id, shadow.direction);
               await tagMomentumAgainstFadeShadow(shadowIns.rows[0].id, shadow.direction);
               await tagTouchOrderflowPressureShadow(shadowIns.rows[0].id, { direction: shadow.direction, firedAt: firedAtTs });

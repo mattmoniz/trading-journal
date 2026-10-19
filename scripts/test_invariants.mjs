@@ -1455,7 +1455,7 @@ async function main() {
         // 2026-08-19 machine-gun-refire fix (commit b919990) wired REFIRE_COOLDOWN_MINUTES
         // into the shadowCandidates insert path for the first time; this is that gate's
         // name, first observed live 2026-08-20 during real RTH hours.
-        'REFIRE_COOLDOWN_SHADOW',
+        'REFIRE_COOLDOWN_SHADOW', 'SHADOW_CAUSE',
         // Found missing 2026-08-20 while adding the entry above -- this gate has been live
         // since the 2026-08-12 cluster-fallback fix (the directional-EV-sorted candidate
         // walk in the level-fade primary-selection path, acd.js ~7058-7100) and has been
