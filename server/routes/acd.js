@@ -7383,7 +7383,9 @@ export default function createACDRouter(io) {
           -- (timestamp without time zone) type on the same table, so this diff needs no
           -- timezone handling at all. NULL/negative (clock skew, or a row whose created_at
           -- predates fired_at for any other reason) both collapse to 0 via GREATEST.
-          GREATEST(0, ROUND(EXTRACT(EPOCH FROM (s.created_at - s.fired_at)) / 60))::int as late_backfill_min
+          GREATEST(0, ROUND(EXTRACT(EPOCH FROM (s.created_at - s.fired_at)) / 60))::int as late_backfill_min,
+          -- seconds since this row was written (naive ET column vs the session's ET clock): lets broker_note tell "order sweep hasn't run yet" from "no order was ever placed"
+          GREATEST(0, EXTRACT(EPOCH FROM (NOW()::timestamp - s.created_at)))::int as row_age_sec
         FROM active_setups s
         WHERE s.trade_date = ANY($1) OR s.fired_at >= $2::timestamp ORDER BY s.fired_at
       `, [dates, sessionStart]);
@@ -7485,7 +7487,12 @@ export default function createACDRouter(io) {
           const why = n ? n.gate_reason.replace(/^setup_id=\d+ /, '') : null;
           row.broker_note = eo
             ? (eo.status === 'FILLED' ? (n && n.gate_name !== 'SIERRA_ENTRY_SKIP' ? 'Filled at broker; ' + (n.gate_name === 'PNL_UNKNOWN_CAUSE' ? 'broker P&L unknown -- ' : 'exit: ') + why : null) : 'Entry order ' + eo.status + (why ? ' (' + why + ')' : ''))
-            : (why ? 'No broker order: ' + why : 'No broker order placed (no skip reason logged)');
+            : (why ? 'No broker order: ' + why
+              // 2026-10-19 (user screenshot, setup 136154): a row is written a few seconds to ~25 s BEFORE the order sweep reaches it, and
+              // this used to read "No broker order placed (no skip reason logged)" in that normal window. Only call it a gap after 90 s.
+              : (row.row_age_sec != null && row.row_age_sec < 90 && !row.resolved_at
+                  ? `Order not placed yet -- the order sweep picks this row up within about 15-30 s (row is ${row.row_age_sec}s old)`
+                  : 'No broker order placed and no skip reason was logged -- check the Sierra Chart tab'));
         }
       }
       for (const row of setupsRes.rows) {
