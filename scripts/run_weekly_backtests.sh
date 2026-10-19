@@ -1,12 +1,13 @@
 #!/bin/bash
 cd /home/mmoniz/trading-journal
+source scripts/lib/job_timing.sh   # timed_step: records each step's duration and compares it with its own history
 
 # Step runner (2026-10-05): the chain has no `set -e`, so a failing step used to go unnoticed
 # while the run still printed "complete". Each step now records its exit status; any failure
 # is listed at the end and makes the script exit non-zero.
 FAILED_STEPS=()
 run() {
-  "$@"
+  timed_step weekly "$@"
   local rc=$?
   if [ $rc -ne 0 ]; then
     echo "!!! STEP FAILED (exit $rc): $*"

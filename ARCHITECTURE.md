@@ -214,10 +214,10 @@ server/
 │                           db.js keeps an in-process per-query-shape profiler (see index.js `/api/diag/query-profile`, local-only,
 │                           also per-route request timings + event-loop delay).
 ├── services/perfTelemetry.js  # 2026-10-19 post-deploy performance watch: perf_snapshots (DEPLOY marker at boot with git sha, SNAPSHOT every 5 min,
-│                           INCIDENT bundle, VERDICT at the end of the ~4 h watch). Each snapshot in the watch is judged against the PREVIOUS shas'
+│                           INCIDENT bundle, EXPECT = intended effect via scripts/perf_expect.mjs, VERDICT at the end of the watch = RTH+GLOBEX each seen 12 times, max 72 h). Each snapshot in the watch is judged against the PREVIOUS shas'
 │                           same-session history (p99 AND modified z>3.5, no fixed thresholds) -> `perfAttention` on /api/setups/live-flags
 │                           (quick-check "SLOWER SINCE LAST CHANGE" banner after 2 snapshots) + OPEN_DECISION. On-demand before/after:
-│                           `node scripts/perf_report.mjs`. Not an ongoing overall monitor: nothing is judged outside a watch window.
+│                           `node scripts/perf_report.mjs`. Scheduled steps are timed into `job_timings` (scripts/lib/job_timing.sh, scripts/record_job_timing.mjs). Not an ongoing overall monitor: nothing is judged outside a watch window.
 ├── sierra.js              # TAL file parser, chokidar watcher
 ├── routes/                # 27 files, one per domain, all mounted under /api
 ├── services/               # 19 files, business logic called by routes (and by cron jobs in index.js)

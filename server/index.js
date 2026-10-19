@@ -99,7 +99,7 @@ import { query, getQueryProfile } from './db.js';
 import { cacheGet, cacheSet } from './lib/cache.js';
 import { monitorEventLoopDelay } from 'node:perf_hooks';
 import { logProcess } from './lib/processLog.js';
-import { recordDetectionPollResult } from './services/detectionHeartbeat.js';
+import { recordDetectionPollResult, DETECTION_POLL_ABORT_MS } from './services/detectionHeartbeat.js';
 import { startPerfTelemetry } from './services/perfTelemetry.js';
 import { computeACDFromBars, getBestACDParams, scanAndSaveSetupEvents, computeORLevelsOnly } from './services/acdService.js';
 import { scanAndIngestNewBarFiles } from './services/priceBarService.js';
@@ -1591,7 +1591,7 @@ httpServer.listen(PORT, () => {
       // detector_fires_during_weekend_globex_closure) -- both now call the single shared
       // isGlobexWeekClosed(), extracted to acd.js so it's importable here without a cycle.
       if (isGlobexWeekClosed(etNow)) return;
-      const res = await fetch(`http://localhost:${PORT}/api/acd/setup-detection?fresh=1`, { signal: AbortSignal.timeout(14000) }); // ?fresh=1: bypass the 20 s response cache so every 15 s poll runs a real pass
+      const res = await fetch(`http://localhost:${PORT}/api/acd/setup-detection?fresh=1`, { signal: AbortSignal.timeout(DETECTION_POLL_ABORT_MS) }); // ?fresh=1: bypass the 20 s response cache so every 15 s poll runs a real pass
       if (!res.ok) {
         console.error(`[detection-poll] ${res.status} from /api/acd/setup-detection`);
         await recordDetectionPollResult(false, `HTTP ${res.status}`);

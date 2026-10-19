@@ -3913,10 +3913,10 @@ function renderPerfAttentionBanner(d) {
   tag.style.color = '#f87171';
   tag.textContent = 'SLOWER SINCE LAST CHANGE';
   el.appendChild(tag);
-  const names = { db_time_pct: 'database busy', detect_avg_ms: 'detection pass time', loop_p99_ms: 'server stalls', poll_outages: 'detection poll outages', entry_delay_p90_s: 'row-to-order delay (s)' };
+  const names = { db_time_pct: 'database busy', detect_avg_ms: 'detection pass time', loop_p99_ms: 'server stalls', poll_outages: 'detection poll outages', entry_delay_p90_s: 'row-to-order delay (s)', rss_mb: 'server memory (MB)', heap_used_mb: 'server heap (MB)', pool_waiting: 'queries waiting for a database connection' };
   for (const m of a.metrics) {
     const line = document.createElement('div');
-    line.textContent = (names[m.metric] || m.metric) + ': ' + m.value + ' now vs ' + m.median + ' before the change (' + a.session + '), ' + m.consecutive + ' checks in a row';
+    line.textContent = (names[m.metric] || m.metric) + ': ' + m.value + ' now vs ' + m.median + ' before the change (' + a.session + '), ' + m.consecutive + ' checks in a row' + (m.hardLimit != null ? ' -- OVER THE SYSTEM LIMIT OF ' + m.hardLimit : '');
     el.appendChild(line);
   }
   if (a.deploy) { const dp = document.createElement('div'); dp.style.color = 'var(--dim)'; dp.textContent = 'Change ' + a.deploy.sha + ', restarted ' + a.deploy.minutesAgo + ' min ago.'; el.appendChild(dp); }

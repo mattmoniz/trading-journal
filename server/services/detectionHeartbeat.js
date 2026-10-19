@@ -30,6 +30,9 @@ const state = {
   outageLogId: null,
 };
 
+// The server poller aborts a detection pass that takes longer than this (server/index.js); a pass at or over it is an outage, not a slow pass.
+export const DETECTION_POLL_ABORT_MS = 14000;
+
 export function getDetectionHeartbeat() {
   const { failingSinceMs, outageLogId, ...pub } = state;
   return pub;

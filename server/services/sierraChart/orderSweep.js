@@ -32,7 +32,7 @@ import { resolveMnqFrontMonthSymbolFromEnv } from './contractSymbol.js';
 import { resolveDirection } from '../../config/setupTypes.js';
 import { getCurrentPrice } from '../priceRetrieval.js';
 
-const ENTRY_LOOKBACK_MINUTES = 3; // don't backfill an entry for an old row a deploy/restart happens to see fresh
+export const ENTRY_LOOKBACK_MINUTES = 3; // don't backfill an entry for an old row a deploy/restart happens to see fresh
 const DIRECTION_TO_SIDE = { LONG: 'BUY', SHORT: 'SELL' };
 // Entry fill-timeout escalation (2026-10-12, user decision -- see
 // placeMarketEscalationEntryOrder()'s own header in reconciliation.js for the full

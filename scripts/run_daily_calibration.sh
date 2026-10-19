@@ -6,6 +6,7 @@
 # Fast pass — typically completes in under 2 minutes.
 # Full backtests (backtest_unified.js, etc.) still run weekly on Sundays.
 cd /home/mmoniz/trading-journal
+source scripts/lib/job_timing.sh   # timed_step: records each step's duration and compares it with its own history
 echo "=== Daily calibration: $(date) ==="
 
 # Refresh the materialized historical bar store (2026-07-27, price_bars_primary_materialize_historical_bars)
@@ -14,7 +15,7 @@ echo "=== Daily calibration: $(date) ==="
 # price_bars_contract_calendar over a 45-day window right before the freeze (Tier 2 of the
 # 2026-09-15 contract-calendar fix, OPEN_DECISION contract_calendar_roll_race_stale_price_20260915).
 
-/usr/bin/node scripts/refresh_price_bars_dedup_hist.mjs
+timed_step daily /usr/bin/node scripts/refresh_price_bars_dedup_hist.mjs
 
 # NQ contract-roll health check (2026-09-15, T3-c per OPUS_AUDIT_PROMPT_13's strategic review
 # of the contract-calendar fix, scratch/opus_audit_13_results.md) -- runs right after the
@@ -24,18 +25,18 @@ echo "=== Daily calibration: $(date) ==="
 # wrong-calendar corruption accumulate before being caught. Non-gating here, same convention
 # as test_invariants.mjs/data_sanity_audit.mjs below -- read the output, don't treat exit
 # code as build-breaking in this cron.
-/usr/bin/node scripts/check_contract_roll_health.mjs
+timed_step daily /usr/bin/node scripts/check_contract_roll_health.mjs
 
-/usr/bin/node scripts/backfill_mae_mfe.mjs
+timed_step daily /usr/bin/node scripts/backfill_mae_mfe.mjs
 
 # ML meta-labeling data foundation (2026-09-21, DeepSeek ML thread, docs/OPEN_THREADS.md) --
 # idempotent (only ever touches rows where ml_extended_label IS NULL), so safe to run daily.
 # Observation-only research data, never read by any live decision -- see
 # mlExtendedLabelWalker.js's own header for the full "why this exists, not
 # active_setups.mfe_points" account.
-/usr/bin/node scripts/backfill_ml_extended_label.mjs --apply
-/usr/bin/node scripts/backfill_ml_pd_features.mjs --apply
-/usr/bin/node scripts/backfill_ml_intraday_features.mjs --apply
+timed_step daily /usr/bin/node scripts/backfill_ml_extended_label.mjs --apply
+timed_step daily /usr/bin/node scripts/backfill_ml_pd_features.mjs --apply
+timed_step daily /usr/bin/node scripts/backfill_ml_intraday_features.mjs --apply
 
 # ML meta-labeling silo: retrain + rescore + walk-forward recalibration. MOVED here from
 # run_weekly_backtests.sh 2026-09-21 (user request, same reasoning already established for
@@ -62,16 +63,16 @@ echo "=== Daily calibration: $(date) ==="
 # the CI excludes zero. See RESEARCH_CLAIM
 # ml_metalabel_walkforward_directionally_positive_unstable for current numbers -- nothing
 # here is wired to live sizing/gating yet.
-./venv/bin/python3 scripts/ml_meta_labeling/train.py
-./venv/bin/python3 scripts/ml_meta_labeling/run_silo_scoring.py
-/usr/bin/node scripts/recalibrate_ml_walkforward.mjs
+timed_step daily ./venv/bin/python3 scripts/ml_meta_labeling/train.py
+timed_step daily ./venv/bin/python3 scripts/ml_meta_labeling/run_silo_scoring.py
+timed_step daily /usr/bin/node scripts/recalibrate_ml_walkforward.mjs
 
 # "ML gates entry, a validated trail mechanism decides how far to let it run" -- the
 # coupling step, 2026-09-21 (user's explicit "next step" request). Composes this model's
 # TAKE verdicts with the already-running step_trail_shadow hypothetical (both individually
 # still PROVISIONAL, never live-wired) purely as a research comparison. See
 # recalibrate_ml_step_trail_comparison.mjs's own header for the full account.
-/usr/bin/node scripts/recalibrate_ml_step_trail_comparison.mjs
+timed_step daily /usr/bin/node scripts/recalibrate_ml_step_trail_comparison.mjs
 
 # Phase 0 pretest: should ML probability scale POSITION SIZE among already-approved trades,
 # not just gate entry (2026-09-21, user question: "can ml test increase sizing too, for more
@@ -79,14 +80,14 @@ echo "=== Daily calibration: $(date) ==="
 # ~0.04-0.05, non-monotonic, HIGH-confidence trades currently the WORST of the 3 buckets) --
 # self-recalibrates daily so this either firms up or reverses as real N grows, per this
 # codebase's own "no dead ends" rule.
-/usr/bin/node scripts/recalibrate_ml_probability_sizing_pretest.mjs
+timed_step daily /usr/bin/node scripts/recalibrate_ml_probability_sizing_pretest.mjs
 
 # Does the ML gate genuinely discriminate WITHIN Globex, not just RTH (2026-09-21, user:
 # "Globex is killing me every which way... which trades to fire"). Adding an explicit
 # is_rth feature flipped the Globex TAKE bucket's sign in one retrain at N<20 either side --
 # too thin to trust yet either direction. Tracks daily with a real day-blocked bootstrap CI
 # so the next read is trustworthy instead of another single noisy snapshot.
-/usr/bin/node scripts/recalibrate_ml_globex_split.mjs
+timed_step daily /usr/bin/node scripts/recalibrate_ml_globex_split.mjs
 
 # OVERNIGHT_ORDERFLOW_LONG/SHORT entry calibration (2026-09-21, RESEARCH_CLAIM
 # overnight_9pm_orderflow_predicts_rth_direction_20260921) -- re-derives the stop distance x
@@ -95,7 +96,7 @@ echo "=== Daily calibration: $(date) ==="
 # Must stay scheduled -- user's explicit "gather more data before proceeding" instruction is
 # what this is for; waiting on a manual re-run would let the live detector's stop/exit choice
 # go stale the moment new real trading days accumulate.
-/usr/bin/node scripts/calibrate_overnight_orderflow_entry.mjs
+timed_step daily /usr/bin/node scripts/calibrate_overnight_orderflow_entry.mjs
 
 # GARCH(1,1) daily volatility-regime reading (2026-09-08) -- standalone monitoring only, per
 # explicit user direction ("I don't think its meant to tailor to our setups"): the dual-barrier
@@ -120,28 +121,28 @@ echo "=== Daily calibration: $(date) ==="
 # (not a specific date, sidesteps needing market-calendar next-trading-day logic) -- the
 # monitor reads that row, which represents a genuine forward-looking reading for the next
 # session, computed with everything available as of tonight's close.
-./venv/bin/python3 scripts/backfill_garch_vol_scale_history.py
+timed_step daily ./venv/bin/python3 scripts/backfill_garch_vol_scale_history.py
 
 # Rolling stop/target width recalibration for the momentum-chase live setup (2026-09-09) --
 # depends on the GARCH_VOL_SCALE series just refreshed above, must run after it. See the
 # script's own header for the full backing research (RESEARCH_CLAIM
 # setup6_momentum_chase_medium_regime_positive_20260909) and why this needs to self-recalibrate
 # nightly rather than use the one-off backtest's fixed width.
-/usr/bin/node scripts/calibrate_momentum_chase_width.mjs
+timed_step daily /usr/bin/node scripts/calibrate_momentum_chase_width.mjs
 
 # Live SHADOW-record recheck for MOMENTUM_CHASE (2026-10-19): refreshes RESEARCH_CLAIM momentum_chase_live_shadow_record_20261019
 # and flags an OPEN_DECISION once the record reaches N>=20 (it is hardwired SHADOW, so nothing else would ever prompt a look).
-/usr/bin/node scripts/analyze_momentum_chase_shadow_record_20261019.mjs
+timed_step daily /usr/bin/node scripts/analyze_momentum_chase_shadow_record_20261019.mjs
 
-/usr/bin/node scripts/update_optimal_stops.mjs
-/usr/bin/node scripts/backtest_setup_status.mjs
-/usr/bin/node scripts/derive_day_types.js
+timed_step daily /usr/bin/node scripts/update_optimal_stops.mjs
+timed_step daily /usr/bin/node scripts/backtest_setup_status.mjs
+timed_step daily /usr/bin/node scripts/derive_day_types.js
 
 # Day-type-conditioned IB_BEARISH/IB_BULLISH stop/target (2026-08-03,
 # OPEN_DECISION ib_bearish_optimal_stop_not_day_type_conditioned) -- run after
 # derive_day_types.js so today's day_type classification is available for the
 # (setup_type, day_type) population join.
-/usr/bin/node scripts/backtest_ib_daytype_stop_target.mjs
+timed_step daily /usr/bin/node scripts/backtest_ib_daytype_stop_target.mjs
 
 # DAY_TYPE_ALPHA (2026-08-05, RESEARCH_CLAIM ib_bullish_blocked_by_stale_daytype_alpha_realn0)
 # -- was weekly-only (run_weekly_backtests.sh), while acd.js's IB real-N floor (~line 4839)
@@ -150,7 +151,7 @@ echo "=== Daily calibration: $(date) ==="
 # found by reasoning backward from an unexplained RTH outage. This is the class fix: a live
 # gate must never be staler than what it gates. Small/cheap (~seconds), safe to run daily
 # alongside the IB stop/target calibration right above it.
-/usr/bin/node scripts/backtest_day_type_alpha.js
+timed_step daily /usr/bin/node scripts/backtest_day_type_alpha.js
 
 # Wider-target-on-fast-resolving-trades mechanism, daily self-throttling recheck (2026-08-17,
 # user request, docs/RUNNER_FOLLOWUPS_SPEC_20260817.md Item 0) -- --daily-check runs the full
@@ -159,7 +160,7 @@ echo "=== Daily calibration: $(date) ==="
 # cleared the MIN_N=20 floor as of the last check, deferring back to the weekly-only cadence
 # (run_weekly_backtests.sh, unflagged, always runs in full) -- no manual cron edit needed
 # later when N clears the floor.
-/usr/bin/node scripts/audit_wider_target_live.mjs --daily-check
+timed_step daily /usr/bin/node scripts/audit_wider_target_live.mjs --daily-check
 
 # Standing invariant check (2026-07-17) -- previously only ever run manually ("run after
 # any change touching acd.js..."), which meant its checks (including [6]'s
@@ -169,14 +170,14 @@ echo "=== Daily calibration: $(date) ==="
 # check [6] depends on -- a type can newly earn PROMOTE the same day this runs. Non-zero
 # exit is expected/non-gating here (same convention as data_sanity_audit.mjs below) --
 # read the output, don't treat exit code as build-breaking in this cron.
-/usr/bin/node scripts/test_invariants.mjs
+timed_step daily /usr/bin/node scripts/test_invariants.mjs
 
 # Docs-split enforcement (2026-08-05, per external audit finding: this tool already existed
 # but nothing ever ran it, so OPEN_THREADS.md silently grew back to 386KB/97K tokens between
 # runs -- the mechanism was real, the cadence wasn't). --apply is safe/idempotent: it only
 # moves already-dated sections older than the keep-window into OPEN_THREADS_ARCHIVE.md,
 # nothing is deleted, and it no-ops cleanly when there's nothing old enough to move.
-/usr/bin/node scripts/archive_open_threads.mjs --apply
+timed_step daily /usr/bin/node scripts/archive_open_threads.mjs --apply
 
 # Wider-target MULTIPLIER calibration (2026-08-19, OPEN_DECISION
 # wider_target_calib_needs_deepseek_review) -- distinct from audit_wider_target_live.mjs
@@ -188,7 +189,7 @@ echo "=== Daily calibration: $(date) ==="
 # too slow -- the N>=20 floor, plateau/rigor checks are what prevent chasing noise, not run
 # frequency. PROVISIONAL/descriptive only until DeepSeek's code review lands -- writes a
 # RESEARCH_CLAIM, does not wire anything live.
-/usr/bin/node scripts/backtest_calibrated_wider_target.mjs
+timed_step daily /usr/bin/node scripts/backtest_calibrated_wider_target.mjs
 
 # Cross-direction fast-flip live calibration (2026-09-02, moved here from
 # run_weekly_backtests.sh per direct user request: "it should check itself daily if its
@@ -201,7 +202,7 @@ echo "=== Daily calibration: $(date) ==="
 # enforcing a gate against stale data if real forward trades start disagreeing with it. The
 # N>=20 floor and the monotonic-pattern check (not just "fast is negative") are what prevent
 # chasing daily noise, not the run cadence.
-/usr/bin/node scripts/backtest_cross_direction_fast_flip.mjs
+timed_step daily /usr/bin/node scripts/backtest_cross_direction_fast_flip.mjs
 
 # Same-setup-type "refire gate" calibration (2026-09-03, user-designed rule mirroring the
 # already-live sibling-reversal gate's event-based reset -- "blocked until a DIFFERENT setup
@@ -213,7 +214,7 @@ echo "=== Daily calibration: $(date) ==="
 # fallbacks cleared GATE -- every candidate is either THIN_N or fails computeRigor()'s clustered
 # check, so nothing fires live from this yet. That's the correct, disciplined outcome of the rigor
 # bar working as intended, not a bug -- self-recalibrates nightly as real N and distinct-days grow.
-/usr/bin/node scripts/backtest_same_setup_refire_gate.mjs
+timed_step daily /usr/bin/node scripts/backtest_same_setup_refire_gate.mjs
 
 # Direction-alternation-after-loss gate calibration (2026-09-05, user proposal, a variation of
 # the sibling rule framed as "prevent sequential losses"). Daily for the same reason as the
@@ -224,7 +225,7 @@ echo "=== Daily calibration: $(date) ==="
 # avoided since 2026-08-01) is real and large but full-history reverses it (same account-wide
 # edge-decay pattern as everything else tested this week) -- not wired live, see OPEN_DECISION
 # direction_alternation_after_loss_gate_pending for the ship/shadow/shelve call.
-/usr/bin/node scripts/backtest_direction_alternation_after_loss.mjs
+timed_step daily /usr/bin/node scripts/backtest_direction_alternation_after_loss.mjs
 
 # Self-checking live-execution confirmation for the prior-day-TREND sizeMultiplier gate
 # (2026-09-07, OPEN_DECISION prior_day_trend_gate_pending_rth_confirmation_20260906). The gate
@@ -233,14 +234,14 @@ echo "=== Daily calibration: $(date) ==="
 # until a real fire occurs on a real TREND-preceded day, then auto-resolves the OPEN_DECISION --
 # no human or future Claude session needs to remember to check this by hand. Cheap (~1s), safe
 # to run daily indefinitely.
-/usr/bin/node scripts/verify_prior_day_trend_gate_live.mjs
+timed_step daily /usr/bin/node scripts/verify_prior_day_trend_gate_live.mjs
 
 # Two more self-checking rechecks (2026-09-07, same pattern/shared scaffold as the gate check
 # just above -- scripts/lib/selfCheckingClaim.mjs) for findings from the same regime-filter
 # session that were real but too thin to trust: no-op quietly until their own explicit
 # recheck condition is met, then auto-update the RESEARCH_CLAIM with fresh real numbers.
-/usr/bin/node scripts/verify_va_overlap_streak_real_coverage.mjs
-/usr/bin/node scripts/verify_wide_ib_turbulent_exit_timing_recheck.mjs
+timed_step daily /usr/bin/node scripts/verify_va_overlap_streak_real_coverage.mjs
+timed_step daily /usr/bin/node scripts/verify_wide_ib_turbulent_exit_timing_recheck.mjs
 
 # Tick-microstructure trend/efficiency-ratio fade-outcome finding (2026-09-23) --
 # PROVISIONAL, not yet confirmed. Moved from weekly to DAILY same day per user request
@@ -255,26 +256,26 @@ echo "=== Daily calibration: $(date) ==="
 # and judge whether the finding is stable/reliable over time, not just whether any single
 # day's number clears a bar. Never auto-promotes to CONFIRMED even if the numbers
 # improve -- that's a human call. See docs/TICK_MICROSTRUCTURE_PILOT_SPEC.md.
-/usr/bin/node scripts/recheck_tick_trend_fade_finding.mjs
+timed_step daily /usr/bin/node scripts/recheck_tick_trend_fade_finding.mjs
 
 # Same daily self-recalibration discipline, applied to the ordinal "how far will it run"
 # (reach_R) fade-outcome model (RESEARCH_CLAIM ordinal_reach_r_track_b_harness_20260924,
 # 2026-09-24). Fade-only, tick-based -- the all-setups/bar-only variant tested the same day
 # was negative (Spearman -0.1997, fails its own permutation null) and is NOT rechecked here.
-/usr/bin/node scripts/recheck_ordinal_reach_r_finding.mjs
+timed_step daily /usr/bin/node scripts/recheck_ordinal_reach_r_finding.mjs
 
 # Same daily self-recalibration discipline, applied to the MAE/MFE quantile path-distribution
 # gating finding (RESEARCH_CLAIM mae_mfe_quantile_pathdist_gate_20260924, 2026-09-24 --
 # DeepSeek's proposal: predict the forward MAE/MFE distribution and derive stop/target from
 # it via a rule, instead of directly fitting a parameter the way OPTIMAL_STOP does). Gates
 # the level-pair combinatorial idea. Fade-only, RTH-only, tick-based.
-/usr/bin/node scripts/recheck_quantile_model_finding.mjs
+timed_step daily /usr/bin/node scripts/recheck_quantile_model_finding.mjs
 
 # Opening-drive counter-trade gate (LIVE force-SHADOW since 2026-09-25,
 # server/services/openingDriveGate.js). Reuses the service's own pure functions; FROZEN
 # percentile -- this script reports retrospective drift + the post-freeze prospective sample
 # and fires the pre-registered look at >=20 distinct prospective days. It never changes the
 # live P. See OPEN_DECISION opening_drive_gate_6week_revisit_20260925.
-/usr/bin/node scripts/recheck_opening_drive_gate.mjs
+timed_step daily /usr/bin/node scripts/recheck_opening_drive_gate.mjs
 
 echo "=== Daily calibration complete: $(date) ==="

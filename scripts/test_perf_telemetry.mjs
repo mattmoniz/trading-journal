@@ -21,9 +21,18 @@ console.log('snapshot cols', JSON.stringify(r.cols), 'flagged', Object.keys(r.re
 const rows = (await query(`SELECT kind, session, deploy_sha, db_time_pct FROM perf_snapshots WHERE id > $1`, [before])).rows;
 assert.equal(rows.length, 1); assert.equal(rows[0].kind, 'SNAPSHOT');
 assert.equal(getPerfAttention(), null, 'a fresh single snapshot never shows a banner');
+await query(`INSERT INTO perf_snapshots (kind, metrics) VALUES ('EXPECT', '{"metric":"detect_avg_ms","direction":"down","why":"test"}')`);
 await writeVerdict(); // runs every verdict query for real; <6 post-deploy samples here so it only writes the (empty) VERDICT row
 const v = (await query(`SELECT kind FROM perf_snapshots WHERE id > $1 AND kind='VERDICT'`, [before])).rows;
 assert.equal(v.length, 1, 'verdict row written');
+const ex = (await query(`SELECT regression FROM perf_snapshots WHERE kind='EXPECT' AND id > $1`, [before])).rows[0];
+assert.ok(ex.regression?.consumed_by, 'expectation consumed by the verdict');
 await query(`DELETE FROM perf_snapshots WHERE id > $1`, [before]);
+// job timing recorder round trip (no history -> no verdict, row stored)
+const { execFileSync } = await import('node:child_process');
+execFileSync('node', ['scripts/record_job_timing.mjs', 'selftest', 'x.mjs', '3', '0']);
+const jt = (await query(`SELECT duration_s::float d FROM job_timings WHERE job='selftest'`)).rows;
+assert.equal(jt.length, 1); assert.equal(jt[0].d, 3);
+await query(`DELETE FROM job_timings WHERE job='selftest'`);
 console.log('perfTelemetry tests passed');
 process.exit(0);
