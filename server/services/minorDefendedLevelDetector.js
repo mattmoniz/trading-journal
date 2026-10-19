@@ -127,17 +127,26 @@ const isRTHMod = (mod) => mod >= 570 && mod < 960; // 9:30am-4:00pm ET, matches 
 // Full calendar-day (NOT RTH-only) 20-day trailing H-L range average -- deliberately distinct
 // from levelProximityService.js's getRollingATR(), see file header for why.
 async function getFullDayATR(dateStr) {
+  // 2026-10-19: was upper-bound-only (`ts::date < $1`, no lower bound) against price_bars_primary, a VIEW that cannot be indexed,
+  // so every call aggregated the entire history (median ~590 ms, up to 3 s) and ran once per pivot date on every poll (~68 calls/min
+  // measured). 90 calendar days always contain 20 trading days (same reasoning as getRollingATR()'s bound), so the result is
+  // identical. Strictly-before-date => day-stable, so it is also cached (wrapped in an object: cacheGet returns null on a miss).
+  const key = `fullDayATR|${dateStr}`;
+  const hit = cacheGet(key);
+  if (hit) return hit.v;
   const { rows } = await query(`
     SELECT AVG(range)::float as atr, COUNT(*)::int as n FROM (
       SELECT ts::date as d, (MAX(high) - MIN(low)) as range
       FROM price_bars_primary
-      WHERE symbol='NQ' AND ts::date < $1
+      WHERE symbol='NQ' AND ts::date < $1 AND ts::date >= $1::date - INTERVAL '90 days'
       GROUP BY ts::date
       ORDER BY d DESC LIMIT 20
     ) recent
   `, [dateStr]);
   const { atr, n } = rows[0] || {};
-  return (atr != null && n >= 20) ? atr : null;
+  const v = (atr != null && n >= 20) ? atr : null;
+  cacheSet(key, { v }, 6 * 60 * 60 * 1000);
+  return v;
 }
 
 // Re-derives denial events + order-flow signature matches from a bounded recent lookback.
