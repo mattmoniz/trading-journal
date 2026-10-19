@@ -27,6 +27,10 @@ async function main() {
   const t1 = Date.now();
   await query(`REFRESH MATERIALIZED VIEW CONCURRENTLY price_bars_dedup_hist`);
   console.log(`Refreshed price_bars_dedup_hist in ${Date.now() - t1}ms`);
+  // Index on ts alone (2026-10-19, docs/PRICE_BARS_AND_STARTUP_SPEED_SPEC.md A1): price_bars_primary's live branch runs max(ts) over this whole store and every
+  // other index here leads with symbol, so each view query seq-scanned all ~683k rows (24 ms -> 0.03 ms with this index). Re-asserted here so a rebuilt matview
+  // (e.g. a cutover) can never silently lose it. IF NOT EXISTS is a no-op when present.
+  await query(`CREATE INDEX IF NOT EXISTS idx_pbdh_ts ON price_bars_dedup_hist (ts)`);
 
   // price_bars_dedup_hist_v2 (the fail-soft historical view, OPEN_DECISION
   // contract_calendar_failsoft_join_20260915 / "T3-b") -- built 2026-09-15, not yet cut over
