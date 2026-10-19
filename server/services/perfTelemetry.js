@@ -1,20 +1,16 @@
-// Performance / health telemetry (2026-10-19). One persisted snapshot every ~5 minutes in perf_snapshots, a DEPLOY marker at each server start,
-// regression detection against the metric's OWN rolling history, and an incident bundle + OPEN_DECISION when a regression persists.
-//
-// Why this exists: detection-pass time, DB saturation and order latency regressed for weeks with nobody noticing, because the only
-// instrumentation was a cumulative-since-boot profiler (db.js getQueryProfile) that nothing stored or compared. Every change since then
-// has had to be "measured by hand". This turns that into a standing mechanism:
-//   1. RECORD   perf_snapshots rows (kind SNAPSHOT) with the running git sha, plus a DEPLOY row at boot.
-//   2. DETECT   each snapshot is compared with the last 14 days of SNAPSHOT rows in the SAME session bucket (RTH / GLOBEX / GAP), using the
-//               distribution itself: flag when the value is above that history's p99 AND its modified z-score (median/MAD) exceeds 3.5 (the
-//               standard Iglewicz-Hoaglin outlier cutoff). No fixed millisecond/percent thresholds anywhere. Needs MIN_HISTORY samples before
-//               it judges anything (reports "learning" until then).
-//   3. ATTRIBUTE scripts/perf_report.mjs groups the same rows by deploy_sha so a change's before/after is automatic.
-//   4. RESPOND  a flag must persist 2 consecutive snapshots to show on the quick-check banner (getPerfAttention); at 3 it captures an INCIDENT
-//               row (what was heaviest: query shapes, routes, pool, event loop, with the deploy that was running) and flags one OPEN_DECISION per
-//               metric per day. Auto-remediation is deliberately NOT done: restarting or killing things while a real position may be open is
-//               the one action this system must never take on its own.
-// Recheck path: this runs forever (it IS the recheck); a persisted regression resolves itself in the banner when the metric returns to range.
+// Post-deploy performance watch (2026-10-19). A change to the app is measured shortly AFTER it ships, against the numbers from before it, so a
+// slowdown is pinned to the change that caused it instead of being found weeks later (the detection-pass / DB-saturation regression ran for
+// weeks unnoticed). Deliberately NOT an ongoing overall-health monitor: outside a deploy's watch window nothing is judged or alerted.
+//   RECORD   perf_snapshots: a DEPLOY row at every server start (git sha), then a SNAPSHOT every 5 min (DB busy %, detection-pass time, event-loop
+//            stalls, detection-poll outages, row-to-ENTRY-order delay). Snapshots from earlier shas are the baseline for the next deploy.
+//   WATCH    for the first WATCH_SNAPSHOTS market-hours snapshots after boot (4 h of non-CLOSED time; a deploy over the weekend waits for the open),
+//            each snapshot is compared with the BASELINE = the previous shas' snapshots in the same session bucket (RTH / GLOBEX / GAP), last 14 days:
+//            flagged when above that baseline's p99 AND its modified z (median/MAD) > 3.5. No fixed ms/% thresholds; "learning" until 60 baseline samples.
+//   RESPOND  2 consecutive flags -> quick-check banner naming the deploy (getPerfAttention); 3 -> INCIDENT row (heaviest query shapes/routes/pool/
+//            loop at that moment) + one OPEN_DECISION. When the watch ends a VERDICT row (post vs baseline medians per metric) is written, and a
+//            metric whose post-deploy median is out of the baseline range is flagged too. No auto-remediation: nothing here restarts or kills
+//            anything (a real position may be open).
+// Before/after on demand: `node scripts/perf_report.mjs`. The Stop hook reminds about it whenever a hot-path file changed.
 import { execFileSync } from 'node:child_process';
 import { monitorEventLoopDelay } from 'node:perf_hooks';
 import pool, { query, getQueryProfile } from '../db.js';
@@ -23,6 +19,7 @@ import { getMlScoringStatus } from './mlScoringServiceManager.js';
 
 const SNAPSHOT_INTERVAL_MS = 5 * 60 * 1000;
 const HISTORY_DAYS = 14;
+const WATCH_SNAPSHOTS = 48;      // market-hours snapshots (4 h) after boot during which this deploy is watched, then the verdict
 const MIN_HISTORY = 60;          // samples in the same session bucket before any judgement (about 5 hours of 5-min snapshots)
 const MODIFIED_Z_CUTOFF = 3.5;   // Iglewicz & Hoaglin outlier cutoff on the modified z-score
 const SHOW_AFTER = 2;            // consecutive flagged snapshots before the banner shows
@@ -30,7 +27,8 @@ const INCIDENT_AT = 3;           // consecutive flagged snapshots before an inci
 // Higher is worse for every one of these.
 const JUDGED = ['db_time_pct', 'detect_avg_ms', 'loop_p99_ms', 'poll_outages', 'entry_delay_p90_s'];
 
-const bootId = new Date().toISOString();
+const bootMs = Date.now();
+const bootId = new Date(bootMs).toISOString();
 let deploySha = 'unknown';
 try {
   deploySha = execFileSync('git', ['rev-parse', '--short=10', 'HEAD'], { encoding: 'utf8', cwd: new URL('../..', import.meta.url).pathname }).trim();
@@ -45,6 +43,8 @@ let prevShapes = new Map();   // shape -> {totalMs, calls}
 let prevRoutes = new Map();   // route -> {totalMs, calls}
 let prevConsecutive = {};     // metric -> consecutive flagged snapshots
 let lastReport = null;        // last snapshot's regression report, for the banner
+let watchCount = 0;           // non-CLOSED snapshots taken since boot
+let verdictDone = false;
 let getRequestProfile = () => [];
 let timer = null;
 
@@ -138,16 +138,11 @@ async function collect() {
   };
 }
 
-async function sinceDeploy() {
-  const r = await query(`SELECT deploy_sha, EXTRACT(EPOCH FROM (now() - captured_at))::int AS age_s FROM perf_snapshots WHERE kind='DEPLOY' ORDER BY captured_at DESC LIMIT 1`);
-  return r.rows[0] ? { sha: r.rows[0].deploy_sha, minutesAgo: Math.round(r.rows[0].age_s / 60) } : null;
-}
-
 async function judge(session, cols) {
   const report = { session, flagged: {}, learning: [] };
   if (session === 'CLOSED') return report;
   for (const m of JUDGED) {
-    const hist = (await query(`SELECT ${m} AS v FROM perf_snapshots WHERE kind='SNAPSHOT' AND session=$1 AND ${m} IS NOT NULL AND captured_at >= now() - ($2 || ' days')::interval`, [session, String(HISTORY_DAYS)])).rows.map(r => Number(r.v));
+    const hist = (await query(`SELECT ${m} AS v FROM perf_snapshots WHERE kind='SNAPSHOT' AND session=$1 AND ${m} IS NOT NULL AND deploy_sha <> $3 AND captured_at >= now() - ($2 || ' days')::interval`, [session, String(HISTORY_DAYS), deploySha])).rows.map(r => Number(r.v));
     const j = judgeAgainstHistory(cols[m], hist);
     if (!j) { if (cols[m] != null) report.learning.push(`${m} (${hist.length}/${MIN_HISTORY})`); prevConsecutive[m] = 0; continue; }
     if (j.flagged) { prevConsecutive[m] = (prevConsecutive[m] || 0) + 1; report.flagged[m] = { ...j, consecutive: prevConsecutive[m] }; }
@@ -159,10 +154,9 @@ async function judge(session, cols) {
 export async function takeSnapshot() {
   const c = await collect();
   const session = etSession();
-  const report = await judge(session, c.cols);
-  let deploy = null;
-  if (Object.keys(report.flagged).length) deploy = await sinceDeploy().catch(() => null);
-  if (deploy) report.deploy = deploy;
+  const watching = watchCount < WATCH_SNAPSHOTS;
+  const report = watching && session !== 'CLOSED' ? await judge(session, c.cols) : { session, flagged: {}, learning: [], watching: false };
+  report.deploy = { sha: deploySha, minutesAgo: Math.round((Date.now() - bootMs) / 60000) };
   await query(`INSERT INTO perf_snapshots (kind, deploy_sha, boot_id, session, interval_s, db_time_pct, query_calls, detect_calls, detect_avg_ms, detect_max_ms, loop_p99_ms, poll_outages, entry_delay_p50_s, entry_delay_p90_s, metrics, regression)
     VALUES ('SNAPSHOT',$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
     [deploySha, bootId, session, Math.round(c.wallMs / 1000), c.cols.db_time_pct, c.cols.query_calls, c.cols.detect_calls, c.cols.detect_avg_ms, c.cols.detect_max_ms, c.cols.loop_p99_ms, c.cols.poll_outages, c.cols.entry_delay_p50_s, c.cols.entry_delay_p90_s, JSON.stringify(c.detail), JSON.stringify(report)]);
@@ -170,7 +164,38 @@ export async function takeSnapshot() {
   for (const [metric, f] of Object.entries(report.flagged)) {
     if (f.consecutive === INCIDENT_AT) await captureIncident(metric, f, c, session, report.deploy).catch(e => console.error('[perf] incident capture failed:', e.message));
   }
+  if (session !== 'CLOSED') watchCount++;
+  if (watching && watchCount >= WATCH_SNAPSHOTS && !verdictDone) { verdictDone = true; await writeVerdict().catch(e => console.error('[perf] verdict failed:', e.message)); }
   return { cols: c.cols, report };
+}
+
+// End of the watch: post-deploy median of each metric vs the pre-deploy (other shas) distribution for the same session bucket.
+export async function writeVerdict() {
+  const out = {};
+  const worse = [];
+  for (const session of ['RTH', 'GLOBEX', 'GAP']) {
+    for (const m of JUDGED) {
+      const post = (await query(`SELECT ${m} AS v FROM perf_snapshots WHERE kind='SNAPSHOT' AND boot_id=$1 AND session=$2 AND ${m} IS NOT NULL`, [bootId, session])).rows.map(r => Number(r.v));
+      const base = (await query(`SELECT ${m} AS v FROM perf_snapshots WHERE kind='SNAPSHOT' AND deploy_sha <> $1 AND session=$2 AND ${m} IS NOT NULL AND captured_at >= now() - ($3 || ' days')::interval`, [deploySha, session, String(HISTORY_DAYS)])).rows.map(r => Number(r.v));
+      if (post.length < 6) continue; // under 30 min of this session type since the deploy: nothing to say yet
+      const postMedian = median(post);
+      const j = judgeAgainstHistory(postMedian, base);
+      const entry = { postMedian: +postMedian.toFixed(2), baselineMedian: base.length ? +median(base).toFixed(2) : null, nPost: post.length, nBase: base.length, verdict: j ? (j.flagged ? 'WORSE' : 'NOT_WORSE') : 'LEARNING' };
+      (out[session] ||= {})[m] = entry;
+      if (entry.verdict === 'WORSE') worse.push(`${m} (${session}): ${entry.postMedian} vs ${entry.baselineMedian} before`);
+    }
+  }
+  await query(`INSERT INTO perf_snapshots (kind, deploy_sha, boot_id, session, metrics, regression) VALUES ('VERDICT',$1,$2,NULL,$3,$4)`, [deploySha, bootId, JSON.stringify(out), JSON.stringify({ worse })]);
+  console.log(`[perf] post-deploy verdict for ${deploySha}: ${worse.length ? 'WORSE on ' + worse.join('; ') : 'nothing worse than before'}`);
+  if (worse.length) {
+    const today = (await query(`SELECT CURRENT_DATE::text d`)).rows[0].d;
+    const { flagDecision } = await import('../../scripts/flag_decision.mjs');
+    await flagDecision({
+      slug: `perf_verdict_${deploySha.replace(/\W/g, '')}_${today.replace(/-/g, '')}`,
+      priority: 'MEDIUM', sourceFile: 'server/services/perfTelemetry.js', sourceDate: today,
+      decisionText: `Post-deploy watch for ${deploySha} ended with these metrics above their pre-deploy range: ${worse.join('; ')}. Evidence: perf_snapshots kind=VERDICT (newest) and any INCIDENT rows for this boot; compare with \`node scripts/perf_report.mjs\`. To resolve: find what in this change cost the time and fix it, or, if it is the accepted price of the change, resolve with that explanation.`,
+    });
+  }
 }
 
 async function captureIncident(metric, f, c, session, deploy) {
@@ -185,7 +210,7 @@ async function captureIncident(metric, f, c, session, deploy) {
       priority: 'MEDIUM',
       sourceFile: 'server/services/perfTelemetry.js',
       sourceDate: today,
-      decisionText: `${metric} stayed above its own rolling range for ${INCIDENT_AT} consecutive 5-min snapshots in the ${session} session: value ${f.value} vs median ${f.median.toFixed(1)} / p99 ${f.p99.toFixed(1)} (modified z ${f.z}). Running sha ${deploySha}${deploy ? `; the last deploy marker was ${deploy.sha}, ${deploy.minutesAgo} min before this check` : ''}. Evidence bundle: perf_snapshots kind=INCIDENT, newest row (heaviest query shapes, routes, pool, event loop in that interval). To resolve: find the cause with the bundle, fix it, and confirm the metric is back inside range in later SNAPSHOT rows (node scripts/perf_report.mjs); or, if the new level is the intended cost of a change, resolve with that explanation.`,
+      decisionText: `${metric} stayed above its pre-deploy range for ${INCIDENT_AT} consecutive 5-min snapshots in the ${session} session: value ${f.value} vs median ${f.median.toFixed(1)} / p99 ${f.p99.toFixed(1)} (modified z ${f.z}). Running sha ${deploySha}${deploy ? `; this is the post-deploy watch of ${deploy.sha}, ${deploy.minutesAgo} min after the restart` : ''}. Evidence bundle: perf_snapshots kind=INCIDENT, newest row (heaviest query shapes, routes, pool, event loop in that interval). To resolve: find the cause with the bundle, fix it, and confirm the metric is back inside range in later SNAPSHOT rows (node scripts/perf_report.mjs); or, if the new level is the intended cost of a change, resolve with that explanation.`,
     });
   } catch (e) { console.error('[perf] flagDecision failed:', e.message); }
 }
@@ -215,5 +240,5 @@ export async function startPerfTelemetry({ requestProfile } = {}) {
   } catch (e) { console.error('[perf] start failed:', e.message); }
   timer = setInterval(() => { takeSnapshot().catch(e => console.error('[perf] snapshot failed:', e.message)); }, SNAPSHOT_INTERVAL_MS);
   timer.unref?.();
-  console.log(`[perf] telemetry on, sha=${deploySha}, snapshot every ${SNAPSHOT_INTERVAL_MS / 60000} min`);
+  console.log(`[perf] telemetry on, sha=${deploySha}, snapshot every ${SNAPSHOT_INTERVAL_MS / 60000} min, watching this deploy for ${WATCH_SNAPSHOTS} market-hours snapshots`);
 }

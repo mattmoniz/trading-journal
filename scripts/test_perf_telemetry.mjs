@@ -1,6 +1,6 @@
 // Unit checks for perfTelemetry's regression judge + one real snapshot round trip (the inserted rows are deleted afterwards).
 import assert from 'node:assert/strict';
-import { judgeAgainstHistory, etSession, takeSnapshot, getPerfAttention } from '../server/services/perfTelemetry.js';
+import { judgeAgainstHistory, etSession, takeSnapshot, getPerfAttention, writeVerdict } from '../server/services/perfTelemetry.js';
 import { query } from '../server/db.js';
 const quiet = Array.from({ length: 100 }, (_, i) => 20 + (i % 7));           // 20..26
 assert.equal(judgeAgainstHistory(25, quiet).flagged, false, 'in-range value not flagged');
@@ -21,6 +21,9 @@ console.log('snapshot cols', JSON.stringify(r.cols), 'flagged', Object.keys(r.re
 const rows = (await query(`SELECT kind, session, deploy_sha, db_time_pct FROM perf_snapshots WHERE id > $1`, [before])).rows;
 assert.equal(rows.length, 1); assert.equal(rows[0].kind, 'SNAPSHOT');
 assert.equal(getPerfAttention(), null, 'a fresh single snapshot never shows a banner');
+await writeVerdict(); // runs every verdict query for real; <6 post-deploy samples here so it only writes the (empty) VERDICT row
+const v = (await query(`SELECT kind FROM perf_snapshots WHERE id > $1 AND kind='VERDICT'`, [before])).rows;
+assert.equal(v.length, 1, 'verdict row written');
 await query(`DELETE FROM perf_snapshots WHERE id > $1`, [before]);
 console.log('perfTelemetry tests passed');
 process.exit(0);

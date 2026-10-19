@@ -53,7 +53,7 @@ async function loadSetup(setupId) {
     FROM active_setups a WHERE a.id = $1`, [setupId]);
   if (!s.rows[0]) return null;
   const legs = await query(`
-    SELECT id, purpose, status, side, client_order_id, server_order_id, avg_fill_price::float AS avg,
+    SELECT id, purpose, status, side, client_order_id, server_order_id, avg_fill_price::float AS avg, filled_quantity,
            TO_CHAR(last_update_at, 'YYYY-MM-DD HH24:MI:SS') AS last_update_at
     FROM order_placements WHERE setup_id = $1 ORDER BY id`, [setupId]);
   return { ...s.rows[0], legs: legs.rows };
@@ -66,7 +66,7 @@ async function tryRawMessageFills(setup) {
   if (!entry || !exit) return null;
   const entryAvg = entry.avg ?? await rawFillPrice(entry.client_order_id, setup.entry_level);
   const exitAvg = exit.avg ?? await rawFillPrice(exit.client_order_id, setup.entry_level);
-  const pnl = brokerPnlFromFills({ entrySide: entry.side, entryAvg, exitAvg });
+  const pnl = brokerPnlFromFills({ entrySide: entry.side, entryAvg, exitAvg, quantity: Math.max(Number(entry.filled_quantity) || 1, 1) }); // real filled lots, not a fixed 1 (DeepSeek review M3)
   return pnl == null ? null : { pnl, entryAvg, exitAvg };
 }
 

@@ -13,7 +13,7 @@
 
 import { DtcClient } from './dtcClient.js';
 import { killSwitch } from './orderEligibility.js';
-import { handleOrderUpdate, runReconciliation, extractPositionForSymbol } from './reconciliation.js';
+import { handleOrderUpdate, runReconciliation, extractPositionForSymbol, getBrokerSnapshot } from './reconciliation.js';
 import { resolveMnqFrontMonthSymbolFromEnv } from './contractSymbol.js';
 import { query } from '../../db.js';
 import { getPriceMultiplier } from './priceMultiplier.js';
@@ -67,15 +67,11 @@ async function samplePosition() {
     const todayQ = await query(`SELECT CURRENT_DATE::text as today`);
     await warmPriceMultipliers(todayQ.rows[0].today).catch((e) => console.error('[sierraChart.connectionManager] multiplier warm-up failed:', e.message));
     const symbol = resolveMnqFrontMonthSymbolFromEnv(todayQ.rows[0].today).orderSymbol;
-    const positionMessages = [];
-    const onPosition = (msg) => { positionMessages.push(msg); };
-    client.on('positionUpdate', onPosition);
-    try {
-      client.requestCurrentPositions();
-      await new Promise((resolve) => setTimeout(resolve, 1500));
-    } finally {
-      client.off('positionUpdate', onPosition); // always, even if the request throws (DeepSeek review finding 8)
-    }
+    // Through getBrokerSnapshot() so it is serialized with every other snapshot (2026-10-19, DeepSeek review L3): a private listener could
+    // capture a reply meant for an overlapping request and misread another account's flat as this one's.
+    const snap = await getBrokerSnapshot(client, { collectWindowMs: 1500 });
+    if (snap.failed) return;
+    const positionMessages = snap.positionMessages;
     const net = extractPositionForSymbol(positionMessages, symbol, client.tradeAccount);
     if (net == null || net === lastSampledNet) return;
     lastSampledNet = net;
@@ -144,6 +140,10 @@ function maybeAutoRearmAfterReconcile() {
   const state = killSwitch.getState();
   if (state.armed) return;
   if (!lastReconciliationReport || !lastReconciliationReport.clean) return;
+  // The open-orders report being clean is not enough: a position-invariant mismatch halts in the SAME pass, and with no resting orders the
+  // report is clean, so the halt was undone immediately (2026-10-19, DeepSeek review C1). `checked:false` (no position message at all,
+  // which is what a flat broker sends) is unknown, not a mismatch, and still allowed -- a failed snapshot already makes the report unclean.
+  if (lastInvariantCheck && (lastInvariantCheck.match === false || lastInvariantCheck.otherAccountsMismatch === true)) return;
   const previousHaltReason = state.haltedReason;
   killSwitch.arm('auto-rearm-on-simulation-boot');
   console.log(`[sierraChart.connectionManager] DTC_AUTO_REARM_SAFE=true for trade account "${process.env.DTC_TRADE_ACCOUNT}" and a fresh reconciliation came back clean -- auto-armed (was halted: ${previousHaltReason || '(no reason recorded)'}).`);

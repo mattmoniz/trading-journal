@@ -624,6 +624,14 @@ export async function placeExitOrder(dtcClient, params) {
     console.error(`[sierraChart.reconciliation] setup_id=${params.setupId}: REFUSED market exit -- ${guard.reason}. Nothing sent. Check the broker's position and order history directly.`);
     // Retire ONLY on an explicit flat reading (a NoPositions reply == 0), never on a sign mismatch or a null:
     // DeepSeek review -- a wrong retirement leaves a real position with no exit ever placed.
+    // ...and never when the account being read is not the account orders actually go out on: the default order path always sends the
+    // LOGON account, so a different per-session label reads an account that holds nothing and would cancel the stop of a still-open
+    // position (2026-10-19, DeepSeek review H2).
+    if (brokerQty === 0 && acct && dtcClient.tradeAccount && acct !== dtcClient.tradeAccount) {
+      const why = `read account "${acct}" differs from the logon account "${dtcClient.tradeAccount}" orders are sent under -- not retiring (protective orders left in place)`;
+      await persistExitGate(params.setupId, 'SIERRA_EXIT_REFUSED', why);
+      return { action: 'REFUSED_BROKER_MISMATCH', reason: why, brokerQty };
+    }
     if (brokerQty === 0) return await retireExit(dtcClient, params, 'broker reports flat: ' + guard.reason, brokerQty, stopStatus, targetStatus);
     return { action: 'REFUSED_BROKER_MISMATCH', reason: guard.reason, brokerQty };
   }
@@ -1040,7 +1048,9 @@ function collectBrokerSnapshot(dtcClient, { collectWindowMs = 4000, tradeAccount
     } catch (err) {
       dtcClient.off('orderUpdate', onOrderUpdate);
       dtcClient.off('positionUpdate', onPositionUpdate);
-      resolve({ openOrders, positionMessages });
+      // `failed`: the request itself could not be sent (connection dropped), so an empty result means "no data", not "nothing open"
+      // (2026-10-19, DeepSeek review M1) -- buildReconciliationReport callers must not read it as a clean broker.
+      resolve({ openOrders, positionMessages, failed: true });
       return;
     }
     setTimeout(() => {
@@ -1080,8 +1090,13 @@ export function extractPositionForSymbol(positionMessages, symbol, tradeAccount)
   const bare = _bareSymbol(symbol);
   // `tradeAccount` (2026-10-18): ignore a reply that names a DIFFERENT account (a message with no account
   // field is accepted -- snapshots are serialized, so it belongs to the request just made).
-  const msg = positionMessages.find((p) => (p.Symbol === symbol || p.Symbol === bare)
+  // LAST matching message, not the first (2026-10-19, independent DeepSeek review H1): a collection window can hold several sequential
+  // position messages for one symbol (7 seen in one real reverse), the first being a stale/transient state (e.g. a leading NoPositions
+  // while a flatten/reverse is still settling). A "flat" reading here can retire an exit and cancel the protective stop, so it must be the
+  // settled (latest) reading; a trailing NoPositions is still a real flat.
+  const matches = positionMessages.filter((p) => (p.Symbol === symbol || p.Symbol === bare)
     && (!tradeAccount || !p.TradeAccount || p.TradeAccount === tradeAccount));
+  const msg = matches.length ? matches[matches.length - 1] : null;
   if (!msg) return null;
   return msg.NoPositions ? 0 : msg.Quantity;
 }
@@ -1263,8 +1278,8 @@ export async function checkPositionInvariant(dtcClient, killSwitch, symbol, snap
     killSwitch.halt(`position invariant mismatch on ${symbol}: broker=${finalBrokerNet}, app-expected=${expectedNet}`, 'system-invariant-check');
     console.error(`[sierraChart.reconciliation] POSITION INVARIANT MISMATCH on ${symbol}: broker reports net ${finalBrokerNet}, this app's own fill records expect ${expectedNet}. Kill switch halted. Investigate directly in Sierra Chart before re-arming.`);
   }
-  await checkOtherAccountsInvariant(dtcClient, killSwitch, symbol, mainAcct);
-  return { checked: true, match, brokerNet: finalBrokerNet, expectedNet, freshSnapshot };
+  const otherAccountsMismatch = await checkOtherAccountsInvariant(dtcClient, killSwitch, symbol, mainAcct);
+  return { checked: true, match, brokerNet: finalBrokerNet, expectedNet, freshSnapshot, otherAccountsMismatch };
 }
 
 // Every OTHER trade account this app has placed orders on (the Globex account is a real, separate broker
@@ -1272,27 +1287,38 @@ export async function checkPositionInvariant(dtcClient, killSwitch, symbol, snap
 // a flat expectation with no broker reply is "unknown", not a mismatch, same as the main account. One fresh
 // re-read before halting. Never throws (a failure here must not abort the reconciliation).
 async function checkOtherAccountsInvariant(dtcClient, killSwitch, symbol, mainAcct) {
+  // Returns true if any other account mismatched (and the switch was halted). Per-account try/catch so one account's failure can't skip the
+  // rest, and an account the app believes is FLAT is still read (2026-10-19, DeepSeek review H3): a broker position the app has no rows for
+  // is exactly the stranded-position case, so "expected 0" must not mean "never look".
+  let mismatched = false;
+  let others;
   try {
-    if (!dtcClient?.isLoggedOn) return;
-    const others = await query(`
+    if (!dtcClient?.isLoggedOn) return false;
+    others = await query(`
       SELECT DISTINCT trade_account FROM order_placements
       WHERE symbol = $1 AND trade_account IS NOT NULL AND ($2::text IS NULL OR trade_account <> $2::text)
         AND id > (SELECT COALESCE(MAX(baseline_order_id), 0) FROM order_placements_invariant_baseline)`, [symbol, mainAcct]);
-    for (const { trade_account: acct } of others.rows) {
+  } catch (err) {
+    console.error('[sierraChart.reconciliation] other-account list failed (ignored):', err.message);
+    return false;
+  }
+  for (const { trade_account: acct } of others.rows) {
+    try {
       const expected = await getAppExpectedNet(symbol, acct);
-      if (expected === 0) continue;
       let net = extractPositionForSymbol((await getBrokerSnapshot(dtcClient, { tradeAccount: acct })).positionMessages, symbol, acct);
       if (net == null || net === expected) continue;
       await new Promise(resolve => setTimeout(resolve, INVARIANT_RETRY_DELAY_MS));
       net = extractPositionForSymbol((await getBrokerSnapshot(dtcClient, { tradeAccount: acct })).positionMessages, symbol, acct);
       if (net == null || net === expected) continue;
+      mismatched = true;
       killSwitch.halt(`position invariant mismatch on ${symbol} (account ${acct}): broker=${net}, app-expected=${expected}`, 'system-invariant-check');
       console.error(`[sierraChart.reconciliation] POSITION INVARIANT MISMATCH on ${symbol} for account ${acct}: broker net ${net}, app expects ${expected}. Kill switch halted.`);
       await raiseBrokerAttention('EXTRA_EXPOSURE', { symbol, account: acct, brokerNet: net, expectedNet: expected });
+    } catch (err) {
+      console.error(`[sierraChart.reconciliation] other-account invariant check failed for ${acct} (ignored):`, err.message);
     }
-  } catch (err) {
-    console.error('[sierraChart.reconciliation] other-account invariant check failed (ignored):', err.message);
   }
+  return mismatched;
 }
 
 /**
@@ -1308,7 +1334,9 @@ async function checkOtherAccountsInvariant(dtcClient, killSwitch, symbol, mainAc
  */
 export async function reconcileAgainstBroker(dtcClient, opts) {
   const snapshot = opts?.snapshot || await getBrokerSnapshot(dtcClient, opts);
-  return buildReconciliationReport(snapshot.openOrders, snapshot.positionMessages.filter((p) => !p.NoPositions));
+  const report = await buildReconciliationReport(snapshot.openOrders, snapshot.positionMessages.filter((p) => !p.NoPositions));
+  if (snapshot.failed) { report.snapshotFailed = true; report.clean = false; } // no data is never "clean"
+  return report;
 }
 
 /**

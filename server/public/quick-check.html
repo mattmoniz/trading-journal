@@ -3911,15 +3911,15 @@ function renderPerfAttentionBanner(d) {
   const tag = document.createElement('span');
   tag.className = 'ol-banner-tag';
   tag.style.color = '#f87171';
-  tag.textContent = 'APP SLOWER THAN USUAL';
+  tag.textContent = 'SLOWER SINCE LAST CHANGE';
   el.appendChild(tag);
   const names = { db_time_pct: 'database busy', detect_avg_ms: 'detection pass time', loop_p99_ms: 'server stalls', poll_outages: 'detection poll outages', entry_delay_p90_s: 'row-to-order delay (s)' };
   for (const m of a.metrics) {
     const line = document.createElement('div');
-    line.textContent = (names[m.metric] || m.metric) + ': ' + m.value + ' now vs ' + m.median + ' typical (' + a.session + '), ' + m.consecutive + ' checks in a row';
+    line.textContent = (names[m.metric] || m.metric) + ': ' + m.value + ' now vs ' + m.median + ' before the change (' + a.session + '), ' + m.consecutive + ' checks in a row';
     el.appendChild(line);
   }
-  if (a.deploy) { const dp = document.createElement('div'); dp.style.color = 'var(--dim)'; dp.textContent = 'Last deploy ' + a.deploy.sha + ', ' + a.deploy.minutesAgo + ' min before the check.'; el.appendChild(dp); }
+  if (a.deploy) { const dp = document.createElement('div'); dp.style.color = 'var(--dim)'; dp.textContent = 'Change ' + a.deploy.sha + ', restarted ' + a.deploy.minutesAgo + ' min ago.'; el.appendChild(dp); }
   el.className = 'visible';
 }
 

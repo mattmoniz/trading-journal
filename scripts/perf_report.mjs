@@ -3,7 +3,7 @@
 // git sha that was running and prints each metric's median + p90, then the change from the previous sha with enough data. A "before/after" for any
 // change is therefore automatic: run `node scripts/perf_report.mjs` a few hours after deploying. Also lists open INCIDENT bundles.
 //   node scripts/perf_report.mjs [days=14] [--incidents]
-// Informational. A sha needs MIN_SNAPSHOTS snapshots in a session bucket to be compared (else shown as "thin"). The comparison is descriptive,
+// Run it on demand, 1-2 hours of market time after a change (the in-server post-deploy watch also writes a VERDICT row). Informational. A sha needs MIN_SNAPSHOTS snapshots in a session bucket to be compared (else shown as "thin"). The comparison is descriptive,
 // not a significance test -- use it to decide where to look, then confirm with the incident bundle / query profile.
 import { query } from '../server/db.js';
 const days = Number(process.argv.find(a => /^\d+$/.test(a))) || 14;

@@ -213,12 +213,11 @@ server/
 │                           2026-10-19: every connection also runs `SET jit = off` (JIT cost ~1.3 s on the view-based plans) and
 │                           db.js keeps an in-process per-query-shape profiler (see index.js `/api/diag/query-profile`, local-only,
 │                           also per-route request timings + event-loop delay).
-├── services/perfTelemetry.js  # 2026-10-19 app performance/health record: perf_snapshots (SNAPSHOT every 5 min, DEPLOY at boot with git sha,
-│                           INCIDENT bundle) + regression detection vs its own 14-day same-session history (p99 AND modified z>3.5, no fixed
-│                           thresholds) -> `perfAttention` on /api/setups/live-flags (quick-check "APP SLOWER THAN USUAL" banner after 2
-│                           snapshots) and an OPEN_DECISION at 3. Per-deploy before/after: `node scripts/perf_report.mjs` (daily -> scratch/perf_report.txt).
-├── lib/cache.js           # tiny TTL cache (cacheGet/cacheSet); lib/microCache.js (2026-10-19) = 15 s response cache + request
-│                           coalescing middleware for polled read-only GETs (market/pulse, live-session-context)
+├── services/perfTelemetry.js  # 2026-10-19 post-deploy performance watch: perf_snapshots (DEPLOY marker at boot with git sha, SNAPSHOT every 5 min,
+│                           INCIDENT bundle, VERDICT at the end of the ~4 h watch). Each snapshot in the watch is judged against the PREVIOUS shas'
+│                           same-session history (p99 AND modified z>3.5, no fixed thresholds) -> `perfAttention` on /api/setups/live-flags
+│                           (quick-check "SLOWER SINCE LAST CHANGE" banner after 2 snapshots) + OPEN_DECISION. On-demand before/after:
+│                           `node scripts/perf_report.mjs`. Not an ongoing overall monitor: nothing is judged outside a watch window.
 ├── sierra.js              # TAL file parser, chokidar watcher
 ├── routes/                # 27 files, one per domain, all mounted under /api
 ├── services/               # 19 files, business logic called by routes (and by cron jobs in index.js)
