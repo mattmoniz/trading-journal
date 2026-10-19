@@ -210,6 +210,11 @@ server/
 │                           Postgres max_connections=100) + query() helper; also fixes a
 │                           timestamp/timezone parsing bug globally
 ├── schema.sql             # Original 5-table schema only (see DB section above)
+│                           2026-10-19: every connection also runs `SET jit = off` (JIT cost ~1.3 s on the view-based plans) and
+│                           db.js keeps an in-process per-query-shape profiler (see index.js `/api/diag/query-profile`, local-only,
+│                           also per-route request timings + event-loop delay).
+├── lib/cache.js           # tiny TTL cache (cacheGet/cacheSet); lib/microCache.js (2026-10-19) = 15 s response cache + request
+│                           coalescing middleware for polled read-only GETs (market/pulse, live-session-context)
 ├── sierra.js              # TAL file parser, chokidar watcher
 ├── routes/                # 27 files, one per domain, all mounted under /api
 ├── services/               # 19 files, business logic called by routes (and by cron jobs in index.js)
