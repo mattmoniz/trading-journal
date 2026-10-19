@@ -33,6 +33,7 @@
 // No circular import results from this: acd.js only ever imports FROM this file
 // (buildAllCandidates, computeLevelFadeFactors, logGatedCandidate), never the reverse.
 import { query } from '../db.js';
+import { getCompletedSessions } from './dailyRthStats.js';
 import { getCached, setCached, DAY_CACHE_TTL } from './acdShared.js';
 import { getPriorDayProfile, getOrVolBaseline20d } from './acdLiveCalibration.js';
 import { getBetClass, usesLevelAnchoredExit } from '../config/setupTypes.js';
@@ -1009,20 +1010,16 @@ export async function buildAllCandidates(ctx) {
       // ── SETUP 10: GAP FILL ──────────────────────────────────────────────────
       let gapFill = null;
       {
-        const rangesQ = await query(`
-          SELECT d, rth_low, rth_high FROM (
-            SELECT ts::date::text as d,
-              MIN(low)::float as rth_low,
-              MAX(high)::float as rth_high
-            FROM price_bars_primary
-            WHERE symbol='NQ'
-              AND (EXTRACT(hour FROM ts)*60 + EXTRACT(minute FROM ts)) BETWEEN 570 AND 959
-              AND ts::date <= $1
-            GROUP BY ts::date
-            ORDER BY ts::date DESC
-            LIMIT 40
-          ) sub ORDER BY d ASC
+        // Completed sessions come from daily_rth_stats (view fallback inside dailyRthStats.js); only TODAY's partial RTH range is read live, from a
+        // range-bounded query. Same 40-session window as before: today (when it has RTH bars) + the 39 newest completed, else the 40 newest completed.
+        const todayQ = await query(`
+          SELECT MIN(low)::float AS rth_low, MAX(high)::float AS rth_high FROM price_bars_primary
+          WHERE symbol='NQ' AND ts >= $1::date AND ts < $1::date + 1
+            AND (EXTRACT(hour FROM ts)*60 + EXTRACT(minute FROM ts)) BETWEEN 570 AND 959
         `, [todayET]);
+        const todayHas = todayQ.rows[0] && todayQ.rows[0].rth_low != null;
+        const completedSessions = await getCompletedSessions({ beforeDate: todayET, limit: todayHas ? 39 : 40 });
+        const rangesQ = { rows: todayHas ? [...completedSessions, { d: todayET, rth_low: todayQ.rows[0].rth_low, rth_high: todayQ.rows[0].rth_high }] : completedSessions };
         const sessions = rangesQ.rows;
 
         if (sessions.length >= 2 && currentPrice) {

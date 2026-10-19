@@ -10,6 +10,7 @@
  * Anything failing its window is logged as "forming/unconfirmed" and does NOT move conviction.
  */
 
+import { getCompletedSessions } from './dailyRthStats.js';
 import { query } from '../db.js';
 import { getNL, getPriorWeekRange, getGLine, getConvictionData, computeDynamicConviction } from './queries.js';
 import { getStructuralLevels } from './phaseChangeDetector.js';
@@ -646,20 +647,8 @@ async function getOpenGaps(tradeDate, currentPrice, bars = []) {
     if (gapsHistoryCache.has(tradeDate)) {
       sessions = [...gapsHistoryCache.get(tradeDate)];
     } else {
-      const rangesQ = await query(`
-        SELECT d, rth_low, rth_high FROM (
-          SELECT ts::date::text as d,
-            MIN(low)::float as rth_low,
-            MAX(high)::float as rth_high
-          FROM price_bars_primary
-          WHERE symbol='NQ'
-            AND (EXTRACT(hour FROM ts)*60 + EXTRACT(minute FROM ts)) BETWEEN 570 AND 959
-            AND ts::date < $1
-          GROUP BY ts::date
-          ORDER BY ts::date DESC
-          LIMIT 39
-        ) sub ORDER BY d ASC
-      `, [tradeDate]);
+      // completed sessions only (strictly before tradeDate): served from daily_rth_stats, view fallback inside (dailyRthStats.js)
+      const rangesQ = { rows: await getCompletedSessions({ beforeDate: tradeDate, limit: 39 }) };
       sessions = rangesQ.rows;
       if (sessions.length > 0) {
         gapsHistoryCache.set(tradeDate, sessions);

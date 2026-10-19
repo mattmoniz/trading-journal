@@ -54,3 +54,18 @@ B-fact 2: ranks 2-3 are recurring (growing counts), probably keyed by something 
 4. B1 vs B2: is a persisted `daily_rth_stats` over-engineering for a value derivable in one query? Failure modes of B1 (stale row, partial day written, the quarterly contract-roll weeks where `price_bars_primary` has known degraded days — KNOWN_ISSUES 16/17)?
 5. Anything in B-fact 2 or the table in "Why now" that suggests a different dominant cause than the one assumed here?
 6. Test plan: what would you require before enabling each of A1, A2, B1, and how should rollback be ordered?
+
+
+---
+## Review outcome and what was built (2026-10-19, same day)
+
+DeepSeek review (`scratch/deepseek_response_pricebars_spec_20261019.md`) applied. Findings verified against the code/live profile and accepted:
+- **B1 as written missed the biggest recurring cost.** The ~490 ms `rth_low/rth_high` query that keeps growing in the profiler is the GAP FILL setup in `acdCandidateBuilder.js` (~line 1013), uncached, run every detection pass (`caseEngine.getOpenGaps` is already day-cached; the `/acd/gap-context` route has no caller). Fixed: it now reads completed sessions from the table and only today's partial session live.
+- `getVolumeBaseline5m` (stallDefendedLevelDetector.js) was uncached across passes (only a per-invocation Map) -> now a 6 h in-flight-promise cache.
+- `minorDefendedLevelDetector` is NOT a `getRollingATR` caller (it has its own full-day `getFullDayATR`, different definition) -> deliberately NOT moved onto the RTH-only table. Spec error corrected here.
+- The `n >= 20` and 90-day window contract of `getRollingATR` is preserved (the table path returns the view's answer when it has fewer than 20 sessions).
+- The "wrong-but-present row" risk: the nightly builder rebuilds the last 400 days (upsert), so corrections propagate nightly; the table equals the view by construction (same source, same window), so it adds no new wrongness; the standing recheck is `scripts/test_daily_rth_stats.mjs` (weekly).
+- A1 note: `CREATE INDEX CONCURRENTLY` is not allowed on a materialized view; use a plain `CREATE INDEX` outside the 8:20 PM refresh window. v2 needs NO extra `ts` index (its existing `(symbol, ts)` unique index serves its symbol-scoped max). A1 is the smallest of the three real wins for the recurring load; A2 (cast-free ranges, with the `<=` vs `<` off-by-one trap) is the next.
+- Ship order from the review: caches -> A1 -> A2 -> B1 last, with the view as fallback. Actual order taken: B1 + caches first (user's choice), fail-soft fallback verified by a drill.
+
+Built: `daily_rth_stats` + `build_daily_rth_stats.mjs` (nightly) + `server/services/dailyRthStats.js` (fail-soft reader) wired into `getRollingATR`, `caseEngine.getOpenGaps`, the gap-fill setup; day cache on `getVolumeBaseline5m`. NOT yet done: A1 index, A2 range rewrites (rank 4-8 bar reads).

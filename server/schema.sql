@@ -4853,6 +4853,20 @@ CREATE TABLE public.daily_performance_log_session_pnl_fix_backup_20260719 (
 
 
 --
+-- Name: daily_rth_stats; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.daily_rth_stats (
+    trade_date date NOT NULL,
+    rth_high numeric(12,4) NOT NULL,
+    rth_low numeric(12,4) NOT NULL,
+    rth_range numeric(12,4) NOT NULL,
+    n_bars integer NOT NULL,
+    built_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
 -- Name: daytype_accuracy_log; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -5123,6 +5137,41 @@ CREATE SEQUENCE public.import_log_id_seq
 --
 
 ALTER SEQUENCE public.import_log_id_seq OWNED BY public.import_log.id;
+
+
+--
+-- Name: job_timings; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.job_timings (
+    id bigint NOT NULL,
+    job character varying(30) NOT NULL,
+    step character varying(80) NOT NULL,
+    started_at timestamp with time zone DEFAULT now() NOT NULL,
+    duration_s numeric NOT NULL,
+    exit_code integer,
+    git_sha character varying(40),
+    verdict jsonb
+);
+
+
+--
+-- Name: job_timings_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.job_timings_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: job_timings_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.job_timings_id_seq OWNED BY public.job_timings.id;
 
 
 --
@@ -6128,7 +6177,10 @@ CREATE TABLE public.perf_snapshots (
     entry_delay_p90_s numeric,
     metrics jsonb,
     regression jsonb,
-    CONSTRAINT perf_snapshots_kind_check CHECK (((kind)::text = ANY ((ARRAY['SNAPSHOT'::character varying, 'DEPLOY'::character varying, 'INCIDENT'::character varying])::text[])))
+    rss_mb numeric,
+    heap_used_mb numeric,
+    pool_waiting integer,
+    CONSTRAINT perf_snapshots_kind_check CHECK (((kind)::text = ANY ((ARRAY['SNAPSHOT'::character varying, 'DEPLOY'::character varying, 'INCIDENT'::character varying, 'VERDICT'::character varying, 'EXPECT'::character varying])::text[])))
 );
 
 
@@ -6185,6 +6237,44 @@ CREATE TABLE public.performance_audit (
     recommendation character varying(20),
     notes text,
     created_at timestamp without time zone DEFAULT now()
+);
+
+
+--
+-- Name: performance_audit_corr_monitor_backup_20261019; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.performance_audit_corr_monitor_backup_20261019 (
+    id integer,
+    run_date date,
+    window_days integer,
+    signal_type character varying(30),
+    signal_name character varying(60),
+    sample_size integer,
+    win_rate numeric,
+    ev_per_trade numeric,
+    total_pnl numeric,
+    avg_mfe numeric,
+    p50_mfe numeric,
+    p75_mfe numeric,
+    avg_mae numeric,
+    p50_mae numeric,
+    p75_mae numeric,
+    p90_mae numeric,
+    avg_duration_min numeric,
+    current_stop numeric,
+    current_target numeric,
+    optimal_stop numeric,
+    optimal_target numeric,
+    optimal_ev numeric,
+    stop_blowthrough_pct numeric,
+    t1_overshoot_avg numeric,
+    mfe_range_pct numeric,
+    mae_range_pct numeric,
+    recommendation character varying(20),
+    notes text,
+    created_at timestamp without time zone,
+    rn bigint
 );
 
 
@@ -8633,6 +8723,42 @@ ALTER SEQUENCE public.sierra_chart_reconciliation_log_id_seq OWNED BY public.sie
 
 
 --
+-- Name: table_growth; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.table_growth (
+    id bigint NOT NULL,
+    captured_at timestamp with time zone DEFAULT now() NOT NULL,
+    relname character varying(100) NOT NULL,
+    mb numeric,
+    est_rows bigint,
+    seq_scan bigint,
+    seq_tup_read bigint,
+    idx_scan bigint,
+    n_dead_tup bigint
+);
+
+
+--
+-- Name: table_growth_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.table_growth_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: table_growth_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.table_growth_id_seq OWNED BY public.table_growth.id;
+
+
+--
 -- Name: trade_annotations; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -9835,6 +9961,13 @@ ALTER TABLE ONLY public.import_log ALTER COLUMN id SET DEFAULT nextval('public.i
 
 
 --
+-- Name: job_timings id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.job_timings ALTER COLUMN id SET DEFAULT nextval('public.job_timings_id_seq'::regclass);
+
+
+--
 -- Name: learning_digest_events id; Type: DEFAULT; Schema: public; Owner: -
 --
 
@@ -10063,6 +10196,13 @@ ALTER TABLE ONLY public.setup_types ALTER COLUMN id SET DEFAULT nextval('public.
 --
 
 ALTER TABLE ONLY public.sierra_chart_reconciliation_log ALTER COLUMN id SET DEFAULT nextval('public.sierra_chart_reconciliation_log_id_seq'::regclass);
+
+
+--
+-- Name: table_growth id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.table_growth ALTER COLUMN id SET DEFAULT nextval('public.table_growth_id_seq'::regclass);
 
 
 --
@@ -10401,6 +10541,14 @@ ALTER TABLE ONLY public.daily_performance_log
 
 
 --
+-- Name: daily_rth_stats daily_rth_stats_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.daily_rth_stats
+    ADD CONSTRAINT daily_rth_stats_pkey PRIMARY KEY (trade_date);
+
+
+--
 -- Name: daytype_accuracy_log daytype_accuracy_log_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -10478,6 +10626,14 @@ ALTER TABLE ONLY public.gated_candidates
 
 ALTER TABLE ONLY public.import_log
     ADD CONSTRAINT import_log_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: job_timings job_timings_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.job_timings
+    ADD CONSTRAINT job_timings_pkey PRIMARY KEY (id);
 
 
 --
@@ -11385,6 +11541,14 @@ ALTER TABLE ONLY public.sierra_chart_reconciliation_log
 
 
 --
+-- Name: table_growth table_growth_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.table_growth
+    ADD CONSTRAINT table_growth_pkey PRIMARY KEY (id);
+
+
+--
 -- Name: trade_annotations trade_annotations_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -11736,6 +11900,13 @@ CREATE INDEX idx_gated_candidates_type_gate ON public.gated_candidates USING btr
 
 
 --
+-- Name: idx_job_timings_step; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_job_timings_step ON public.job_timings USING btree (job, step, started_at DESC);
+
+
+--
 -- Name: idx_learning_digest_created; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -12027,6 +12198,13 @@ CREATE INDEX idx_sob_structural_state ON public.setup_outcome_backtest USING btr
 --
 
 CREATE INDEX idx_sob_trade_date ON public.setup_outcome_backtest USING btree (trade_date);
+
+
+--
+-- Name: idx_table_growth_rel; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_table_growth_rel ON public.table_growth USING btree (relname, captured_at DESC);
 
 
 --

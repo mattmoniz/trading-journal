@@ -64,7 +64,7 @@
 import { query } from '../db.js';
 import { getRollingATR } from './levelProximityService.js';
 import { findSwingPoints } from './swingPivots.js';
-import { cacheGet, cacheSet } from '../lib/cache.js';
+import { cacheGet, cacheSet, cacheDelete } from '../lib/cache.js';
 import { getBetClass } from '../config/setupTypes.js';
 import { dropToTimeline, etNaiveTimestampToMs, bucketTo5mBars, buildRollWeekDateSet, isInNewEntryDeadZone, isInRthOpenDeadZone } from './acdShared.js';
 import { getCanonicalLiveStatus } from './setupEligibility.js';
@@ -148,6 +148,18 @@ function isGlobexMod(mod) { return mod >= 1080 || mod < 510; } // matches every 
 // mismatch against touchQuality.js's 1-min-bar getVolumeBaseline() was caught and fixed) --
 // see scratch/quiet_period_volume_check.mjs.
 async function getVolumeBaseline5m(date) {
+  // Strictly-prior-day input => the answer cannot change within a day. It was recomputed (~330 ms, 90 days of bars) on every detection pass because only a
+  // per-invocation Map cached it (found 2026-10-19 by the profiler + DeepSeek review). Cache the in-flight PROMISE so concurrent callers share one query;
+  // a failure is dropped immediately so it is never remembered.
+  const key = `volBaseline5m|${date}`;
+  const hit = cacheGet(key);
+  if (hit) return hit.p;
+  const p = computeVolumeBaseline5m(date);
+  cacheSet(key, { p }, 6 * 60 * 60 * 1000);
+  p.catch(() => cacheDelete(key));
+  return p;
+}
+async function computeVolumeBaseline5m(date) {
   const res = await query(`
     SELECT mod5, AVG(vol5m)::float AS avg_vol, STDDEV(vol5m)::float AS std_vol
     FROM (

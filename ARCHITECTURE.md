@@ -213,6 +213,9 @@ server/
 │                           2026-10-19: every connection also runs `SET jit = off` (JIT cost ~1.3 s on the view-based plans) and
 │                           db.js keeps an in-process per-query-shape profiler (see index.js `/api/diag/query-profile`, local-only,
 │                           also per-route request timings + event-loop delay).
+├── services/dailyRthStats.js  # 2026-10-19 completed NQ RTH sessions (high/low/range) from `daily_rth_stats` (built nightly by scripts/build_daily_rth_stats.mjs)
+│                           instead of re-aggregating price_bars_primary; fail-soft to the original view query + throttled self-repair. Used by getRollingATR,
+│                           caseEngine.getOpenGaps, the gap-fill setup (acdCandidateBuilder). Recheck: scripts/test_daily_rth_stats.mjs (weekly).
 ├── services/perfTelemetry.js  # 2026-10-19 post-deploy performance watch: perf_snapshots (DEPLOY marker at boot with git sha, SNAPSHOT every 5 min,
 │                           INCIDENT bundle, EXPECT = intended effect via scripts/perf_expect.mjs, VERDICT at the end of the watch = RTH+GLOBEX each seen 12 times, max 72 h). Each snapshot in the watch is judged against the PREVIOUS shas'
 │                           same-session history (p99 AND modified z>3.5, no fixed thresholds) -> `perfAttention` on /api/setups/live-flags

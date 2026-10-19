@@ -17,6 +17,7 @@
 // chronological thirds) -- see docs/OPEN_THREADS.md for the full numbers. Existing tagged
 // trades were re-tagged with the new method in the same session (retag_level_proximity
 // script, backed up first per DB_MIGRATION_PROTOCOL.md).
+import { getRollingRthRange } from './dailyRthStats.js';
 import { query } from '../db.js';
 import { cacheGet, cacheSet } from '../lib/cache.js';
 
@@ -50,17 +51,8 @@ export async function getRollingATR(logDate) {
   const key = `rollingATR|${logDate}`;
   const hit = cacheGet(key);
   if (hit) return hit.v;
-  const { rows } = await query(`
-    SELECT AVG(range)::float as atr, COUNT(*)::int as n FROM (
-      SELECT ts::date as d, (MAX(high) - MIN(low)) as range
-      FROM price_bars_primary
-      WHERE symbol='NQ' AND ts::date < $1 AND ts::date >= $1::date - INTERVAL '90 days'
-        AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 959
-      GROUP BY ts::date
-      ORDER BY d DESC LIMIT ${ATR_WINDOW_DAYS}
-    ) recent
-  `, [logDate]);
-  const { atr, n } = rows[0] || {};
+  // Served from daily_rth_stats (same window/definition; falls back to the view query itself when the table is missing a session) -- see dailyRthStats.js.
+  const { atr, n } = await getRollingRthRange({ beforeDate: logDate, windowDays: 90, count: ATR_WINDOW_DAYS });
   const v = (atr != null && n >= ATR_WINDOW_DAYS) ? atr : null;
   cacheSet(key, { v }, 6 * 60 * 60 * 1000);
   return v;
