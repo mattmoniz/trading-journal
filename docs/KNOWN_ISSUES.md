@@ -101,3 +101,5 @@ Living tracker. Originally compiled 2026-06-07 (see archived `docs/ARCHITECTURE_
 ## Not re-verified (carried over unconfirmed — check before trusting)
 - "Duplicate pattern-memory trigger" (cron + parallel `setInterval` both calling `runNightlyUpdate`)
 - "Silent error handling" (`catch (e) {}` blocks swallowing errors without logging) throughout `index.js`
+
+- **[catch-up] SELECT DISTINCT / ORDER BY error every 30 min** (found 2026-10-19): the server's 30-minute self-healing catch-up logs "for SELECT DISTINCT, ORDER BY expressions must appear in select list"; that catch-up step is silently failing. See `OPEN_DECISION catchup_select_distinct_order_by_error_20261019`.
