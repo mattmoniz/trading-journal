@@ -220,7 +220,7 @@ server/
 │                           INCIDENT bundle, EXPECT = intended effect via scripts/perf_expect.mjs, VERDICT at the end of the watch = RTH+GLOBEX each seen 12 times, max 72 h). Each snapshot in the watch is judged against the PREVIOUS shas'
 │                           same-session history (p99 AND modified z>3.5, no fixed thresholds) -> `perfAttention` on /api/setups/live-flags
 │                           (quick-check "SLOWER SINCE LAST CHANGE" banner after 2 snapshots) + OPEN_DECISION. On-demand before/after:
-│                           `node scripts/perf_report.mjs`. Slow data-growth counterpart: scripts/data_growth_check.mjs (weekly, `table_growth`) and
+│                           `node scripts/perf_report.mjs`. Page-load yardstick: `scripts/measure_page_loads.mjs` (Playwright; Morning Prep/Trades/Dashboard request counts and settle times). Range-rewrite equivalence check: `scripts/test_range_rewrites_20261019.mjs`. Slow data-growth counterpart: scripts/data_growth_check.mjs (weekly, `table_growth`) and
 │                           scripts/explain_check.mjs (pre-ship full-scan check). Scheduled steps are timed into `job_timings` (scripts/lib/job_timing.sh, scripts/record_job_timing.mjs). Not an ongoing overall monitor: nothing is judged outside a watch window.
 ├── sierra.js              # TAL file parser, chokidar watcher
 ├── routes/                # 27 files, one per domain, all mounted under /api
