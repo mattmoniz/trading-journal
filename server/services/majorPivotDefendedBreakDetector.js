@@ -130,9 +130,18 @@ export async function computeDefendedBreaks(zigzagThreshold = ZIGZAG_THRESHOLD, 
   const bars5m = bucketTo5mBars(bars1m, { trackOpen: true });
   // COMPLETED 5-minute bars only (2026-10-19, OPEN_DECISION major_pivot_live_rows_always_miss_3min_entry_window_20261019). bucketTo5mBars() always keeps the
   // last, unfinished bucket, so a live call used to evaluate a "5-minute bar close" from 2 of its 5 minutes (setup 136299: entry 29947.25 was the 11:26
-  // one-minute close; the bar actually closed 29950). The validated backtest only ever saw completed bars. The last bucket is complete only once its 5th
-  // minute (minute % 5 === 4) has arrived; historical callers are unaffected (their data ends on a complete bucket, or the dropped bucket is the current one).
-  if (bars5m.length && parseInt(bars1m[bars1m.length - 1].tc.substring(14, 16), 10) % 5 !== 4) bars5m.pop();
+  // one-minute close; the bar actually closed 29950). The validated backtest only ever saw completed bars. The last bucket is dropped unless it is complete:
+  //  * FAST PATH: its 5th minute (minute % 5 === 4) has arrived -- certainly complete;
+  //  * SLOW PATH: wall-clock is already 40 s past the bucket's end (a minute with no trades produces no 1-minute bar, so a finished bucket can end on :03 or earlier;
+  //    without this the bucket would wait for the next bar, which can take minutes in thin hours). 40 s covers the Sierra-to-database ingest lag.
+  // NOTE this applies to EVERY caller, not only live ones: the query is bounded by ts <= NOW(), so a backtest re-run also stops at the last COMPLETE bucket (an improvement,
+  // but earlier outputs of this function are not byte-reproducible).
+  if (bars5m.length) {
+    const lastBucket = bars5m[bars5m.length - 1];
+    const fast = parseInt(bars1m[bars1m.length - 1].tc.substring(14, 16), 10) % 5 === 4;
+    const slow = etNaiveTimestampToMs(plus5m(lastBucket.tsStr)) + 40000 <= Date.now();
+    if (!fast && !slow) bars5m.pop();
+  }
   if (bars5m.length < SWING_WIDTH * 2 + 5) return [];
 
   const rollDates = buildRollWeekDateSet(bars5m);
