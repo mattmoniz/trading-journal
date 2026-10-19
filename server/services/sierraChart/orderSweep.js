@@ -26,6 +26,7 @@ import { query } from '../../db.js';
 import { isOrderEligible } from './orderEligibility.js';
 import { evaluateDailyLossLimit } from './dllGate.js';
 import { sweepUnknownPnl } from './brokerPnlResolver.js';
+import { repairNullFillPrices } from './fillPriceRepair.js';
 import { placeEntryOrder, placeBracketEntryOrder, placeExitOrder, placeMarketEscalationEntryOrder, checkEntryGates } from './reconciliation.js';
 import { resolveMnqFrontMonthSymbolFromEnv } from './contractSymbol.js';
 import { resolveDirection } from '../../config/setupTypes.js';
@@ -171,6 +172,8 @@ export async function sweepRealOrders(dtcClient) {
   // DB-only (needs no broker connection), so it runs even when the DTC link is down.
   await sweepUnknownPnl().catch((err) => console.error('[sierraChart.orderSweep] unknown-P&L sweep failed:', err));
   if (!dtcClient || !dtcClient.isLive()) return; // not connected/logged-on/live -- nothing to do this poll
+  // Before entries, so the daily-loss gate sees a repaired entry price instead of an unpriced fill.
+  await repairNullFillPrices(dtcClient).catch((err) => console.error('[sierraChart.orderSweep] fill-price repair failed:', err));
   await sweepEntries(dtcClient).catch((err) => console.error('[sierraChart.orderSweep] entry sweep failed:', err));
   await escalateUnfilledEntriesToMarket(dtcClient).catch((err) => console.error('[sierraChart.orderSweep] entry fill-timeout escalation failed:', err));
   await sweepExits(dtcClient).catch((err) => console.error('[sierraChart.orderSweep] exit sweep failed:', err));

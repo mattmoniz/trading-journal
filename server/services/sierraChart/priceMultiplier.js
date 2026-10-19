@@ -9,10 +9,17 @@
 // Deliberately keyed by the exact symbol string (e.g. "MNQZ6.CME"), not a generic root --
 // a contract roll (MNQZ6 -> MNQH7) is a different symbol string and gets its own fresh
 // fetch, so this cache is automatically roll-safe without any explicit invalidation logic.
-// Process-lifetime cache -- cheap enough (one request per distinct contract this process
-// ever trades) that there's no need for a TTL.
+// Successful answers are cached for the process lifetime (one request per distinct contract this
+// process ever trades). Failed lookups are only remembered briefly -- see FAILED_LOOKUP_RETRY_MS.
 
-const cache = new Map(); // symbol -> multiplier (number) | null (fetch failed/no answer)
+const cache = new Map(); // symbol -> multiplier (number), only ever a REAL answer
+// A failed/timed-out lookup is NOT cached for the process lifetime (it used to be, 2026-10-19 incident: one
+// 4s timeout on the new front-month MNQZ26.CME poisoned that symbol until the next restart, so every fill on it
+// was stored with no price and the daily-loss gate refused all entries for ~7h). It is remembered only briefly so
+// a burst of fill updates doesn't fire a request each; the next call after the window retries.
+export const FAILED_LOOKUP_RETRY_MS = 15000;
+const failedAt = new Map(); // symbol -> epoch ms of the last failed lookup
+const inFlight = new Map(); // symbol -> Promise of the lookup currently running (concurrent callers share it)
 
 /**
  * Returns the real DisplayPriceMultiplier for `symbol`, fetching and caching it via a
@@ -20,11 +27,14 @@ const cache = new Map(); // symbol -> multiplier (number) | null (fetch failed/n
  * client isn't connected or no response arrives in time -- callers must treat null as
  * "cannot convert this price safely right now," not as "multiplier is 1."
  */
-export async function getPriceMultiplier(dtcClient, symbol) {
+export async function getPriceMultiplier(dtcClient, symbol, now = Date.now) {
   if (cache.has(symbol)) return cache.get(symbol);
+  if (inFlight.has(symbol)) return inFlight.get(symbol);
+  const lastFail = failedAt.get(symbol);
+  if (lastFail != null && now() - lastFail < FAILED_LOOKUP_RETRY_MS) return null;
   if (!dtcClient || !dtcClient.isLoggedOn) return null;
 
-  const multiplier = await new Promise((resolve) => {
+  const p = new Promise((resolve) => {
     let resolved = false;
     const onSecurityDefinition = (msg) => {
       if (msg.Symbol !== symbol || resolved) return;
@@ -41,11 +51,18 @@ export async function getPriceMultiplier(dtcClient, symbol) {
       dtcClient.off('securityDefinition', onSecurityDefinition);
       resolve(null);
     }, 4000);
+  }).then((multiplier) => {
+    inFlight.delete(symbol);
+    if (multiplier != null) { cache.set(symbol, multiplier); failedAt.delete(symbol); }
+    else failedAt.set(symbol, now());
+    return multiplier;
   });
-
-  cache.set(symbol, multiplier); // cache the null too -- don't hammer a symbol that never answers
-  return multiplier;
+  inFlight.set(symbol, p);
+  return p;
 }
+
+/** Test helper: forget everything this module remembers. */
+export function _resetPriceMultiplierCacheForTests() { cache.clear(); failedAt.clear(); inFlight.clear(); }
 
 /** Apply a symbol's real multiplier to a broker-reported price field. Returns null if the
  * multiplier isn't known -- callers must not silently store a possibly-wrong raw value. */

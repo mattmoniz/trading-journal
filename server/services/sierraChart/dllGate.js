@@ -34,6 +34,28 @@ export function dllGateDecision({ realizedBrokerPnl, unknownCount = 0, limit, un
   return { blocked: false, reason: 'within limit' };
 }
 
+// Entry price used for an unknown trade's worst case: the recorded fill, else (2026-10-19) the entry order's own
+// price (a limit fills at or better than it, so the stop distance from it is an upper bound), else the setup's
+// entry level. Before this, ONE fill stored without a price (multiplier lookup failed, see priceMultiplier.js) had
+// no computable worst case and the gate refused every entry for ~7h. A trade with no stop, or no entry price of
+// any kind, still falls back to block-everything -- the fail-closed intent is unchanged.
+export const DLL_ROW_SQL = `
+    SELECT COALESCE(SUM(a.broker_pnl), 0)::float AS realized,
+           COUNT(*) FILTER (WHERE a.broker_pnl IS NULL AND a.status <> 'ACTIVE')::int AS unknown,
+           COALESCE(SUM(ABS(COALESCE(e.avg_fill_price, e.price1, a.entry_zone_low) - a.stop_level) * e.filled_quantity * $2)
+             FILTER (WHERE a.broker_pnl IS NULL AND a.status <> 'ACTIVE' AND a.stop_level IS NOT NULL
+                     AND COALESCE(e.avg_fill_price, e.price1, a.entry_zone_low) IS NOT NULL), 0)::float AS unknown_worst,
+           -- A trade with no stop OR no entry price of any kind has no computable worst case (ABS(NULL - x) is NULL and
+           -- SUM would silently drop it as $0 risk -- DeepSeek review finding 1), so it falls back to block-everything.
+           COUNT(*) FILTER (WHERE a.broker_pnl IS NULL AND a.status <> 'ACTIVE'
+                     AND (a.stop_level IS NULL OR COALESCE(e.avg_fill_price, e.price1, a.entry_zone_low) IS NULL))::int AS unknown_no_stop,
+           COUNT(*) FILTER (WHERE a.broker_pnl IS NULL AND a.status <> 'ACTIVE' AND e.avg_fill_price IS NULL)::int AS unknown_price_estimated,
+           COALESCE(ARRAY_AGG(a.id) FILTER (WHERE a.broker_pnl IS NULL AND a.status <> 'ACTIVE'), '{}') AS unknown_ids
+    FROM active_setups a
+    JOIN order_placements e ON e.setup_id = a.id AND e.purpose = 'ENTRY' AND e.status = 'FILLED' AND e.trade_account = $1
+    WHERE a.trade_date = CURRENT_DATE AND a.origin_status = 'ACTIVE'
+  `;
+
 // Wiring (2026-10-07, item 7). The limit comes from DTC_DLL_LIMIT_USD, not account_settings: no
 // row exists for the Sierra trade accounts, and this gate is real-order-only. Fails CLOSED when
 // the variable is unset or not positive, since an unknown limit must not allow a real entry.
@@ -44,22 +66,11 @@ export async function evaluateDailyLossLimit(tradeAccount) {
   if (!Number.isFinite(limit) || limit <= 0) {
     return { blocked: true, reason: 'DTC_DLL_LIMIT_USD is not set to a positive number -- entries blocked until configured' };
   }
-  const r = await query(`
-    SELECT COALESCE(SUM(a.broker_pnl), 0)::float AS realized,
-           COUNT(*) FILTER (WHERE a.broker_pnl IS NULL AND a.status <> 'ACTIVE')::int AS unknown,
-           COALESCE(SUM(ABS(e.avg_fill_price - a.stop_level) * e.filled_quantity * $2)
-             FILTER (WHERE a.broker_pnl IS NULL AND a.status <> 'ACTIVE' AND a.stop_level IS NOT NULL AND e.avg_fill_price IS NOT NULL), 0)::float AS unknown_worst,
-           -- A trade with no stop OR no recorded entry fill price has no computable worst case (ABS(NULL - x) is NULL and
-           -- SUM would silently drop it as $0 risk -- DeepSeek review finding 1), so it falls back to block-everything.
-           COUNT(*) FILTER (WHERE a.broker_pnl IS NULL AND a.status <> 'ACTIVE' AND (a.stop_level IS NULL OR e.avg_fill_price IS NULL))::int AS unknown_no_stop,
-           COALESCE(ARRAY_AGG(a.id) FILTER (WHERE a.broker_pnl IS NULL AND a.status <> 'ACTIVE'), '{}') AS unknown_ids
-    FROM active_setups a
-    JOIN order_placements e ON e.setup_id = a.id AND e.purpose = 'ENTRY' AND e.status = 'FILLED' AND e.trade_account = $1
-    WHERE a.trade_date = CURRENT_DATE AND a.origin_status = 'ACTIVE'
-  `, [tradeAccount, LIVE_INSTRUMENT.dollarsPerPoint]);
+  const r = await query(DLL_ROW_SQL, [tradeAccount, LIVE_INSTRUMENT.dollarsPerPoint]);
   const row = r.rows[0];
   // A trade with no stop on record has no computable worst case -> fall back to the old fail-closed block.
   const worst = row.unknown_no_stop > 0 ? null : row.unknown_worst;
+  const estNote = row.unknown_price_estimated > 0 && row.unknown_no_stop === 0 ? ` [entry fill price missing on ${row.unknown_price_estimated} trade(s); worst case uses the order/setup entry price]` : '';
   // Say WHY the P&L is unknown (brokerPnlResolver.js), so this reads as a data problem, not a loss-limit one.
   let unknownNote = '';
   if (row.unknown_ids.length) {
@@ -72,5 +83,5 @@ export async function evaluateDailyLossLimit(tradeAccount) {
       ? ' [NOT a loss-limit breach; cause: ' + c.rows.map(x => x.gate_reason.replace(/^setup_id=\d+ /, '').split(':')[0]).join(', ') + ']'
       : ' [cause not diagnosed yet]';
   }
-  return dllGateDecision({ realizedBrokerPnl: row.realized, unknownCount: row.unknown, limit, unknownWorstCaseLoss: worst, unknownNote });
+  return dllGateDecision({ realizedBrokerPnl: row.realized, unknownCount: row.unknown, limit, unknownWorstCaseLoss: worst, unknownNote: unknownNote + estNote });
 }
