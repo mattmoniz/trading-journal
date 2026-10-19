@@ -40,12 +40,13 @@ async function loadBars(startDate, endDate) {
   }
   return { ts: Float64Array.from(ts), O: Float64Array.from(O), H: Float64Array.from(H), L: Float64Array.from(L), C: Float64Array.from(C) };
 }
-function sim(B, idx, px, dir, stopDist, hold) {
+function simX(B, idx, px, dir, stopDist, hold) {
   const stop = px - dir * stopDist, limit = Math.min(B.ts.length, idx + MAX_HORIZON_MIN), exitAt = B.ts[idx] + hold;
   let last = -1;
-  for (let i = idx; i < limit && B.ts[i] < exitAt; i++) { last = i; if (dir === 1 ? B.L[i] <= stop : B.H[i] >= stop) return -stopDist * PT - COMM; }
-  return last < 0 ? null : (B.C[last] - px) * dir * PT - COMM;
+  for (let i = idx; i < limit && B.ts[i] < exitAt; i++) { last = i; if (dir === 1 ? B.L[i] <= stop : B.H[i] >= stop) return { pnl: -stopDist * PT - COMM, exitMin: B.ts[i] }; }
+  return last < 0 ? null : { pnl: (B.C[last] - px) * dir * PT - COMM, exitMin: B.ts[last] };
 }
+const sim = (B, idx, px, dir, stopDist, hold) => { const r = simX(B, idx, px, dir, stopDist, hold); return r ? r.pnl : null; };
 
 console.log(`Loading breaks (zigzag 1.0 and 1.5, ${LOOKBACK_DAYS} days) and 1-minute bars...`);
 const breaks10 = await computeDefendedBreaks(1.0, LOOKBACK_DAYS), breaks15 = await computeDefendedBreaks(1.5, LOOKBACK_DAYS);
@@ -115,9 +116,9 @@ const results = {};
 function analyse(pop, label, cfg, T, detail = true) {
   const rows = [];
   for (const t of pop) {
-    const sd = t.structDist * cfg.stop, p = sim(B, t.idx, t.px, t.dir, sd, cfg.hold); if (p == null) continue;
+    const sd = t.structDist * cfg.stop, px0 = simX(B, t.idx, t.px, t.dir, sd, cfg.hold); if (px0 == null) continue; const p = px0.pnl;
     const cs = t.controls.map(c => ({ v: sim(B, c.idx, c.px, t.dir, sd, cfg.hold), cls: classify(c.move, T) })).filter(c => c.v != null);
-    rows.push({ date: t.date, dir: t.dir, cls: classify(t.move, T), pnl: p, ctrl: cs.length ? mean(cs.map(c => c.v)) : null, cAgainst: cs.filter(c => c.cls === 'AGAINST').map(c => c.v), cNot: cs.filter(c => c.cls !== 'AGAINST').map(c => c.v), entryMin: t.entryMin });
+    rows.push({ date: t.date, dir: t.dir, cls: classify(t.move, T), pnl: p, exitMin: px0.exitMin, ctrl: cs.length ? mean(cs.map(c => c.v)) : null, cAgainst: cs.filter(c => c.cls === 'AGAINST').map(c => c.v), cNot: cs.filter(c => c.cls !== 'AGAINST').map(c => c.v), entryMin: t.entryMin });
   }
   const A = rows.filter(r => r.cls === 'AGAINST'), N = rows.filter(r => r.cls !== 'AGAINST');
   const delta = mean(A.map(r => r.pnl)) - mean(N.map(r => r.pnl));
@@ -139,6 +140,27 @@ function analyse(pop, label, cfg, T, detail = true) {
     const sorted = [...rows].sort((x, y) => x.entryMin - y.entryMin), h = sorted.length >> 1;
     for (const [nm, sub] of [['1st half', sorted.slice(0, h)], ['2nd half', sorted.slice(h)]]) { const a = sub.filter(r => r.cls === 'AGAINST'), n = sub.filter(r => r.cls !== 'AGAINST');
       console.log(`   ${nm} AGAINST N=${a.length} mean ${fmt(mean(a.map(r => r.pnl)))}  vs not N=${n.length} mean ${fmt(mean(n.map(r => r.pnl)))}  delta ${fmt(mean(a.map(r => r.pnl)) - mean(n.map(r => r.pnl)))}`); }
+  }
+  if (detail && label.includes('PRIMARY')) {
+    // INDEPENDENCE CHECK: the hypothesis was suggested by the 2026-10-19 one-year failure study (breaks from 2025-10-22 on). Breaks BEFORE that date were never looked at when forming it.
+    const cut = toMin('2025-10-22 00:00:00');
+    for (const [nm, sub] of [['BEFORE 2025-10-22 (never used to form the hypothesis)', rows.filter(r => r.entryMin < cut)], ['2025-10-22 onward (the year that suggested it)', rows.filter(r => r.entryMin >= cut)]]) {
+      const a = sub.filter(r => r.cls === 'AGAINST'), n = sub.filter(r => r.cls !== 'AGAINST'), w = sub.filter(r => r.cls === 'WITH');
+      const d = mean(a.map(r => r.pnl)) - mean(n.map(r => r.pnl)); const dci = bootDiff(sub, r => r.cls === 'AGAINST', r => r.pnl, `psind|${nm}`);
+      console.log(`   ${nm}: AGAINST N=${a.length} (${new Set(a.map(r => r.date)).size} days) mean ${fmt(mean(a.map(r => r.pnl)))} vs not N=${n.length} mean ${fmt(mean(n.map(r => r.pnl)))} => delta ${fmt(d)} CI [${fmt(dci.lo)}, ${fmt(dci.hi)}]; WITH N=${w.length} mean ${fmt(mean(w.map(r => r.pnl)))}`);
+    }
+    const FR = 25; const sorted = [...rows].sort((a, b) => a.entryMin - b.entryMin), half = sorted.length >> 1;
+    const scen = [['take every break', () => true], ['ONLY against-prior-session', r => r.cls === 'AGAINST'], ['skip only WITH-prior-session', r => r.cls !== 'WITH'], ['skip against (reverse check)', r => r.cls !== 'AGAINST']];
+    console.log('\n   GATE SCENARIOS (RTH 1.0, live exits, 1 contract, over the full history; "friction" = $25 per trade):');
+    console.log('   scenario                          trades |   total  per-trade | after friction | one-at-a-time total (trades) | max drawdown (all/queue) | first half  second half | w/o best 3 | top3 share');
+    for (const [nm, f] of scen) {
+      const sel = sorted.filter(f), pn = sel.map(r => r.pnl), tot = pn.reduce((a, b) => a + b, 0);
+      const q = []; let free = -Infinity; for (const r of sel) if (r.entryMin >= free) { q.push(r); free = r.exitMin; }
+      const dd = (arr) => { let run = 0, pk = 0, d = 0; for (const r of [...arr].sort((a, b) => a.exitMin - b.exitMin)) { run += r.pnl; pk = Math.max(pk, run); d = Math.max(d, pk - run); } return d; };
+      const top = [...pn].sort((a, b) => b - a).slice(0, 3).reduce((a, b) => a + b, 0), qt = q.reduce((a, r) => a + r.pnl, 0);
+      const h1 = sorted.slice(0, half).filter(f).reduce((a, r) => a + r.pnl, 0), h2 = sorted.slice(half).filter(f).reduce((a, r) => a + r.pnl, 0);
+      console.log(`   ${nm.padEnd(33)} ${String(sel.length).padStart(5)} | ${fmt(tot).padStart(7)} ${fmt(tot / sel.length).padStart(8)} | ${fmt(tot - FR * sel.length).padStart(13)} | ${fmt(qt).padStart(8)} (${String(q.length).padStart(3)}) ${fmt(qt - FR * q.length).padStart(8)} after friction | ${fmt(-dd(sel)).padStart(6)} / ${fmt(-dd(q)).padStart(6)} | ${fmt(h1).padStart(7)} ${fmt(h2).padStart(9)} | ${fmt(tot - top).padStart(7)} | ${tot > 0 ? (100 * top / tot).toFixed(0) + '%' : 'n/a'}`);
+    }
   }
   results[`${label}|${cfg.stop}|${cfg.hold}|${T}`] = { nA: A.length, nN: N.length, delta, ci, did, dci, cA, cN, p };
 }
