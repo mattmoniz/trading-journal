@@ -326,6 +326,17 @@ export async function isOppositeDirectionOpen(direction) {
 // would be a no-op, and this list should only ever contain types where the exemption is the
 // thing actually keeping a real candidate from being mis-gated.
 const ROTATION_GATE_EXEMPT_TYPES = new Set(['BRACKET_BREAKOUT_LONG']);
+// Family exemptions (2026-10-19, explicit user directive: "I don't think major defended levels and RTH or Globex flushes should be gated by
+// POC rotations"). These setups are defined by a larger structural turn (a defended pivot breaking, or a flush), so the 65pt rotation is
+// not a valid reason to block them -- and a flush/major break is itself a trend-shift signal (see docs/OPEN_THREADS.md, "defended levels
+// and flushes as gates/counter-gates"). Today they are already never gated: they insert from their own standalone detectors
+// (majorPivotDefendedBreakDetector.js, rthFlushDetector.js, globexFlushDetector.js), which never call isRotationDirectionConflict(), and
+// the live blocking below has been off since 2026-10-14. This makes the rule durable so re-enabling the gate cannot reach them.
+// MINOR_DEFENDED_LEVEL_ is deliberately NOT listed (the directive named major levels); decide separately.
+const ROTATION_GATE_EXEMPT_PREFIXES = ['MAJOR_PIVOT_DEFENDED_BREAK_', 'RTH_FLUSH_', 'GLOBEX_FLUSH_'];
+export function isRotationGateExempt(setupType) {
+  return !!setupType && (ROTATION_GATE_EXEMPT_TYPES.has(setupType) || ROTATION_GATE_EXEMPT_PREFIXES.some(p => setupType.startsWith(p)));
+}
 
 // LIVE-BLOCKING DISABLED (2026-10-14, explicit user decision). The per-setup-type breakdown
 // above showed real heterogeneity -- the gate genuinely helps a couple of types, works
@@ -348,7 +359,7 @@ const ROTATION_GATE_LIVE_BLOCKING = { enabled: false, disabledDate: '2026-10-14'
 export async function isRotationDirectionConflict(direction, setupType) {
   if (!ROTATION_GATE_LIVE_BLOCKING.enabled) return false; // see the flag's own comment above
   if (!direction) return false; // candidate itself has no resolvable direction -- can't conflict
-  if (setupType && ROTATION_GATE_EXEMPT_TYPES.has(setupType)) return false;
+  if (isRotationGateExempt(setupType)) return false;
   const rotationDir = await getCurrentRotationDirection();
   if (rotationDir == null) return false; // no leg formed yet, or maintenance gap -- don't guess
   const tradeIsLong = direction === 'LONG';
