@@ -117,3 +117,25 @@ Arithmetic check on the locked windows: the 60-session percentile baseline plus 
 every "prior 60 sessions" baseline (Cpct, zone-size median) is an EXPANDING window of the prior sessions up to 60, with a minimum of 25 sessions (zone-size median: 15);
 S's 120-session baseline expands up to 120 with a minimum of 40. Nothing else changes. Honest consequence stated up front: even so the test has tens of
 episodes at best and is underpowered for anything but a large effect; a null here will be "not detectable at this N", not "no effect".
+
+## 11. RESULTS v1 (2026-10-18 night; locked definitions 10 + 10.1; fit window to 2026-10-10)
+**L1 (market level, bar data) — FAILS the pre-registered kill rule.** RTH plan: crack-ON episodes 24 (9 with an open tail print): C-only event-minus-control -5 pts
+(CI [-167,+158]); C&P -121 (CI [-277,+26], n=9). Globex plan: 27 episodes (11 with print): C-only -80 (CI [-296,+149]); C&P -167 (CI [-544,+280]). Holm-adjusted
+p: 0.42 / 1.0 / 0.93 / 0.97. After a crack the next-day move did not continue in the crack direction in this sample (a strong bull year: NQ ~24.9k -> ~31k;
+down-cracks were mostly bought). Exploratory descriptives: Globex crack-DOWN (n=11) aligned move -396 pts at H2 (i.e. a rebound), raw p=0.009, NOT primary, not
+corrected. Print-as-magnet: far edge of the open tail print reached by the H2 close 22% (RTH plan) / 36% (Globex plan) vs the mirror level 67% / 55% — the open
+prints did NOT act as magnets here (n=9/11). The state's S rung had ~0 events (descriptive only).
+**Holdout week (printed only):** the state was ON for the RTH plan on Tue 10/13 09:30 (Cpct 88, open tail print 30,357-30,405 ~215 pts below) and for the Globex plan
+on Wed 10/14 18:00 (Cpct 93, no qualifying print); follow-through H2 = +435 and +760 pts in the crack direction. One episode; the fit-window average does not
+support relying on it.
+**L2 (roster) — exploratory only (L1 killed).** SIM (BACKFILL, a simulation) RTH plan, crack-ON: aligned $30.9/trade (n=220) vs counter -$12.6 (n=389), aligned-counter
++$43.5 (episode CI [14,73], perm p=0.023; W2 +$22.8, p=0.001), symmetric by crack direction (DOWN +40.6, UP +49.0). REAL (ACTIVE+SHADOW since 2026-07-09) RTH plan: 6 episodes,
+-$8.0 (CI [-22,16]). Globex plan: SIM +$11.7 (p=0.26), REAL +$8.5 (p=0.68). POC_ROTATION_JOIN: too few rows in crack-ON windows to say anything.
+**L2b dose-response control (decisive for "crack SIZE"):** RTH plan SIM, per-session with-direction minus against-direction $/trade by Cpct bucket: 0-40 +34.7, 40-60 +16.9,
+60-80 +8.2, 80-100 +44.1; Pearson(Cpct, effect) = -0.02; ALL sessions +26.9 (CI [16,40]). So the roster's with-the-2-session-direction advantage exists on ordinary days
+at the same size; the crack adds nothing detectable. REAL arm RTH: ALL +4.3 (CI [-13,20]), flat. Globex plan: SIM flat-ish positive (r=+0.13), REAL r=+0.28 (0-40: -15.0; 80-100: +21.1, 10 sessions) —
+the only dose-response hint, thin.
+**Reading:** (1) "Crack size predicts a larger continued move" — not supported at market level. (2) "Gate to the crack direction" — in the simulated roster, trades aligned with the prior
+2-session direction beat counter trades regardless of crack size; this is a different, broader hypothesis (a multi-session version of the existing observation-only DirGate/MomFade
+idea), it does NOT replicate in the real/shadow era for RTH, and its simulation arm needs independent verification (BACKFILL quirks) before anything is built. (3) Nothing is wired.
+Held back until the off-peak DeepSeek review of the whole process: any redefinition is post-hoc and must not replace v1.
