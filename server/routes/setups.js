@@ -17,6 +17,7 @@ import { etNaiveTimestampToMs } from '../services/acdShared.js';
 import { getOrderLifecycleAlertState, dismissOrderLifecycleAlert } from '../services/orderLifecycleAlert.js';
 import { getBrokerAttention } from '../services/sierraChart/brokerAttention.js';
 import { getMlScoringStatus } from '../services/mlScoringServiceManager.js';
+import { getPerfAttention } from '../services/perfTelemetry.js';
 import { getMlGateFailClosedStatus } from '../services/mlLiveVetoGate.js';
 
 const router = express.Router();
@@ -85,6 +86,8 @@ router.get('/setups/live-flags', async (req, res) => {
   res.json({
     brokerAttention,
     brokerAttentionError,
+    // Persistent performance regression vs the app's own rolling history (perfTelemetry.js); null = none.
+    perfAttention: getPerfAttention(),
     suppressAllDisabled: !!SUPPRESS_ALL_DISABLED.enabled,
     suppressAllDisabledSince: SUPPRESS_ALL_DISABLED.enabled ? SUPPRESS_ALL_DISABLED.addedDate : null,
     allLevelsLive: !!ALL_LEVELS_LIVE.enabled,

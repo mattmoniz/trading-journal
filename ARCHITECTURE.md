@@ -213,6 +213,10 @@ server/
 │                           2026-10-19: every connection also runs `SET jit = off` (JIT cost ~1.3 s on the view-based plans) and
 │                           db.js keeps an in-process per-query-shape profiler (see index.js `/api/diag/query-profile`, local-only,
 │                           also per-route request timings + event-loop delay).
+├── services/perfTelemetry.js  # 2026-10-19 app performance/health record: perf_snapshots (SNAPSHOT every 5 min, DEPLOY at boot with git sha,
+│                           INCIDENT bundle) + regression detection vs its own 14-day same-session history (p99 AND modified z>3.5, no fixed
+│                           thresholds) -> `perfAttention` on /api/setups/live-flags (quick-check "APP SLOWER THAN USUAL" banner after 2
+│                           snapshots) and an OPEN_DECISION at 3. Per-deploy before/after: `node scripts/perf_report.mjs` (daily -> scratch/perf_report.txt).
 ├── lib/cache.js           # tiny TTL cache (cacheGet/cacheSet); lib/microCache.js (2026-10-19) = 15 s response cache + request
 │                           coalescing middleware for polled read-only GETs (market/pulse, live-session-context)
 ├── sierra.js              # TAL file parser, chokidar watcher

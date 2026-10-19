@@ -277,4 +277,8 @@ echo "=== Daily calibration: $(date) ==="
 # live P. See OPEN_DECISION opening_drive_gate_6week_revisit_20260925.
 /usr/bin/node scripts/recheck_opening_drive_gate.mjs
 
+# Per-deploy performance report (2026-10-19): medians/p90 of each perf_snapshots metric by git sha and session, so every change's before/after is on file
+# daily. Informational; the live regression detection itself runs inside the server (server/services/perfTelemetry.js).
+/usr/bin/node scripts/perf_report.mjs > scratch/perf_report.txt 2>&1 || true
+
 echo "=== Daily calibration complete: $(date) ==="

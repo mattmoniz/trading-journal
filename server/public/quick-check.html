@@ -148,6 +148,8 @@
   #broker-attention-banner { display: none; border: 1.5px solid rgba(250,204,21,0.55); border-radius: 8px; padding: 12px 14px; background: rgba(250,204,21,0.08); margin-bottom: 14px; font-size: 12px; line-height: 1.5; color: var(--text); }
   #broker-attention-banner.visible { display: block; }
   #broker-attention-banner .ba-title { font-weight: 700; margin: 6px 0 4px; }
+  #perf-attention-banner { display: none; border: 1.5px solid rgba(248,113,113,0.5); border-radius: 8px; padding: 10px 14px; background: rgba(248,113,113,0.07); margin-bottom: 14px; font-size: 12px; line-height: 1.5; color: var(--text); }
+  #perf-attention-banner.visible { display: block; }
   #broker-attention-banner ol { margin: 4px 0 0 18px; padding: 0; }
   .ol-banner-tag { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: var(--red); background: rgba(248,113,113,0.15); padding: 2px 7px; border-radius: 4px; flex-shrink: 0; }
 
@@ -361,6 +363,7 @@
 <div class="wrap">
   <div id="order-lifecycle-banner"></div>
   <div id="broker-attention-banner"></div>
+  <div id="perf-attention-banner"></div>
   <div id="info-chips-row">
     <div id="vol-regime-card" onclick="openVolRegimeHistoryModal()"></div>
     <div id="pulse-reading-card"></div>
@@ -3898,11 +3901,34 @@ function renderBrokerAttentionBanner(d) {
   el.className = 'visible';
 }
 
+// App-speed regression banner: a metric stayed above its OWN recent range (server/services/perfTelemetry.js). Plain text only.
+function renderPerfAttentionBanner(d) {
+  const el = $('perf-attention-banner');
+  if (!el) return;
+  el.textContent = '';
+  const a = d.perfAttention;
+  if (!a) { el.className = ''; return; }
+  const tag = document.createElement('span');
+  tag.className = 'ol-banner-tag';
+  tag.style.color = '#f87171';
+  tag.textContent = 'APP SLOWER THAN USUAL';
+  el.appendChild(tag);
+  const names = { db_time_pct: 'database busy', detect_avg_ms: 'detection pass time', loop_p99_ms: 'server stalls', poll_outages: 'detection poll outages', entry_delay_p90_s: 'row-to-order delay (s)' };
+  for (const m of a.metrics) {
+    const line = document.createElement('div');
+    line.textContent = (names[m.metric] || m.metric) + ': ' + m.value + ' now vs ' + m.median + ' typical (' + a.session + '), ' + m.consecutive + ' checks in a row';
+    el.appendChild(line);
+  }
+  if (a.deploy) { const dp = document.createElement('div'); dp.style.color = 'var(--dim)'; dp.textContent = 'Last deploy ' + a.deploy.sha + ', ' + a.deploy.minutesAgo + ' min before the check.'; el.appendChild(dp); }
+  el.className = 'visible';
+}
+
 async function checkFlagsBanner() {
   try {
     const d = await fetch('/api/setups/live-flags', { cache: 'no-store' }).then(r => r.json());
     renderOrderLifecycleBanner(d);
     renderBrokerAttentionBanner(d);
+    renderPerfAttentionBanner(d);
     const lines = [];
     let color = '#4ade80';
     if (d.sierraArmed === false) {

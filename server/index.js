@@ -100,6 +100,7 @@ import { cacheGet, cacheSet } from './lib/cache.js';
 import { monitorEventLoopDelay } from 'node:perf_hooks';
 import { logProcess } from './lib/processLog.js';
 import { recordDetectionPollResult } from './services/detectionHeartbeat.js';
+import { startPerfTelemetry } from './services/perfTelemetry.js';
 import { computeACDFromBars, getBestACDParams, scanAndSaveSetupEvents, computeORLevelsOnly } from './services/acdService.js';
 import { scanAndIngestNewBarFiles } from './services/priceBarService.js';
 import { runNightlyUpdate } from './services/patternMemoryUpdate.js';
@@ -383,9 +384,9 @@ app.use((req, res, next) => {
   });
   next();
 });
-function getRequestProfile() {
+function getRequestProfile(limit = 25) {
   return [..._reqProfile.entries()].map(([route, e]) => ({ route, calls: e.calls, totalMs: e.totalMs, avgMs: Math.round(e.totalMs / e.calls), maxMs: e.maxMs }))
-    .sort((a, b) => b.totalMs - a.totalMs).slice(0, 25);
+    .sort((a, b) => b.totalMs - a.totalMs).slice(0, limit);
 }
 // Local diagnostics (2026-10-19): per-query-shape call counts and time since process start -- see db.js getQueryProfile().
 // Deliberately NOT in ~/.cloudflared/config.yml's allowlist, so it is only reachable from this machine.
@@ -764,6 +765,9 @@ httpServer.listen(PORT, () => {
   // it fails to start, the gate fails closed (force-SHADOW) on every candidate rather than
   // silently firing everything live unscored. See mlScoringServiceManager.js.
   try { startMlScoringService(); } catch (err) { console.error('[mlScoringServiceManager] startMlScoringService failed:', err); }
+
+  // Performance/health telemetry (2026-10-19): deploy marker now, a perf_snapshots row every 5 min, regression detection against its own history.
+  startPerfTelemetry({ requestProfile: () => getRequestProfile(500) }).catch((err) => console.error('[perf] startPerfTelemetry failed:', err));
 
   // ── Scheduled jobs (node-cron v3, fires within the matching minute) ──────────
 

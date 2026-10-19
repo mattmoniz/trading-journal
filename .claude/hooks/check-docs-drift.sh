@@ -181,6 +181,15 @@ if [ ${#hardcoded_hits2[@]} -gt 0 ]; then
   warnings+=("NEW HARDCODED ANTI-PATTERN (this session) — review before ending: ${joined2:3}")
 fi
 
+# ── 5. Change-time performance guard (2026-10-19) ────────────────────────────
+# The detection pass / shared-query files are where an innocent-looking change costs seconds per 15s poll (Postgres JIT, VIEW anchors, uncached
+# per-pass lookups: see CLAUDE.md "Detection speed lessons"). Advisory only: it fires when one of the hot files changed (working tree or unpushed).
+hot_re='^server/(routes/acd\.js|db\.js|index\.js|services/(queries|acdCandidateBuilder|touchQuality|levelProximityService|marketPulse)\.js)$'
+hot_changed="$( { printf '%s\n' "$changed_files"; printf '%s\n' "${unpushed_files:-}"; } | grep -E "$hot_re" | sort -u | tr '\n' ' ')"
+if [ -n "${hot_changed// /}" ]; then
+  warnings+=("PERFORMANCE GUARD — hot-path file(s) changed: ${hot_changed}. After the restart, the app records its own before/after: wait ~1-2 hours of the same session type, then run 'node scripts/perf_report.mjs' (per-git-sha medians for DB busy %, detection pass ms, loop stalls, poll outages, row-to-order delay). Any new query on this path should be checked with EXPLAIN against price_bars_primary-style views, and a per-pass lookup that is stable for the day belongs in getCached(DAY_CACHE_TTL). The in-server detector (perfTelemetry.js) will raise the 'APP SLOWER THAN USUAL' banner on its own if a metric leaves its own range for 2+ snapshots.")
+fi
+
 # ── Output ─────────────────────────────────────────────────────────────────────
 [ ${#warnings[@]} -eq 0 ] && exit 0
 

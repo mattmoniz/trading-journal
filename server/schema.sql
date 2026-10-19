@@ -5943,6 +5943,17 @@ CREATE TABLE public.order_placements_stale_exit_backup_20261007 (
 
 
 --
+-- Name: order_placements_trade_account_backup_20261019; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.order_placements_trade_account_backup_20261019 (
+    id integer,
+    trade_account character varying(60),
+    avg_fill_price numeric
+);
+
+
+--
 -- Name: order_placements_updates; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -6092,6 +6103,52 @@ CREATE TABLE public.pattern_stats_session_pnl_fix_backup_20260719 (
     degrading_alert boolean,
     created_at timestamp without time zone
 );
+
+
+--
+-- Name: perf_snapshots; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.perf_snapshots (
+    id bigint NOT NULL,
+    captured_at timestamp with time zone DEFAULT now() NOT NULL,
+    kind character varying(10) NOT NULL,
+    deploy_sha character varying(40),
+    boot_id character varying(30),
+    session character varying(8),
+    interval_s integer,
+    db_time_pct numeric,
+    query_calls integer,
+    detect_calls integer,
+    detect_avg_ms numeric,
+    detect_max_ms numeric,
+    loop_p99_ms numeric,
+    poll_outages integer,
+    entry_delay_p50_s numeric,
+    entry_delay_p90_s numeric,
+    metrics jsonb,
+    regression jsonb,
+    CONSTRAINT perf_snapshots_kind_check CHECK (((kind)::text = ANY ((ARRAY['SNAPSHOT'::character varying, 'DEPLOY'::character varying, 'INCIDENT'::character varying])::text[])))
+);
+
+
+--
+-- Name: perf_snapshots_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.perf_snapshots_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: perf_snapshots_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.perf_snapshots_id_seq OWNED BY public.perf_snapshots.id;
 
 
 --
@@ -9869,6 +9926,13 @@ ALTER TABLE ONLY public.pattern_stats ALTER COLUMN id SET DEFAULT nextval('publi
 
 
 --
+-- Name: perf_snapshots id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.perf_snapshots ALTER COLUMN id SET DEFAULT nextval('public.perf_snapshots_id_seq'::regclass);
+
+
+--
 -- Name: performance_audit id; Type: DEFAULT; Schema: public; Owner: -
 --
 
@@ -10582,6 +10646,14 @@ ALTER TABLE ONLY public.pattern_stats
 
 ALTER TABLE ONLY public.pattern_stats
     ADD CONSTRAINT pattern_stats_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: perf_snapshots perf_snapshots_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.perf_snapshots
+    ADD CONSTRAINT perf_snapshots_pkey PRIMARY KEY (id);
 
 
 --
@@ -11822,6 +11894,20 @@ CREATE INDEX idx_pca_alert_time ON public.phase_change_alerts USING btree (alert
 --
 
 CREATE INDEX idx_pca_trade_date ON public.phase_change_alerts USING btree (trade_date);
+
+
+--
+-- Name: idx_perf_snapshots_kind_time; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_perf_snapshots_kind_time ON public.perf_snapshots USING btree (kind, captured_at DESC);
+
+
+--
+-- Name: idx_perf_snapshots_sha; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_perf_snapshots_sha ON public.perf_snapshots USING btree (deploy_sha, session);
 
 
 --
