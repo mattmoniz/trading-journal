@@ -368,9 +368,27 @@ function startChartImageWatcher() {
 }
 
 // Mount routes
+// Per-route request profiler (2026-10-19): count + total/max wall time per METHOD+route since process start, so we can see which polled
+// endpoint drives DB load. Cost: one Map update per response. Read via /api/diag/query-profile -> requests.
+const _reqProfile = new Map();
+app.use((req, res, next) => {
+  const t0 = Date.now();
+  res.on('finish', () => {
+    const key = `${req.method} ${(req.baseUrl || '') + (req.route?.path || req.path)}`.replace(/\/\d+/g, '/:n').slice(0, 90);
+    const e = _reqProfile.get(key);
+    const ms = Date.now() - t0;
+    if (e) { e.calls++; e.totalMs += ms; if (ms > e.maxMs) e.maxMs = ms; }
+    else if (_reqProfile.size < 500) _reqProfile.set(key, { calls: 1, totalMs: ms, maxMs: ms });
+  });
+  next();
+});
+function getRequestProfile() {
+  return [..._reqProfile.entries()].map(([route, e]) => ({ route, calls: e.calls, totalMs: e.totalMs, avgMs: Math.round(e.totalMs / e.calls), maxMs: e.maxMs }))
+    .sort((a, b) => b.totalMs - a.totalMs).slice(0, 25);
+}
 // Local diagnostics (2026-10-19): per-query-shape call counts and time since process start -- see db.js getQueryProfile().
 // Deliberately NOT in ~/.cloudflared/config.yml's allowlist, so it is only reachable from this machine.
-app.get('/api/diag/query-profile', (req, res) => res.json(getQueryProfile({ top: Math.min(Number(req.query.top) || 25, 100) })));
+app.get('/api/diag/query-profile', (req, res) => res.json({ ...getQueryProfile({ top: Math.min(Number(req.query.top) || 25, 100) }), requests: getRequestProfile() }));
 app.use('/api', dailyLogsRouter);
 app.use('/api', tradesRouter);
 app.use('/api', statsRouter);

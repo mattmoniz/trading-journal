@@ -3722,10 +3722,13 @@ export default function createACDRouter(io) {
         // All KEEP levels from the system backtest.
         // RTH-wide detection (9:30 AM – 4:00 PM). First touch only (tracked via active_setups dedup).
         // Stats from 180-day system backtest (originally AM-only, now extended to full RTH).
-        // Monday gate: wait for IB close (10:30 ET) before firing level fades.
+        // REMOVED 2026-10-19 (user decision): the "Monday gate" (no level fades before 10:30 ET on Mondays, in place since 2026-07-01).
+        // Its 3-month backtest was inconclusive (scripts/backtest_monday_gate_20261019.mjs: the first touches it withheld were +$24/trade,
+        // N=31 on 6 Mondays, CI crossing zero) and it hid Monday mornings entirely. If it is ever reinstated, add a real-time record of what
+        // it blocks (OPEN_DECISION monday_gate_recheck_when_more_mondays_20261019) -- reconstructing that after 10:30 is what made this hard to judge.
+        // isMonday itself stays: lsMon() below still applies Monday-specific per-level stats.
         const isMonday = new Date(todayET + 'T12:00:00').getDay() === 1;
-        const mondayGate = isMonday ? etMinNow >= 630 : true; // Mondays: wait for IB close (10:30)
-        if (last5.length >= 3 && etMinNow < 960 && mondayGate) {
+        if (last5.length >= 3 && etMinNow < 960) {
           const approachDir = last5[0].close < currentPrice ? 'FROM_BELOW' : 'FROM_ABOVE';
           // Fallback stop/target — only used when no OPTIMAL_STOP row exists AND no mae_p75 from level data.
           // Per-setup-type values are loaded from performance_audit via liveStats._opt[type].
