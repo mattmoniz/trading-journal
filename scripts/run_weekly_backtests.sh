@@ -55,6 +55,8 @@ run /usr/bin/node scripts/backtest_globex_level_bet_class_phase7.mjs
 # document -- resolved weekly, see this script's own header for the full reasoning,
 # confirmed by DeepSeek design critique before being built).
 run /usr/bin/node scripts/monitor_bet_correlation.mjs
+# Weekly data-growth record + judgement (2026-10-19): sizes/row counts/full-scan reads of the big tables, unused big tables, slowly-slowing queries. Speaks only via OPEN_DECISION.
+run /usr/bin/node scripts/data_growth_check.mjs
 
 # --- Touch-quality (order-flow) calibration — feeds acd.js's live resolveSetupsByPrice
 # classification (informational-only mid-trade flag) and the antigravity/edges-context

@@ -259,6 +259,12 @@ async function run() {
     });
   }
 
+  // Keep only this run's rows (2026-10-19): the sole reader (acd.js roster-rebuild-status) takes the newest row per pair, and with ~250 setup types a run
+  // writes ~32k pairs, so keeping every weekly run grew performance_audit by ~30k rows a week (88k of 120k rows were old runs) and slowed every scan of it.
+  // Pairs that dropped out of this run are removed too -- they would otherwise read as a stale "current" value.
+  const pruned = await query(`DELETE FROM performance_audit WHERE signal_type IN ('CORRELATION_MONITOR_BET_CLASS','CORRELATION_MONITOR_SETUP_TYPE') AND run_date < $1`, [today]);
+  console.log(`pruned ${pruned.rowCount} older correlation-monitor rows`);
+
   if (alertLines.length > 0) {
     fs.appendFileSync(ALERTS_FILE, alertLines.join(''));
     console.log(`\n⚠ ${alertLines.length} correlation alert(s) written to scratch/gemini_alerts.txt`);
