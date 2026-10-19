@@ -4,6 +4,7 @@
 // queryable and survives restarts. An item stays active until a later reconciliation records a
 // matching broker/app position (invariant_match = true).
 import { query } from '../../db.js';
+import { DLL_DATA_GAP_TEXT } from './dllGate.js';
 
 const KINDS = {
   EXTRA_EXPOSURE: {
@@ -62,7 +63,7 @@ export async function getLiveDataAttention(db = { query }) {
   const unpriced = await db.query(`
     SELECT setup_id, purpose, TO_CHAR(MIN(last_update_at), 'YYYY-MM-DD HH24:MI') AS since
     FROM order_placements
-    WHERE status = 'FILLED' AND avg_fill_price IS NULL AND filled_quantity > 0
+    WHERE status = 'FILLED' AND avg_fill_price IS NULL
       AND created_at > NOW() - interval '24 hours' AND last_update_at < NOW() - interval '2 minutes'
     GROUP BY setup_id, purpose ORDER BY MIN(last_update_at) LIMIT 5`);
   if (unpriced.rows.length) {
@@ -73,7 +74,7 @@ export async function getLiveDataAttention(db = { query }) {
   const blocked = await db.query(`
     SELECT TO_CHAR(MIN(evaluated_at), 'YYYY-MM-DD HH24:MI') AS since, COUNT(*)::int AS n FROM gated_candidates
     WHERE gate_name = 'SIERRA_ENTRY_SKIP' AND evaluated_at > NOW() - interval '15 minutes'
-      AND gate_reason LIKE '%daily loss limit:%' AND gate_reason LIKE '%cannot confirm the account is within limit%'`);
+      AND gate_reason LIKE '%daily loss limit:%' AND gate_reason LIKE $1`, ['%' + DLL_DATA_GAP_TEXT + '%']);
   if (blocked.rows[0].n > 0) {
     return { kind: 'ENTRIES_BLOCKED_BY_DATA_GAP', ...KINDS.ENTRIES_BLOCKED_BY_DATA_GAP, since: blocked.rows[0].since,
       detail: `${blocked.rows[0].n} entries refused in the last 15 minutes` };

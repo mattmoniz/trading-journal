@@ -34,6 +34,7 @@ export async function getPriceMultiplier(dtcClient, symbol, now = Date.now) {
   if (lastFail != null && now() - lastFail < FAILED_LOOKUP_RETRY_MS) return null;
   if (!dtcClient || !dtcClient.isLoggedOn) return null;
 
+  const requestedAt = now();
   const p = new Promise((resolve) => {
     let resolved = false;
     const onSecurityDefinition = (msg) => {
@@ -54,7 +55,7 @@ export async function getPriceMultiplier(dtcClient, symbol, now = Date.now) {
   }).then((multiplier) => {
     inFlight.delete(symbol);
     if (multiplier != null) { cache.set(symbol, multiplier); failedAt.delete(symbol); }
-    else failedAt.set(symbol, now());
+    else failedAt.set(symbol, requestedAt);
     return multiplier;
   });
   inFlight.set(symbol, p);

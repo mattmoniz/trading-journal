@@ -334,7 +334,9 @@ export async function placeMarketEscalationEntryOrder(dtcClient, { orderId, setu
       UPDATE order_placements op
       SET client_order_id = $2, order_type = 'MARKET', price1 = 0, price2 = NULL,
           status = 'PENDING_SUBMIT', position_open = TRUE, position_slot = avail.slot,
-          filled_quantity = NULL, avg_fill_price = NULL, server_order_id = NULL, reject_reason = NULL,
+          -- filled_quantity is NOT NULL DEFAULT 0: this used to say NULL, which Postgres rejects, so this re-submit statement threw
+          -- every time and the unfilled-limit -> market escalation could never run (found 2026-10-19, DeepSeek review + rolled-back test).
+          filled_quantity = 0, avg_fill_price = NULL, server_order_id = NULL, reject_reason = NULL,
           submitted_at = now(), last_update_at = now()
       FROM avail, direction_ok
       WHERE op.id = $1 AND op.purpose = 'ENTRY' AND op.status = 'CANCELED'

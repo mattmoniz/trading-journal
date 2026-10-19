@@ -15,6 +15,11 @@
 // don't pass `unknownWorstCaseLoss` keep the old behavior (any unknown blocks).
 import { LIVE_INSTRUMENT } from '../../config/instruments.js';
 
+// The wording of the "cannot compute a worst case" block. brokerAttention.js matches on this exact text to raise the
+// ENTRIES_BLOCKED_BY_DATA_GAP banner, so it is one shared constant (DeepSeek review 2026-10-19, finding 4: a wording edit here
+// would otherwise silently disable the banner).
+export const DLL_DATA_GAP_TEXT = 'cannot confirm the account is within limit';
+
 export function dllGateDecision({ realizedBrokerPnl, unknownCount = 0, limit, unknownWorstCaseLoss = null, unknownNote = '' }) {
   if (!Number.isFinite(limit) || limit <= 0) return { blocked: false, reason: 'no limit configured' };
   if (!Number.isFinite(realizedBrokerPnl)) return { blocked: false, reason: 'no broker P&L yet -- cannot evaluate' };
@@ -29,7 +34,7 @@ export function dllGateDecision({ realizedBrokerPnl, unknownCount = 0, limit, un
     return { blocked: false, reason: `within limit counting ${unknownCount} trade(s) without broker P&L at worst case (-${unknownWorstCaseLoss.toFixed(2)})` };
   }
   if (unknownCount > 0) {
-    return { blocked: true, reason: `${unknownCount} trade(s) still without broker P&L -- cannot confirm the account is within limit${unknownNote}` };
+    return { blocked: true, reason: `${unknownCount} trade(s) still without broker P&L -- ${DLL_DATA_GAP_TEXT}${unknownNote}` };
   }
   return { blocked: false, reason: 'within limit' };
 }
@@ -40,19 +45,32 @@ export function dllGateDecision({ realizedBrokerPnl, unknownCount = 0, limit, un
 // no computable worst case and the gate refused every entry for ~7h. A trade with no stop, or no entry price of
 // any kind, still falls back to block-everything -- the fail-closed intent is unchanged.
 export const DLL_ROW_SQL = `
+    WITH slip AS (
+      -- Rolling adverse-slippage allowance (DeepSeek review 2026-10-19, finding 1): a LIMIT that "market-executes" or a MARKET entry
+      -- can fill worse than the price we fall back on. Derived from the account's own last 30 days of priced entries -- the 95th
+      -- percentile distance between the setup's entry level and the real fill -- not a hardcoded number.
+      SELECT COALESCE(PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY ABS(x.avg_fill_price - s.entry_zone_low)), 0)::float AS p
+      FROM order_placements x JOIN active_setups s ON s.id = x.setup_id
+      WHERE x.purpose = 'ENTRY' AND x.status = 'FILLED' AND x.avg_fill_price IS NOT NULL AND s.entry_zone_low IS NOT NULL
+        AND x.created_at > NOW() - interval '30 days'
+    )
     SELECT COALESCE(SUM(a.broker_pnl), 0)::float AS realized,
            COUNT(*) FILTER (WHERE a.broker_pnl IS NULL AND a.status <> 'ACTIVE')::int AS unknown,
-           COALESCE(SUM(ABS(COALESCE(e.avg_fill_price, e.price1, a.entry_zone_low) - a.stop_level) * e.filled_quantity * $2)
+           COALESCE(SUM((ABS(COALESCE(e.avg_fill_price, NULLIF(e.price1, 0), a.entry_zone_low) - a.stop_level)
+                         + CASE WHEN e.avg_fill_price IS NULL THEN slip.p ELSE 0 END)
+                        * GREATEST(COALESCE(e.filled_quantity, 0), 1) * $2)
              FILTER (WHERE a.broker_pnl IS NULL AND a.status <> 'ACTIVE' AND a.stop_level IS NOT NULL
-                     AND COALESCE(e.avg_fill_price, e.price1, a.entry_zone_low) IS NOT NULL), 0)::float AS unknown_worst,
+                     AND COALESCE(e.avg_fill_price, NULLIF(e.price1, 0), a.entry_zone_low) IS NOT NULL), 0)::float AS unknown_worst,
            -- A trade with no stop OR no entry price of any kind has no computable worst case (ABS(NULL - x) is NULL and
            -- SUM would silently drop it as $0 risk -- DeepSeek review finding 1), so it falls back to block-everything.
+           -- NULLIF(price1, 0): an escalated MARKET entry stores price1 = 0 (reconciliation.js), which is "no price", not price zero.
            COUNT(*) FILTER (WHERE a.broker_pnl IS NULL AND a.status <> 'ACTIVE'
-                     AND (a.stop_level IS NULL OR COALESCE(e.avg_fill_price, e.price1, a.entry_zone_low) IS NULL))::int AS unknown_no_stop,
+                     AND (a.stop_level IS NULL OR COALESCE(e.avg_fill_price, NULLIF(e.price1, 0), a.entry_zone_low) IS NULL))::int AS unknown_no_stop,
            COUNT(*) FILTER (WHERE a.broker_pnl IS NULL AND a.status <> 'ACTIVE' AND e.avg_fill_price IS NULL)::int AS unknown_price_estimated,
            COALESCE(ARRAY_AGG(a.id) FILTER (WHERE a.broker_pnl IS NULL AND a.status <> 'ACTIVE'), '{}') AS unknown_ids
     FROM active_setups a
     JOIN order_placements e ON e.setup_id = a.id AND e.purpose = 'ENTRY' AND e.status = 'FILLED' AND e.trade_account = $1
+    CROSS JOIN slip
     WHERE a.trade_date = CURRENT_DATE AND a.origin_status = 'ACTIVE'
   `;
 
@@ -70,7 +88,7 @@ export async function evaluateDailyLossLimit(tradeAccount) {
   const row = r.rows[0];
   // A trade with no stop on record has no computable worst case -> fall back to the old fail-closed block.
   const worst = row.unknown_no_stop > 0 ? null : row.unknown_worst;
-  const estNote = row.unknown_price_estimated > 0 && row.unknown_no_stop === 0 ? ` [entry fill price missing on ${row.unknown_price_estimated} trade(s); worst case uses the order/setup entry price]` : '';
+  const estNote = row.unknown_price_estimated > 0 && row.unknown_no_stop === 0 ? ` [entry fill price missing on ${row.unknown_price_estimated} trade(s); worst case uses the order/setup entry price plus a rolling slippage allowance]` : '';
   // Say WHY the P&L is unknown (brokerPnlResolver.js), so this reads as a data problem, not a loss-limit one.
   let unknownNote = '';
   if (row.unknown_ids.length) {

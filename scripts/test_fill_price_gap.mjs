@@ -67,6 +67,13 @@ try {
   const edge = row.unknown_worst - row.realized;
   if (edge > 0) assert.equal(dllGateDecision({ realizedBrokerPnl: row.realized, unknownCount: row.unknown, limit: edge, unknownWorstCaseLoss: row.unknown_worst }).blocked, true);
   else console.log('   (known realized P&L today exceeds the worst case; edge-limit check skipped)');
+  // DeepSeek review 2026-10-19: an escalated MARKET entry stores price1 = 0 -- must be treated as "no price", never as price zero
+  const before = row.unknown_worst;
+  await client.query(`UPDATE order_placements SET price1 = 0, order_type = 'MARKET' WHERE setup_id=$1 AND purpose='ENTRY'`, [id]);
+  const rowMkt = (await client.query(DLL_ROW_SQL, [trade_account, 2])).rows[0];
+  assert.ok(rowMkt.unknown_worst > 0 && rowMkt.unknown_worst < 5000, 'price1=0 must not produce a ~$60k worst case, got ' + rowMkt.unknown_worst);
+  assert.ok(rowMkt.unknown_worst >= before - 1e-6, 'slippage allowance can only raise the estimate for an unpriced fill');
+  console.log('   price1=0 escalation row worst case', rowMkt.unknown_worst.toFixed(2), '(limit-priced estimate was', before.toFixed(2) + ')');
   // no stop -> still block-everything
   await client.query(`UPDATE active_setups SET stop_level = NULL WHERE id=$1`, [id]);
   assert.ok((await client.query(DLL_ROW_SQL, [trade_account, 2])).rows[0].unknown_no_stop >= 1);
@@ -83,6 +90,14 @@ try {
   const pnlAfter = (await client.query(`SELECT broker_pnl::float AS p FROM active_setups WHERE id=$1`, [id])).rows[0].p;
   console.log('   broker_pnl after repair', pnlAfter, 'original', origPnl);
   console.log('3. ok');
+  // 3b. a wrong multiplier (x100) must NOT be written: the magnitude guard leaves the fill NULL
+  await client.query(`UPDATE order_placements SET avg_fill_price = NULL WHERE setup_id=$1 AND purpose='ENTRY'`, [id]);
+  _resetPriceMultiplierCacheForTests();
+  class WrongDtc extends FakeDtc { requestSecurityDefinition(sym) { this.requests++; setImmediate(() => this.emit('securityDefinition', { Symbol: sym, DisplayPriceMultiplier: 100 })); } }
+  const bad = await repairNullFillPrices(new WrongDtc(), { query: client.query.bind(client) });
+  const still = (await client.query(`SELECT avg_fill_price FROM order_placements WHERE setup_id=$1 AND purpose='ENTRY'`, [id])).rows[0].avg_fill_price;
+  assert.equal(still, null, 'a x100 multiplier must not be written'); assert.equal(bad.repaired, 0);
+  console.log('3b. wrong multiplier refused ok');
 
   // 4. alert: an old unpriced fill raises UNPRICED_FILL; a data-gap DLL skip raises ENTRIES_BLOCKED_BY_DATA_GAP; clean = null
   const cdb = { query: client.query.bind(client) };

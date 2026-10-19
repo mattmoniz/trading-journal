@@ -136,8 +136,8 @@ let excluded = { ibIncomplete: 0, noPriorRth: 0, gap: 0 };
 for (let i = 0; i < events.length - 1; i++) {
   const ev = events[i];
   const stt = stateOf(ev);
-  if (stt.type === 'GAP') { excluded.gap++; continue; }
-  if (stt.trend == null) { stt.type === 'RTH' ? excluded.ibIncomplete++ : excluded.noPriorRth++; continue; }
+  if (stt.type === 'GAP') excluded.gap++;
+  else if (stt.trend == null) { stt.type === 'RTH' ? excluded.ibIncomplete++ : excluded.noPriorRth++; }
   // Bound = the earlier of the next event (either direction) and entry + 24h, all in naive-ET digits like the live row's own
   // expires_at (the 2026-10-08 script converted the cap through toISOString(), i.e. UTC digits against a naive ET column).
   const capTs = new Date(new Date(ev.ts.replace(' ', 'T') + 'Z').getTime() + CAP_HOURS * 3600 * 1000).toISOString().slice(0, 19).replace('T', ' ');
@@ -146,9 +146,9 @@ for (let i = 0; i < events.length - 1; i++) {
   const fwd = (await pool.query(`SELECT ts::text ts, high::float high, low::float low, close::float close FROM price_bars_primary WHERE symbol='NQ' AND ts > $1::timestamp AND ts <= $2::timestamp ORDER BY ts`, [ev.ts, boundTs])).rows;
   if (fwd.length < 2) continue;
   const res = {}; for (const a of ARMS) res[a] = simulate(ev, fwd, a);
-  rows.push({ date: ev.trade_date, ts: ev.ts, type: stt.type, trend: stt.trend ? 'TREND' : 'NOT_TREND', generic: stt.generic ? 'TREND' : 'NOT_TREND', pnl: Object.fromEntries(ARMS.map(a => [a, res[a].pnl])), how: res.LIVE.how });
+  rows.push({ date: ev.trade_date, ts: ev.ts, type: stt.type, trend: stt.trend == null ? null : (stt.trend ? 'TREND' : 'NOT_TREND'), generic: stt.generic ? 'TREND' : 'NOT_TREND', pnl: Object.fromEntries(ARMS.map(a => [a, res[a].pnl])), how: res.LIVE.how });
 }
-console.log(`paired events: ${rows.length} | excluded: IB incomplete ${excluded.ibIncomplete}, no adjacent prior RTH ${excluded.noPriorRth}, maintenance gap ${excluded.gap}`);
+console.log(`simulated events: ${rows.length} | state undefined (excluded from the STATE tests only): IB incomplete ${excluded.ibIncomplete}, no adjacent prior RTH ${excluded.noPriorRth}, maintenance gap ${excluded.gap}`);
 
 // ---- analysis -----------------------------------------------------------------------------------------------
 const mean = (a) => a.length ? a.reduce((x, y) => x + y, 0) / a.length : NaN;
@@ -157,17 +157,27 @@ const ci = (ev, key) => ev.length >= 5 ? dayBlockedBootstrapCI(ev, key) : null;
 const fmtCi = (c) => c ? `[${f(c.lo)},${f(c.hi)}]` : '[n/a]';
 const deltaEv = (arr, alt, stateKey = 'trend') => arr.map(r => ({ date: r.date, group: r[stateKey], pnl: r.pnl[alt] - r.pnl.LIVE }));
 
-console.log('\n== reproduction check: NO_FLIP - NEITHER (shipped claim +39.13, CI [16.88,69.28], day-weighted mean) ==');
+const dayWeighted = (e) => { const m = new Map(); for (const x of e) { if (!m.has(x.date)) m.set(x.date, []); m.get(x.date).push(x.pnl); } const dm = [...m.values()].map(mean); return mean(dm); };
+console.log('\n== reproduction check, ALL events: NO_FLIP - NEITHER (shipped claim +39.13, CI [16.88,69.28]; that claim used the DAY-WEIGHTED mean) ==');
 {
   const e = rows.map(r => ({ date: r.date, pnl: r.pnl.NO_FLIP - r.pnl.NEITHER }));
-  console.log(`n=${e.length} per-trade mean=${f(mean(e.map(x => x.pnl)))} CI${fmtCi(ci(e, 'repro'))}`);
+  console.log(`n=${e.length} days=${new Set(e.map(x => x.date)).size} per-trade mean=${f(mean(e.map(x => x.pnl)))} CI${fmtCi(ci(e, 'repro'))} | day-weighted mean=${f(dayWeighted(e))}`);
 }
-console.log('\n== arm levels, all paired events ==');
-for (const a of ARMS) console.log(`${a.padEnd(8)} mean=${f(mean(rows.map(r => r.pnl[a])))}`);
+console.log('\n== arm levels (per-trade mean) and overall paired delta vs LIVE, by session type ==');
+for (const type of ['ALL', 'RTH', 'GLOBEX']) {
+  const sub = type === 'ALL' ? rows : rows.filter(r => r.type === type);
+  console.log(`-- ${type}: n=${sub.length} days=${new Set(sub.map(r => r.date)).size}  levels: ` + ARMS.map(a => `${a}=${f(mean(sub.map(r => r.pnl[a])))}`).join('  '));
+  const days = [...new Set(sub.map(r => r.date))].sort(); const mid = days[Math.floor(days.length / 2)];
+  for (const alt of ['NO_FLIP', 'NO_BE', 'NEITHER']) {
+    const e = sub.map(r => ({ date: r.date, pnl: r.pnl[alt] - r.pnl.LIVE }));
+    const h1 = mean(e.filter(x => x.date < mid).map(x => x.pnl)), h2 = mean(e.filter(x => x.date >= mid).map(x => x.pnl));
+    console.log(`   ${alt.padEnd(8)} - LIVE: per-trade ${f(mean(e.map(x => x.pnl)))} CI${fmtCi(ci(e, 'ov|' + type + alt))} | halves ${f(h1)} / ${f(h2)}`);
+  }
+}
 
 const verdicts = [];
 for (const type of ['RTH', 'GLOBEX']) {
-  const sub = rows.filter(r => r.type === type);
+  const sub = rows.filter(r => r.type === type && r.trend != null);
   console.log(`\n================ ${type} (n=${sub.length}, days=${new Set(sub.map(r => r.date)).size}) ================`);
   console.log(`TREND n=${sub.filter(r => r.trend === 'TREND').length}  NOT_TREND n=${sub.filter(r => r.trend === 'NOT_TREND').length}`);
   for (const alt of ['NO_FLIP', 'NO_BE', 'NEITHER']) {
