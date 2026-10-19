@@ -223,13 +223,22 @@ async function sweepEntries(dtcClient) {
   // Visibility for a live row that is simply too OLD to enter (2026-10-18: POC_ROTATION_JOIN_LONG 136052 was
   // inserted 9 minutes after its fire time -- bar/ingest lag or a restart -- so the query above never saw it
   // and NOTHING recorded why it got no order). Logged as a skip so quick-check's broker note says so.
+  // 2026-10-19: no longer requires status = 'ACTIVE'. Setup 136052 (the 18:33 Sunday signal) was inserted 8.6 minutes late and
+  // expired 27 seconds later, so it was already EXPIRED when this ran and got no note at all. Also writes ONE note per row
+  // (it used to re-write the same note every 5 minutes for an hour), and skips a row that already has any entry-skip note.
   const tooOld = await query(`
-    SELECT id, setup_type FROM active_setups
-    WHERE origin_status = 'ACTIVE' AND status = 'ACTIVE'
+    SELECT id, setup_type, ROUND(EXTRACT(EPOCH FROM (created_at - fired_at)) / 60)::int AS inserted_late_min
+    FROM active_setups
+    WHERE origin_status = 'ACTIVE'
       AND fired_at <= NOW() - make_interval(mins => $1) AND fired_at > NOW() - interval '60 minutes'
       AND NOT EXISTS (SELECT 1 FROM order_placements WHERE setup_id = active_setups.id AND purpose = 'ENTRY')
   `, [ENTRY_LOOKBACK_MINUTES]);
-  for (const r of tooOld.rows) await recordEntrySkip(r, `signal older than the ${ENTRY_LOOKBACK_MINUTES}-minute entry window (inserted late, e.g. after a restart or a bar delay) -- not entered`);
+  for (const r of tooOld.rows) {
+    const has = await query(`SELECT 1 FROM gated_candidates WHERE gate_name = 'SIERRA_ENTRY_SKIP' AND setup_type = $1 AND gate_reason LIKE $2 LIMIT 1`,
+      [r.setup_type, `setup_id=${r.id} %`]);
+    if (has.rows.length) continue;
+    await recordEntrySkip(r, `signal older than the ${ENTRY_LOOKBACK_MINUTES}-minute entry window (row was written ${r.inserted_late_min} min after its signal time, e.g. a restart or a bar delay) -- not entered`);
+  }
   for (const row of rows.rows) {
     try {
       const direction = resolveDirection(row);

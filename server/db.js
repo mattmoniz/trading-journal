@@ -66,9 +66,10 @@ const pool = new Pool({
 });
 
 // Bump work_mem per-connection so large sorts (e.g. GROUP BY on trades) stay in memory
+let loggedFirstConnect = false;
 pool.on('connect', (client) => {
   client.query('SET work_mem = \'64MB\'').catch(() => {});
-  console.log('✅ Connected to PostgreSQL database');
+  if (!loggedFirstConnect || process.env.DEBUG_SQL === '1') { loggedFirstConnect = true; console.log('✅ Connected to PostgreSQL database'); }
 });
 
 pool.on('error', (err) => {
@@ -82,7 +83,11 @@ export const query = async (text, params) => {
   try {
     const res = await pool.query(text, params);
     const duration = Date.now() - start;
-    if (process.env.NODE_ENV !== 'production') {
+    // Log only SLOW queries by default (>= SQL_LOG_SLOW_MS, 500ms); DEBUG_SQL=1 restores the old log-everything
+    // behaviour. 2026-10-19: logging every query (800-3000 lines/minute) kept journald to ~20 hours of history, which
+    // destroyed the evidence for an 18:33 Sunday signal investigation. Errors are always logged (catch below).
+    const slowMs = Number(process.env.SQL_LOG_SLOW_MS) || 500;
+    if (process.env.NODE_ENV !== 'production' && (process.env.DEBUG_SQL === '1' || duration >= slowMs)) {
       const cleanText = text.replace(/\s+/g, ' ').trim();
       const display = cleanText.length > 120 ? cleanText.slice(0, 120) + '...' : cleanText;
       console.log('Executed query', { query: display, duration, rows: res.rowCount });

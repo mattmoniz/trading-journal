@@ -58,6 +58,7 @@ const MSG_TYPE = {
   TRADE_ACCOUNT_RESPONSE: 401,
   SECURITY_DEFINITION_FOR_SYMBOL_REQUEST: 506,
   SECURITY_DEFINITION_RESPONSE: 507,
+  ACCOUNT_BALANCE_UPDATE: 600, // DTCProtocol.h (Sierra Chart install): const uint16_t ACCOUNT_BALANCE_UPDATE = 600
 };
 
 // ---- Enum values (DTCProtocol.h, verified) ----
@@ -384,6 +385,12 @@ export class DtcClient extends EventEmitter {
         break;
       case MSG_TYPE.SECURITY_DEFINITION_RESPONSE:
         this.emit('securityDefinition', msg);
+        break;
+      case MSG_TYPE.ACCOUNT_BALANCE_UPDATE:
+        // Informational account-balance push (arrives every couple of seconds). Previously fell through to the
+        // 'unhandled message' error below and flooded the log (2026-10-19). Emitted for any future consumer; nothing
+        // in this app reads it today.
+        this.emit('accountBalanceUpdate', msg);
         break;
       default:
         this.emit('error', new Error(`DtcClient: unhandled message Type=${msg.Type}`));

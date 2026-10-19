@@ -1371,19 +1371,28 @@ httpServer.listen(PORT, () => {
       // for a month with zero errors logged anywhere. Runs every tick (not hour/day-gated,
       // since it's catching up PAST dates, not today), bounded to a 90-day lookback and capped
       // at 5 dates per tick to avoid a large backlog hammering the DB in one go.
-      const missingDplRows = await query(`
-        SELECT DISTINCT t.log_date::text as trade_date
-        FROM trades t
-        WHERE t.pnl IS NOT NULL
-          AND t.log_date >= (CURRENT_DATE - INTERVAL '90 days')
-          AND t.log_date < CURRENT_DATE
-          AND NOT EXISTS (SELECT 1 FROM daily_performance_log d WHERE d.trade_date = t.log_date)
-        ORDER BY t.log_date ASC
-        LIMIT 5
-      `);
-      for (const row of missingDplRows.rows) {
-        console.log(`[catch-up] Pattern Memory historical gap found for ${row.trade_date} (trades exist, no daily_performance_log row, not today) — running now`);
-        await runNightlyUpdate(row.trade_date, io);
+      // FIXED 2026-10-19: `ORDER BY t.log_date` is not in a SELECT DISTINCT's select list (only the ::text cast is),
+      // which Postgres rejects -- so this query threw on EVERY tick since it was added (2026-08-31), and because the
+      // whole catch-up body shares one try/catch, every catch-up AFTER this point (daily coaching, prior-day coaching,
+      // AI setup review, morning brief, combo backtest, monthly report) silently never ran for ~7 weeks. Orders by the
+      // selected alias now, and is isolated in its own try/catch so a failure here can never again stop the steps below.
+      try {
+        const missingDplRows = await query(`
+          SELECT DISTINCT t.log_date::text as trade_date
+          FROM trades t
+          WHERE t.pnl IS NOT NULL
+            AND t.log_date >= (CURRENT_DATE - INTERVAL '90 days')
+            AND t.log_date < CURRENT_DATE
+            AND NOT EXISTS (SELECT 1 FROM daily_performance_log d WHERE d.trade_date = t.log_date)
+          ORDER BY trade_date ASC
+          LIMIT 5
+        `);
+        for (const row of missingDplRows.rows) {
+          console.log(`[catch-up] Pattern Memory historical gap found for ${row.trade_date} (trades exist, no daily_performance_log row, not today) — running now`);
+          await runNightlyUpdate(row.trade_date, io);
+        }
+      } catch (err) {
+        console.error('[catch-up] Pattern Memory historical-gap step failed (later catch-ups still run):', err.message);
       }
 
       // Daily coaching — due 4:30 PM Mon–Fri; catch up after 5 PM
@@ -1408,11 +1417,15 @@ httpServer.listen(PORT, () => {
 
       // AI daily setup review — due 4:35 PM Mon–Fri; catch up after 5 PM
       if (day >= 1 && day <= 5 && hour >= 17) {
-        const [reviewRows, setupRows] = await Promise.all([
+        const [reviewRows, setupRows, recentAiFail] = await Promise.all([
           query(`SELECT id FROM daily_ai_reviews WHERE review_date = $1 LIMIT 1`, [today]),
           query(`SELECT id FROM active_setups WHERE trade_date = $1 AND status IN ('RESOLVED','EXPIRED') AND resolution IS NOT NULL LIMIT 1`, [today]),
+          // 2026-10-19: this step had never actually executed since 2026-08-31 (the Pattern Memory gap query above threw on
+          // every tick), and the 4:35 PM cron has been failing daily on the Anthropic API ("credit balance too low").
+          // Without this guard the freshly-working catch-up would re-fire a doomed call every 30 min all evening.
+          query(`SELECT 1 FROM process_log WHERE process_name = 'AI_DAILY_REVIEW' AND status = 'FAILED' AND started_at >= (CURRENT_DATE + TIME '16:00') LIMIT 1`),
         ]);
-        if (!reviewRows.rows.length && setupRows.rows.length) {
+        if (!reviewRows.rows.length && setupRows.rows.length && !recentAiFail.rows.length) {
           console.log('[catch-up] AI daily setup review overdue — running now');
           const port = process.env.PORT || 3002;
           await logProcess('AI_DAILY_REVIEW', async () => {

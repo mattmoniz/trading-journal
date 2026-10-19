@@ -130,6 +130,7 @@ export function detectSignalEvents(R, path_convention, THETA, sessions, rMode = 
                     pivot_is_low = false; leg_confirmed = true;
                     current_leg.direction = 'UP';
                     old_direction = 'UP';
+                    current_leg.confirmed_idx = i;
                 } else if (bar.high - running_low >= rUp) {
                     anchor_idx = running_low_idx;
                     running_high = bar.high; running_low = bar.low;
@@ -137,6 +138,7 @@ export function detectSignalEvents(R, path_convention, THETA, sessions, rMode = 
                     pivot_is_low = true; leg_confirmed = true;
                     current_leg.direction = 'DOWN';
                     old_direction = 'DOWN';
+                    current_leg.confirmed_idx = i;
                 }
             } else if (pivot_is_low === true) {
                 if (running_high - bar.low >= rDown) {
@@ -168,11 +170,16 @@ export function detectSignalEvents(R, path_convention, THETA, sessions, rMode = 
                     });
                 }
                 leg_records.push({ ...current_leg });
+                // confirmed_idx (added 2026-10-19, additive only): the bar at which this leg's direction became KNOWN (the
+                // reversal bar). A leg's start_idx is the pivot ANCHOR, which precedes confirmation -- using it as "when the
+                // direction was known" is look-ahead. Consumers needing the direction as of bar i should use the last leg
+                // with confirmed_idx <= i.
                 current_leg = {
                     start_idx: anchor_idx,
                     direction: pivot_is_low ? 'UP' : 'DOWN',
                     converged_idx: null,
-                    length_at_convergence: null
+                    length_at_convergence: null,
+                    confirmed_idx: i
                 };
             }
 
