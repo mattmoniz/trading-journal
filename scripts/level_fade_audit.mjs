@@ -45,7 +45,7 @@ function fmt(v, d = 1) { return v.toFixed(d); }
 
 // ─── Load All Data ───────────────────────────────────────────────────────────
 
-async function loadData() {
+export async function loadData() {
   console.log('Loading data...');
 
   // 1. RTH bars for last 180+ trading days (need prior day for computing levels)
@@ -102,7 +102,7 @@ async function loadData() {
 
 // ─── Level Definitions ───────────────────────────────────────────────────────
 
-function getLevels(date, priorDate, vaByDate, acdByDate, barsByDate) {
+export function getLevels(date, priorDate, vaByDate, acdByDate, barsByDate) {
   const pdVA = vaByDate[priorDate];
   if (!pdVA) return [];
 
@@ -155,7 +155,7 @@ function getLevels(date, priorDate, vaByDate, acdByDate, barsByDate) {
 
 // ─── Replay Engine ───────────────────────────────────────────────────────────
 
-function replayDay(date, bars, levels, dayType, devRange) {
+export function replayDay(date, bars, levels, dayType, devRange) {
   const touches = [];
   const touchedLevels = new Set(); // track first touch per level name
   const retouchTracker = {};       // track retouches separately
@@ -746,4 +746,8 @@ async function main() {
   console.log('='.repeat(150));
 }
 
-main().then(() => process.exit(0)).catch(err => { console.error(err); process.exit(1); });
+// Only run the full audit when executed directly -- loadData/getLevels/replayDay are exported (2026-10-18) so
+// the auction-state study imports the real touch scan instead of reimplementing it.
+if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).href) {
+  main().then(() => process.exit(0)).catch(err => { console.error(err); process.exit(1); });
+}
