@@ -2189,7 +2189,7 @@ function blockedReasonText(s) {
   };
   if (reason && MAP[reason]) return MAP[reason];
   if (reason) return 'Blocked (' + reason + ') -- reason not yet mapped to plain English here.';
-  return 'No specific reason recorded (this row came from a detector that doesn\'t yet log why) -- likely still just an uncalibrated/thin setup type, not necessarily blocked at the last moment.';
+  return 'No reason was saved with this row. It is NOT necessarily an uncalibrated setup: rows from this path were held back by an on-purpose rule (an opposite trade already open, the rotation direction, a recent same-setup fire, a paused or suppressed type) or because it is an early-touch catch-up that cannot be entered live. From 2026-10-19 the server logs the exact cause (SHADOW_CAUSE in gated_candidates).';
 }
 
 // Same priority logic as blockedReasonText() above (cluster loss checked directly via

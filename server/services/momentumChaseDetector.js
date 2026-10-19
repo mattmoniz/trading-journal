@@ -143,11 +143,13 @@ export async function computeMomentumChaseSignal(todayET, etMin) {
       INSERT INTO active_setups (
         trade_date, setup_type, fired_at, expires_at, status, origin_status,
         entry_zone_low, entry_zone_high, stop_level, t1_level, t1_label,
-        price_at_detection, ${REGIME_STAMP_COLS.join(', ')}, ${FIRE_TAG_COLS.join(', ')}, bet_class
+        price_at_detection, ${REGIME_STAMP_COLS.join(', ')}, ${FIRE_TAG_COLS.join(', ')}, bet_class,
+        suppression_reason
       ) VALUES ($1,$2,NOW(),$3,'SHADOW','SHADOW',$4,$4,$5,$6,$7,$4,
         ${REGIME_STAMP_COLS.map((_, i) => `$${8 + i}`).join(', ')},
         ${FIRE_TAG_COLS.map((_, i) => `$${8 + REGIME_STAMP_COLS.length + i}`).join(', ')},
-        $${8 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length})
+        $${8 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length},
+        'NO_LIVE_PATH_HARDWIRED_SHADOW')
       ON CONFLICT DO NOTHING
       RETURNING id, trade_date, fired_at::text as fired_at, expires_at::text as expires_at, entry_zone_low, stop_level, t1_level, t1_label
     `, [todayET, mcSetupType, mcExpiresAt, candidate.entry, candidate.stop, candidate.target,
