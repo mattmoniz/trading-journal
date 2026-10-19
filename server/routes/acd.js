@@ -7250,7 +7250,11 @@ export default function createACDRouter(io) {
   const SETUP_DETECTION_CACHE_TTL = 20000;
   let setupDetectionInFlight = null;
   router.get('/acd/setup-detection', async (req, res) => {
-    const cached = cacheGet('setup-detection-response');
+    // `?fresh=1` is sent only by the server's own 15 s autonomous poller (server/index.js). Without it, a poll landing inside the 20 s
+    // cache window above was answered from cache and NO pass ran -- so with the poller at 15 s and the TTL at 20 s every other poll was
+    // swallowed, and real passes ran about every 30 s (measured 2026-10-19: median row-to-order delay 25-36 s). Browser/HA callers still
+    // use the cache; a fresh request still shares an already-running pass (the in-flight check below) and refreshes the cache.
+    const cached = req.query.fresh === '1' ? null : cacheGet('setup-detection-response');
     if (cached) return res.status(cached.status).json(cached.body);
     if (setupDetectionInFlight) {
       const result = await setupDetectionInFlight;
@@ -7262,7 +7266,15 @@ export default function createACDRouter(io) {
       json(body) { capturedBody = body; return this; },
     };
     setupDetectionInFlight = runSetupDetection(req, fakeRes)
-      .then(() => ({ status: capturedStatus, body: capturedBody }));
+      .then(async () => {
+        // End-of-pass order sweep (2026-10-19, DeepSeek design review scratch/deepseek_response_sweep_decoupling_design_20261019.md): the
+        // sweep inside runSetupDetection runs at the START of a pass, before candidates are built and inserted, so a row inserted during
+        // pass N waited for pass N+1's sweep to get its order (measured median 25-36 s, max 64 s). This second call runs after the pass has
+        // inserted its rows. It is deliberately NOT a timer: it is sequential inside the single-flight pass, so there is no overlap with the
+        // start-of-pass sweep, and the resolve/expire/flip-close passes still run first in the NEXT pass exactly as before. Never throws.
+        await sweepRealOrders(getSierraChartClient()).catch((err) => console.error('[sierraChart] end-of-pass sweepRealOrders threw unexpectedly:', err));
+        return { status: capturedStatus, body: capturedBody };
+      });
     try {
       const result = await setupDetectionInFlight;
       if (result.status === 200) cacheSet('setup-detection-response', result, SETUP_DETECTION_CACHE_TTL);
