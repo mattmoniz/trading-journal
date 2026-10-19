@@ -97,6 +97,7 @@ import { runDailyCoaching } from '../scripts/daily_coaching.js';
 
 import { query, getQueryProfile } from './db.js';
 import { cacheGet, cacheSet } from './lib/cache.js';
+import { monitorEventLoopDelay } from 'node:perf_hooks';
 import { logProcess } from './lib/processLog.js';
 import { recordDetectionPollResult } from './services/detectionHeartbeat.js';
 import { computeACDFromBars, getBestACDParams, scanAndSaveSetupEvents, computeORLevelsOnly } from './services/acdService.js';
@@ -388,7 +389,16 @@ function getRequestProfile() {
 }
 // Local diagnostics (2026-10-19): per-query-shape call counts and time since process start -- see db.js getQueryProfile().
 // Deliberately NOT in ~/.cloudflared/config.yml's allowlist, so it is only reachable from this machine.
-app.get('/api/diag/query-profile', (req, res) => res.json({ ...getQueryProfile({ top: Math.min(Number(req.query.top) || 25, 100) }), requests: getRequestProfile() }));
+// Event-loop delay (2026-10-19): how long the Node event loop is blocked between ticks. High values = the server itself is CPU-bound;
+// low values with slow requests = the time is spent waiting on the database. Reset on every read, so each reading covers the interval since the last one.
+const _loopDelay = monitorEventLoopDelay({ resolution: 20 });
+_loopDelay.enable();
+function readEventLoopDelay() {
+  const o = { meanMs: +(_loopDelay.mean / 1e6).toFixed(1), p99Ms: +(_loopDelay.percentile(99) / 1e6).toFixed(1), maxMs: +(_loopDelay.max / 1e6).toFixed(1) };
+  _loopDelay.reset();
+  return o;
+}
+app.get('/api/diag/query-profile', (req, res) => res.json({ ...getQueryProfile({ top: Math.min(Number(req.query.top) || 25, 100) }), requests: getRequestProfile(), eventLoop: readEventLoopDelay() }));
 app.use('/api', dailyLogsRouter);
 app.use('/api', tradesRouter);
 app.use('/api', statsRouter);

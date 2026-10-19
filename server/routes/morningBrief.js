@@ -3,6 +3,7 @@ import { query } from '../db.js';
 import { getSessionForecast } from '../services/sessionForecastService.js';
 import { getTrailingVwapStd, getTrailing24hrVwapDists, getTrailingRthVwapDists, rollingStats, getTrailingORWidths } from '../services/queries.js';
 import { cacheGet, cacheSet } from '../lib/cache.js';
+import { microCache } from '../lib/microCache.js';
 import { detectRotationLegs, ROTATION_LEG_THRESHOLD } from '../services/rotationDetector.js';
 import { LIVE_INSTRUMENT } from '../config/instruments.js';
 
@@ -752,7 +753,8 @@ async function dayStableQ(name, date, sql) {
   return r;
 }
 
-router.get('/live-session-context/:date', async (req, res) => {
+// 15 s micro-cache (2026-10-19): ~3.7 s of DB time per call, polled by every open tab/device -- see server/lib/microCache.js
+router.get('/live-session-context/:date', microCache(15000), async (req, res) => {
   try {
     const { date } = req.params;
     const barsRes = await query(

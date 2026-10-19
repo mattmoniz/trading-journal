@@ -13,6 +13,7 @@
 // functions from before their now-real `complete*Shadows()` wrapper pattern
 // (shadowCompletion.js/breakevenStopShadow.js) existed, never cleaned up once superseded.
 
+import { microCache } from '../lib/microCache.js';
 import express from 'express';
 import path from 'path';
 import fs from 'fs';
@@ -8995,7 +8996,8 @@ export default function createACDRouter(io) {
   // ── Market Pulse — lightweight live state for MarketPulseBar ───────────────
   // Returns: currentPrice, session range, cumulative delta, RVol, engagement verdict.
   // Polled every 30s during RTH. Range/delta percentiles cached daily.
-  router.get('/market/pulse', async (req, res) => {
+  // 15 s micro-cache (2026-10-19): ~3 s of DB time per call, polled by every open tab/device -- see server/lib/microCache.js
+  router.get('/market/pulse', microCache(15000), async (req, res) => {
     try {
       res.json(await computeMarketPulse());
     } catch (e) {
