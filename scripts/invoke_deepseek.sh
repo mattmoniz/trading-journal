@@ -71,6 +71,16 @@ if [ -f "$GLOBAL_STATE" ]; then
   fi
   echo "[invoke_deepseek] Model: $CURRENT_MODEL"
 fi
+# Second place the model lives (found 2026-10-19): `cline -m <id>` is documented as "for the session" but it WRITES the model into providers.json, while the guard above only
+# reads globalState.json -- a one-off `-m deepseek-flash` trial left the provider on flash with the guard still passing. Check both.
+PROVIDERS_JSON="$HOME/.cline/data/settings/providers.json"
+if [ -f "$PROVIDERS_JSON" ]; then
+  PROV_MODEL="$(python3 -c "import json; d=json.load(open('$PROVIDERS_JSON')); d=d.get('providers',d); print(d['deepseek']['settings']['model'])" 2>/dev/null || echo unknown)"
+  if [ "$PROV_MODEL" != "$EXPECTED_MODEL" ] && [ "${ALLOW_UNEXPECTED_MODEL:-0}" != "1" ]; then
+    echo "ERROR: providers.json deepseek model is '$PROV_MODEL', expected '$EXPECTED_MODEL' (a past 'cline -m' run probably changed it)." >&2
+    exit 1
+  fi
+fi
 
 # Refuse to start a second run against the same output file (same corruption risk
 # invoke_gemini.sh's lock already guards against for agy).
