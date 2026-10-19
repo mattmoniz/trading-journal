@@ -12,7 +12,8 @@
 // fail-closed reasoning (a missed TAKE costs ~$1.50/trade forgone; a missed VETO costs
 // ~$10.63/trade realized -- a ~7:1 asymmetry that makes "don't fire live when unsure" the
 // cheap side to be wrong on).
-import { spawn } from 'child_process';
+import { spawn, execFileSync } from 'child_process';
+import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
@@ -24,6 +25,7 @@ export const ML_SCORING_SERVICE_PORT = 8899;
 export const ML_SCORING_SERVICE_URL = `http://127.0.0.1:${ML_SCORING_SERVICE_PORT}`;
 
 const RESTART_DELAY_MS = 5000;
+const GIVE_UP_RETRY_MS = 5 * 60 * 1000;
 const MAX_RAPID_RESTARTS = 5; // matches the general spirit of a restart-burst guard --
 // if the process crash-loops (e.g. a real Python syntax/import error), stop respawning
 // instead of hammering the same failure every 5s forever; a loud, one-time log beats a
@@ -40,7 +42,27 @@ function recordRestartAndCheckBurst() {
   return recentRestarts.length > MAX_RAPID_RESTARTS;
 }
 
+// 2026-10-18: a stale scoring_service.py left over from a previous server process (re-parented to init, still LISTENing on
+// the port but no longer answering) made every freshly spawned scorer die with EADDRINUSE; after MAX_RAPID_RESTARTS the manager
+// gave up for good, so the ML VETO gate failed closed (force-SHADOW) for every live candidate with nothing to recover it.
+// Before every spawn, kill anything on OUR port whose command line is scoring_service.py (never any other process).
+function reapStaleScorers() {
+  let out = '';
+  try { out = execFileSync('ss', ['-ltnpH', `sport = :${ML_SCORING_SERVICE_PORT}`], { encoding: 'utf8', timeout: 3000 }); } catch { return; }
+  for (const m of out.matchAll(/pid=(\d+)/g)) {
+    const pid = Number(m[1]);
+    if (!pid || pid === process.pid || (child && child.pid === pid)) continue;
+    try {
+      const cmd = fs.readFileSync(`/proc/${pid}/cmdline`, 'utf8').replace(/\0/g, ' ');
+      if (!cmd.includes('scoring_service.py')) { console.error(`[mlScoringServiceManager] port ${ML_SCORING_SERVICE_PORT} is held by pid ${pid} which is NOT scoring_service.py -- leaving it alone: ${cmd.slice(0, 120)}`); continue; }
+      process.kill(pid, 'SIGKILL');
+      console.error(`[mlScoringServiceManager] killed stale scoring_service.py pid ${pid} holding port ${ML_SCORING_SERVICE_PORT}`);
+    } catch (e) { console.error(`[mlScoringServiceManager] could not inspect/kill pid ${pid}: ${e.message}`); }
+  }
+}
+
 function spawnChild() {
+  reapStaleScorers();
   child = spawn(PYTHON_BIN, [SCORING_SERVICE_PY, String(ML_SCORING_SERVICE_PORT)], {
     cwd: REPO_ROOT,
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -51,7 +73,9 @@ function spawnChild() {
     console.error(`[mlScoringServiceManager] scoring_service.py exited (code=${code}, signal=${signal})`);
     child = null;
     if (recordRestartAndCheckBurst()) {
-      console.error(`[mlScoringServiceManager] ${MAX_RAPID_RESTARTS}+ restarts in 60s -- giving up. The ML VETO gate will fail closed (force-SHADOW) for every candidate until this is fixed and the server is restarted. Check scripts/ml_meta_labeling/scoring_service.py directly.`);
+      console.error(`[mlScoringServiceManager] ${MAX_RAPID_RESTARTS}+ restarts in 60s -- backing off ${GIVE_UP_RETRY_MS / 60000} min then trying again (was: gave up permanently, 2026-10-18). The ML VETO gate fails closed (force-SHADOW) for every candidate until a scorer is healthy. Check scripts/ml_meta_labeling/scoring_service.py directly.`);
+      recentRestarts = [];
+      restartTimer = setTimeout(spawnChild, GIVE_UP_RETRY_MS);
       return;
     }
     restartTimer = setTimeout(spawnChild, RESTART_DELAY_MS);
@@ -93,8 +117,10 @@ async function checkHealthOnce() {
 }
 
 /** Call once at server startup, same convention as sierraChart's startConnectionManager(). */
+let exitHookInstalled = false;
 export function startMlScoringService() {
   if (child) return;
+  if (!exitHookInstalled) { exitHookInstalled = true; process.once('exit', () => { if (child) { try { child.kill('SIGKILL'); } catch { /* already gone */ } } }); } // no orphan scorer when the server exits (index.js's SIGTERM/SIGINT handlers call process.exit)
   spawnChild();
   if (!watchdogTimer) watchdogTimer = setInterval(checkHealthOnce, WATCHDOG_INTERVAL_MS);
 }
