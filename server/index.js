@@ -95,7 +95,7 @@ import { runWeeklyReport } from '../scripts/weekly_report.js';
 import { run as runMonthlyReport } from '../scripts/monthly_report.js';
 import { runDailyCoaching } from '../scripts/daily_coaching.js';
 
-import { query } from './db.js';
+import { query, getQueryProfile } from './db.js';
 import { logProcess } from './lib/processLog.js';
 import { recordDetectionPollResult } from './services/detectionHeartbeat.js';
 import { computeACDFromBars, getBestACDParams, scanAndSaveSetupEvents, computeORLevelsOnly } from './services/acdService.js';
@@ -367,6 +367,9 @@ function startChartImageWatcher() {
 }
 
 // Mount routes
+// Local diagnostics (2026-10-19): per-query-shape call counts and time since process start -- see db.js getQueryProfile().
+// Deliberately NOT in ~/.cloudflared/config.yml's allowlist, so it is only reachable from this machine.
+app.get('/api/diag/query-profile', (req, res) => res.json(getQueryProfile({ top: Math.min(Number(req.query.top) || 25, 100) })));
 app.use('/api', dailyLogsRouter);
 app.use('/api', tradesRouter);
 app.use('/api', statsRouter);

@@ -77,12 +77,33 @@ pool.on('error', (err) => {
   process.exit(-1);
 });
 
+// In-process query profiler (2026-10-19). Logging every query was too noisy and logging only slow ones hides the fast-but-constant ones,
+// so this keeps ONE counter per query SHAPE (literals/numbers/lists collapsed): calls, total ms, max ms, since process start. Read it
+// at GET /api/diag/query-profile. Cost: one Map update per query (no I/O). Not in the Cloudflare tunnel allowlist, so local-only.
+const profile = new Map();
+const PROFILE_STARTED_AT = Date.now();
+function shapeOf(text) {
+  return text.replace(/\s+/g, ' ').trim().replace(/'[^']*'/g, "'?'").replace(/\$\d+/g, '$?').replace(/\b\d+(\.\d+)?\b/g, '#').replace(/\(\s*(?:[#$?']+\s*,\s*)+[#$?']+\s*\)/g, '(...)').slice(0, 140);
+}
+function recordProfile(text, ms) {
+  const k = shapeOf(text);
+  const e = profile.get(k);
+  if (e) { e.calls++; e.totalMs += ms; if (ms > e.maxMs) e.maxMs = ms; }
+  else if (profile.size < 2000) profile.set(k, { calls: 1, totalMs: ms, maxMs: ms });
+}
+export function getQueryProfile({ top = 25 } = {}) {
+  const rows = [...profile.entries()].map(([shape, e]) => ({ shape, calls: e.calls, totalMs: Math.round(e.totalMs), avgMs: Math.round(e.totalMs / e.calls), maxMs: e.maxMs }));
+  const totalMs = rows.reduce((a, r) => a + r.totalMs, 0), totalCalls = rows.reduce((a, r) => a + r.calls, 0);
+  return { sinceMs: Date.now() - PROFILE_STARTED_AT, totalCalls, totalMs, byTotalMs: rows.sort((a, b) => b.totalMs - a.totalMs).slice(0, top) };
+}
+
 // Helper function to execute queries
 export const query = async (text, params) => {
   const start = Date.now();
   try {
     const res = await pool.query(text, params);
     const duration = Date.now() - start;
+    recordProfile(text, duration);
     // Log only SLOW queries by default (>= SQL_LOG_SLOW_MS, 500ms); DEBUG_SQL=1 restores the old log-everything
     // behaviour. 2026-10-19: logging every query (800-3000 lines/minute) kept journald to ~20 hours of history, which
     // destroyed the evidence for an 18:33 Sunday signal investigation. Errors are always logged (catch below).
