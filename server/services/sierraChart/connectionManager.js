@@ -16,6 +16,7 @@ import { killSwitch } from './orderEligibility.js';
 import { handleOrderUpdate, runReconciliation, extractPositionForSymbol } from './reconciliation.js';
 import { resolveMnqFrontMonthSymbolFromEnv } from './contractSymbol.js';
 import { query } from '../../db.js';
+import { getPriceMultiplier } from './priceMultiplier.js';
 
 let client = null;
 let lastReconciliationReport = null;
@@ -40,10 +41,31 @@ const POSITION_SAMPLE_MS = 15 * 1000;
 let positionSampleTimer = null;
 let lastSampledNet;
 
+// Prevention (2026-10-19): learn each contract's price multiplier BEFORE the first fill needs it. A lookup that
+// first happens at fill time can time out and leave that fill unpriced (the 2026-10-18 roll incident). Warms the
+// current front month and the next quarterly (so a roll never starts cold). Runs every sampler tick: a cached
+// answer costs nothing, a failed one is retried by getPriceMultiplier()'s own short retry window.
+async function warmPriceMultipliers(today) {
+  const ahead = new Date(`${today}T12:00:00Z`); ahead.setUTCDate(ahead.getUTCDate() + 21);
+  const symbols = new Set([
+    resolveMnqFrontMonthSymbolFromEnv(today).orderSymbol,
+    resolveMnqFrontMonthSymbolFromEnv(ahead.toISOString().slice(0, 10)).orderSymbol,
+  ]);
+  for (const sym of symbols) {
+    const had = await getPriceMultiplier(client, sym).catch(() => null);
+    if (had == null && !warnedWarmFailure.has(sym)) {
+      warnedWarmFailure.add(sym);
+      console.error(`[sierraChart.connectionManager] could not learn the price multiplier for ${sym} yet -- will keep retrying; fills on it would be stored unpriced until it is known (fillPriceRepair.js fixes them afterwards).`);
+    } else if (had != null) warnedWarmFailure.delete(sym);
+  }
+}
+const warnedWarmFailure = new Set();
+
 async function samplePosition() {
   if (!client || !client.isLive()) return;
   try {
     const todayQ = await query(`SELECT CURRENT_DATE::text as today`);
+    await warmPriceMultipliers(todayQ.rows[0].today).catch((e) => console.error('[sierraChart.connectionManager] multiplier warm-up failed:', e.message));
     const symbol = resolveMnqFrontMonthSymbolFromEnv(todayQ.rows[0].today).orderSymbol;
     const positionMessages = [];
     const onPosition = (msg) => { positionMessages.push(msg); };

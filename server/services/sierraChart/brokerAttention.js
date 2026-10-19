@@ -21,6 +21,20 @@ const KINDS = {
       'If you flattened or reversed by hand, that is the cause. Tell Claude which trades you closed, or say "reset the broker baseline" if the broker is flat.',
     ],
   },
+  UNPRICED_FILL: {
+    title: 'A real fill has no price recorded -- the app cannot size its risk and may stop taking new entries',
+    steps: [
+      'The app retries the price lookup by itself every few seconds; this clears on its own once the price is filled in.',
+      'If it is still here after a few minutes, tell Claude "unpriced fill" -- the cause is usually the price multiplier for a new contract month not being learned.',
+    ],
+  },
+  ENTRIES_BLOCKED_BY_DATA_GAP: {
+    title: 'New entries are being refused by the daily-loss check because trade data is missing -- NOT because the loss limit was reached',
+    steps: [
+      'Real losses are not the cause. The check cannot confirm today\'s P&L because a trade is missing a price or broker P&L.',
+      'Tell Claude "entries blocked by data gap" -- it will find the trade and repair it. Nothing needs to be done in Sierra Chart.',
+    ],
+  },
   CLOSE_NOT_FIXABLE: {
     title: 'A trade closed at the broker and the app could not record how',
     steps: [
@@ -41,8 +55,36 @@ export async function raiseBrokerAttention(kind, detail) {
   `, [reason, kind]).catch((err) => console.error('[sierraChart.brokerAttention] failed to persist:', err.message));
 }
 
+// Conditions computed from CURRENT state, so they clear the moment the data is repaired -- nothing to
+// resolve by hand (added 2026-10-19 after one unpriced fill silently blocked every entry for ~7h; the only
+// trace was SIERRA_ENTRY_SKIP rows nobody looks at).
+export async function getLiveDataAttention(db = { query }) {
+  const unpriced = await db.query(`
+    SELECT setup_id, purpose, TO_CHAR(MIN(last_update_at), 'YYYY-MM-DD HH24:MI') AS since
+    FROM order_placements
+    WHERE status = 'FILLED' AND avg_fill_price IS NULL AND filled_quantity > 0
+      AND created_at > NOW() - interval '24 hours' AND last_update_at < NOW() - interval '2 minutes'
+    GROUP BY setup_id, purpose ORDER BY MIN(last_update_at) LIMIT 5`);
+  if (unpriced.rows.length) {
+    const first = unpriced.rows[0];
+    return { kind: 'UNPRICED_FILL', ...KINDS.UNPRICED_FILL, since: first.since,
+      detail: unpriced.rows.map(r => `setup ${r.setup_id} ${r.purpose}`).join(', ') };
+  }
+  const blocked = await db.query(`
+    SELECT TO_CHAR(MIN(evaluated_at), 'YYYY-MM-DD HH24:MI') AS since, COUNT(*)::int AS n FROM gated_candidates
+    WHERE gate_name = 'SIERRA_ENTRY_SKIP' AND evaluated_at > NOW() - interval '15 minutes'
+      AND gate_reason LIKE '%daily loss limit:%' AND gate_reason LIKE '%cannot confirm the account is within limit%'`);
+  if (blocked.rows[0].n > 0) {
+    return { kind: 'ENTRIES_BLOCKED_BY_DATA_GAP', ...KINDS.ENTRIES_BLOCKED_BY_DATA_GAP, since: blocked.rows[0].since,
+      detail: `${blocked.rows[0].n} entries refused in the last 15 minutes` };
+  }
+  return null;
+}
+
 // Latest unresolved item, or null. Resolved once a later reconciliation shows app and broker agreeing.
 export async function getBrokerAttention() {
+  const live = await getLiveDataAttention();
+  if (live) return live;
   const r = await query(`
     SELECT g.gate_reason, TO_CHAR(g.evaluated_at, 'YYYY-MM-DD HH24:MI') AS since
     FROM gated_candidates g

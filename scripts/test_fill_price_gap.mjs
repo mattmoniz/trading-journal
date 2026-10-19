@@ -9,6 +9,7 @@ import { getPriceMultiplier, _resetPriceMultiplierCacheForTests, FAILED_LOOKUP_R
 import { DLL_ROW_SQL, dllGateDecision } from '../server/services/sierraChart/dllGate.js';
 import { repairNullFillPrices, pickRawFill } from '../server/services/sierraChart/fillPriceRepair.js';
 import { getClient } from '../server/db.js';
+import { getLiveDataAttention } from '../server/services/sierraChart/brokerAttention.js';
 
 // ---- 1. multiplier retry ----
 class FakeDtc extends EventEmitter {
@@ -82,6 +83,19 @@ try {
   const pnlAfter = (await client.query(`SELECT broker_pnl::float AS p FROM active_setups WHERE id=$1`, [id])).rows[0].p;
   console.log('   broker_pnl after repair', pnlAfter, 'original', origPnl);
   console.log('3. ok');
+
+  // 4. alert: an old unpriced fill raises UNPRICED_FILL; a data-gap DLL skip raises ENTRIES_BLOCKED_BY_DATA_GAP; clean = null
+  const cdb = { query: client.query.bind(client) };
+  await client.query(`UPDATE order_placements SET avg_fill_price = NULL, last_update_at = now() - interval '10 minutes' WHERE setup_id=$1 AND purpose='ENTRY'`, [id]);
+  const a1 = await getLiveDataAttention(cdb);
+  assert.equal(a1?.kind, 'UNPRICED_FILL');
+  await client.query(`UPDATE order_placements SET avg_fill_price = $2 WHERE setup_id=$1 AND purpose='ENTRY'`, [id, orig]);
+  await client.query(`INSERT INTO gated_candidates (trade_date, setup_type, gate_name, gate_reason) VALUES (CURRENT_DATE,'X','SIERRA_ENTRY_SKIP','setup_id=1 daily loss limit: 1 trade(s) still without broker P&L -- cannot confirm the account is within limit')`);
+  assert.equal((await getLiveDataAttention(cdb))?.kind, 'ENTRIES_BLOCKED_BY_DATA_GAP');
+  await client.query(`DELETE FROM gated_candidates WHERE setup_type='X' AND gate_name='SIERRA_ENTRY_SKIP'`);
+  const a3 = await getLiveDataAttention(cdb);
+  assert.ok(a3 == null || a3.kind === 'UNPRICED_FILL', 'no stray data-gap alert after the skip row is gone');
+  console.log('4. alerts ok');
 } finally {
   await client.query('ROLLBACK');
   client.release();
