@@ -36,11 +36,11 @@ export async function computeMarketPulse() {
   const [priceQ, sessionQ, rthBarsQ, setupQ, acdQ, priorDay, globexOpenQ] = await Promise.all([
     getLatestBars('NQ', { limit: 1, columns: 'close::float' }, 'trend-watch.currentPrice').then(rows => ({ rows })),
     query(`SELECT MAX(high)::float as h, MIN(low)::float as l FROM price_bars_primary
-           WHERE symbol='NQ' AND ts::date=$1
+           WHERE symbol='NQ' AND ts >= $1::date AND ts < $1::date + 1
            AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 959`, [todayET]),
     query(`SELECT close::float, COALESCE(ask_volume,0)::int as ask_vol, COALESCE(bid_volume,0)::int as bid_vol, volume::int,
            (EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts))::int as et_min
-           FROM price_bars_primary WHERE symbol='NQ' AND ts::date=$1
+           FROM price_bars_primary WHERE symbol='NQ' AND ts >= $1::date AND ts < $1::date + 1
            AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 959
            ORDER BY ts`, [todayET]),
     query(`SELECT setup_type, status FROM active_setups
@@ -184,7 +184,7 @@ export async function computeMarketPulse() {
                AVG(volume::float) as avg_vol, STDDEV(volume::float) as std_vol
         FROM price_bars_primary WHERE symbol='NQ'
         AND (EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts)) BETWEEN $1 AND $2
-        AND ts::date >= $3::date - 90 AND ts::date < $3
+        AND ts >= $3::date - 90 AND ts < $3::date
         GROUP BY et_min
       `, [minLo, minHi, todayET]);
       const baseline = {};

@@ -855,7 +855,7 @@ router.get('/live-session-context/:date', microCache(15000), async (req, res) =>
       if (vaCache.has(cacheKey)) return vaCache.get(cacheKey);
       const res = await query(
         `SELECT close::float, volume::bigint as vol FROM price_bars_primary
-         WHERE symbol='NQ' AND ts::date >= ($1::date - interval '${interval}') AND ts::date < $1
+         WHERE symbol='NQ' AND ts >= ($1::date - interval '${interval}') AND ts < $1::date
          AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 959`, [date]);
       if (res.rows.length < 100) return { vah: null, val: null };
       const vbk = {};
@@ -1222,7 +1222,7 @@ router.get('/trade-alerts/:date', async (req, res) => {
 
     const onRes = await query(
       `SELECT MAX(high)::float as hi, MIN(low)::float as lo FROM price_bars_primary
-       WHERE symbol='NQ' AND ts::date=$1
+       WHERE symbol='NQ' AND ts >= $1::date AND ts < $1::date + 1
        AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) NOT BETWEEN 570 AND 959`, [date]);
     const onLo = onRes.rows[0]?.lo, onHi = onRes.rows[0]?.hi;
 

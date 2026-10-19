@@ -46,7 +46,7 @@ export async function getCurrentRotationDirection() {
       FROM price_bars_primary WHERE symbol='NQ' AND (
         (ts::date = $1::date - 1 AND EXTRACT(hour FROM ts) >= 18) OR
         (ts::date = $1::date AND (EXTRACT(hour FROM ts)*60 + EXTRACT(minute FROM ts)) < 1020)
-      ) AND ts <= $2
+      ) AND ts >= $1::date - 1 AND ts < $1::date + 1 AND ts <= $2
       ORDER BY ts ASC
     `, [sessionDate, nowEtRow.rows[0].now_et]);
     const bars = barsQ.rows;

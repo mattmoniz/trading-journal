@@ -1197,7 +1197,7 @@ async function fetchDetectionInputs(todayET) {
     query(`
       SELECT high::float, low::float, close::float, open::float,
              COALESCE(ask_volume,0)::int as ask_vol, COALESCE(bid_volume,0)::int as bid_vol, volume::int
-      FROM price_bars_primary WHERE symbol='NQ' AND ts::date=$1
+      FROM price_bars_primary WHERE symbol='NQ' AND ts >= $1::date AND ts < $1::date + 1
         AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 629
       ORDER BY ts
     `, [todayET]),
@@ -1214,17 +1214,17 @@ async function fetchDetectionInputs(todayET) {
     // 20-bar average volume (last 20 RTH bars)
     query(`
       SELECT AVG(volume)::float as avg_vol
-      FROM (SELECT volume FROM price_bars_primary WHERE symbol='NQ' AND ts::date=$1
+      FROM (SELECT volume FROM price_bars_primary WHERE symbol='NQ' AND ts >= $1::date AND ts < $1::date + 1
             AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) >= 575 ORDER BY ts DESC LIMIT 20) v
     `, [todayET]),
     // Live timeline events
     query(`SELECT setup_type, fired_time FROM acd_setup_events WHERE trade_date=$1 ORDER BY fired_time`, [todayET]),
     // Session high/low so far today (for TRT stop calculation)
-    query(`SELECT MAX(high)::float as h, MIN(low)::float as l FROM price_bars_primary WHERE symbol='NQ' AND ts::date=$1 AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 959`, [todayET]),
+    query(`SELECT MAX(high)::float as h, MIN(low)::float as l FROM price_bars_primary WHERE symbol='NQ' AND ts >= $1::date AND ts < $1::date + 1 AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 959`, [todayET]),
     // First 15 min of bars (9:30-9:45) for live opening-type classification
     query(`
       SELECT high::float, low::float, close::float, open::float
-      FROM price_bars_primary WHERE symbol='NQ' AND ts::date=$1
+      FROM price_bars_primary WHERE symbol='NQ' AND ts >= $1::date AND ts < $1::date + 1
         AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 585
       ORDER BY ts
     `, [todayET]),
@@ -1232,7 +1232,7 @@ async function fetchDetectionInputs(todayET) {
       SELECT (EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts))::int as et_min,
              high::float, low::float, close::float, open::float, COALESCE(volume,0)::int as volume,
              COALESCE(ask_volume,0)::int as ask_vol, COALESCE(bid_volume,0)::int as bid_vol
-      FROM price_bars_primary WHERE symbol='NQ' AND ts::date=$1
+      FROM price_bars_primary WHERE symbol='NQ' AND ts >= $1::date AND ts < $1::date + 1
         AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 959
       ORDER BY ts
     `, [todayET]),
@@ -2693,7 +2693,7 @@ export default function createACDRouter(io) {
 
       const ibQ = await query(`
         SELECT MAX(high)::float as ib_high, MIN(low)::float as ib_low
-        FROM price_bars_primary WHERE symbol='NQ' AND ts::date=$1
+        FROM price_bars_primary WHERE symbol='NQ' AND ts >= $1::date AND ts < $1::date + 1
           AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 629
       `, [todayET]);
       const ibHigh = ibQ.rows[0]?.ib_high;
@@ -5525,7 +5525,7 @@ export default function createACDRouter(io) {
         // Sweep reference levels
         const onBarsRes = await query(
           `SELECT MAX(high)::float as hi, MIN(low)::float as lo FROM price_bars_primary
-           WHERE symbol='NQ' AND ts::date=$1
+           WHERE symbol='NQ' AND ts >= $1::date AND ts < $1::date + 1
            AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) NOT BETWEEN 570 AND 959`, [todayET]).catch(() => ({ rows: [] }));
         const onHigh = onBarsRes.rows[0]?.hi;
         const onLow = onBarsRes.rows[0]?.lo;
@@ -5545,7 +5545,7 @@ export default function createACDRouter(io) {
         // Add PW low/high
         const pwRes = await query(
           `SELECT MAX(high)::float as hi, MIN(low)::float as lo FROM price_bars_primary
-           WHERE symbol='NQ' AND ts::date >= ($1::date - interval '7 days') AND ts::date < $1
+           WHERE symbol='NQ' AND ts >= ($1::date - interval '7 days') AND ts < $1::date
            AND EXTRACT(dow FROM ts::date) BETWEEN 1 AND 5
            AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 959`, [todayET]).catch(() => ({ rows: [] }));
         if (pwRes.rows[0]?.lo) confLevels.push(pwRes.rows[0].lo);
@@ -5553,7 +5553,7 @@ export default function createACDRouter(io) {
         // PW composite VA
         const pwVABars = await query(
           `SELECT close::float, volume::bigint as vol FROM price_bars_primary
-           WHERE symbol='NQ' AND ts::date >= ($1::date - interval '7 days') AND ts::date < $1
+           WHERE symbol='NQ' AND ts >= ($1::date - interval '7 days') AND ts < $1::date
            AND EXTRACT(dow FROM ts::date) BETWEEN 1 AND 5
            AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 959`, [todayET]).catch(() => ({ rows: [] }));
         if (pwVABars.rows.length > 100) {
@@ -7581,6 +7581,7 @@ export default function createACDRouter(io) {
         const barsRes = await query(`
           SELECT ts, open::float, high::float, low::float, close::float
           FROM price_bars_primary WHERE symbol='NQ' AND ts::date = ANY($1::date[])
+            AND ts >= (SELECT MIN(x) FROM unnest($1::date[]) x) AND ts < (SELECT MAX(x) FROM unnest($1::date[]) x) + 1
         `, [firedDates]);
         for (const b of barsRes.rows) barByMinute.set(Math.floor(new Date(b.ts).getTime() / 60000), b);
       }

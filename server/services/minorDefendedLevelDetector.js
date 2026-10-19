@@ -138,7 +138,7 @@ async function getFullDayATR(dateStr) {
     SELECT AVG(range)::float as atr, COUNT(*)::int as n FROM (
       SELECT ts::date as d, (MAX(high) - MIN(low)) as range
       FROM price_bars_primary
-      WHERE symbol='NQ' AND ts::date < $1 AND ts::date >= $1::date - INTERVAL '90 days'
+      WHERE symbol='NQ' AND ts < $1::date AND ts >= $1::date - INTERVAL '90 days'
       GROUP BY ts::date
       ORDER BY d DESC LIMIT 20
     ) recent

@@ -157,7 +157,7 @@ export async function structurallyInvalidateSetups(io) {
     query(`SELECT or_high::float, or_low::float FROM acd_daily_log WHERE trade_date=$1`, [todayET]),
     query(`
       SELECT MAX(high)::float as ib_high, MIN(low)::float as ib_low
-      FROM price_bars_primary WHERE symbol='NQ' AND ts::date=$1
+      FROM price_bars_primary WHERE symbol='NQ' AND ts >= $1::date AND ts < $1::date + 1
         AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 629
     `, [todayET]),
     // Same source acd.js's live fire path itself reads (lp.PD_IB_HIGH/lp.PD_IB_LOW,

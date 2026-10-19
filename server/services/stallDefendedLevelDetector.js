@@ -167,7 +167,7 @@ async function computeVolumeBaseline5m(date) {
              ts::date AS d, FLOOR(EXTRACT(epoch FROM ts) / 300)::bigint AS bucket5,
              SUM(COALESCE(bid_volume,0)+COALESCE(ask_volume,0))::float AS vol5m
       FROM price_bars_primary
-      WHERE symbol='NQ' AND ts::date >= $1::date - INTERVAL '90 days' AND ts::date < $1::date
+      WHERE symbol='NQ' AND ts >= $1::date - INTERVAL '90 days' AND ts < $1::date
       GROUP BY 1, 2, 3
     ) sub GROUP BY mod5
   `, [date]);

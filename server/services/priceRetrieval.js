@@ -50,7 +50,7 @@ function logStaleOnce(context, ageMinutes) {
 export async function getLatestBars(symbol, { limit = 1, columns = 'close::float as close' } = {}, context = 'getLatestBars') {
   const { rows } = await query(`
     SELECT ts::text as ts, ${columns} FROM price_bars_primary
-    WHERE symbol=$1 AND ts::date >= CURRENT_DATE - 5
+    WHERE symbol=$1 AND ts >= CURRENT_DATE - 5
     ORDER BY ts DESC LIMIT $2
   `, [symbol, limit]);
   if (!rows.length) return [];
