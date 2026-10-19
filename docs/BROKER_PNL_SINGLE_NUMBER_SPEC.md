@@ -26,3 +26,23 @@ Status: for independent design review (DeepSeek) BEFORE any code, per the higher
 4. Backfill/repair: the 98 rows, the 8 missing-`broker_pnl` rows, the 9 rows whose resolution disagrees with the broker (3 from 10-07 have a different cause). What must be backed up (docs/DB_BACKUP_CATALOG.md) and in what order?
 5. The ~100 USD STOP_HIT gap (n=29) is itself a finding: is the model's STOP_HIT P&L wrong for real trades, or are real stops systematically different (wider-stop families, market escalation)? What would you check before trusting either?
 6. Sequencing and rollout order, rollback, and what tests you would require before each step.
+
+---
+## Review outcome and audit (2026-10-19, same evening) -- DeepSeek response saved at scratch/deepseek_response_brokerpnl_spec_20261019.md
+
+Claude re-checked DeepSeek's key claims against code and live data before accepting any of them.
+
+**Verified and accepted**
+- Calibration reads `actual_pnl` directly: `update_optimal_stops.mjs:932-936` divides stored `actual_pnl` by the MODEL stop/target distance for its dollars-per-point, and `backtest_setup_status.mjs:346` averages it into `real_ev`. Putting a real fill in that numerator corrupts both. This is the strongest finding and partly conflicts with "one number everywhere": calibration must keep reading the model value.
+- A cancelled-then-late-filled stop would resolve a row the app already closed: `shouldApplyStatus` (`reconciliation.js:708`) lets FILLED correct CANCELED/REJECTED regardless of timestamp. Step 1 needs a "leg still live from the app's view" guard.
+- `model_pnl` is only useful if all ~9 writers of `actual_pnl` keep it populated; `broker_pnl` has two `UPDATE` sites (`brokerPnlWriter.js:21`, `brokerPnlResolver.js:190`) -- the silent-close path calls the first, so it is not a third -- all must be hooked.
+- Resolution label and P&L would decouple on 46 of the 98 rows (flip/expired/invalidated); decide it explicitly. "Latest exit wins" in `recordBrokerPnlForSetup` can replace a stop-fill number with a later exit's; `filled_quantity` is not threaded through.
+
+**Rejected after checking**
+- "Siblings never get real fills; the singleton means one real position at a time" is WRONG today: 43 of 114 recent filled-entry rows are `is_cluster_primary=false` with `origin_status='ACTIVE'`, and up to 9 `position_slot`s were open at once on 10-19. Every sibling has its own entry/exit orders and its own `broker_pnl`, so one fill is not double counted, but the real population includes siblings that the `is_cluster_primary` dedup in the statistics drops. Separate open question for the statistics design.
+- "The model systematically flatters stop-outs by ~$100" (Q5) is an outlier artifact. Of the 29 STOP_HIT rows with a broker P&L: 24 were closed by the broker's own STOP fill and averaged broker -$31 vs model -$58 (the broker did BETTER); 5 were closed by a market flatten and averaged -$787, driven by two 2026-09-29 first-night rows (ids 127681 MR1, 127693 PD_POC: exits filled at 31512.25, entries ~30437/30637, broker_pnl -2152/-1753) from the known first-night misattribution incident. Three more rows show the opposite divergence: model STOP_HIT -134/-84.5 but broker +1069.5/+610.5 (ids 135009, 134806; the broker stop was cancelled and the position later exited at a profit).
+
+**Consequences for the plan**
+1. The 2026-09-29 incident rows must be flagged and excluded before any `actual_pnl := broker_pnl` (use the existing flag-and-preserve boolean-basis convention, not deletion), otherwise the single number imports an order-bug loss as if it were a trade result.
+2. `model_pnl` stays and calibration keeps reading it; one number is shown/used everywhere else. Needs the user's OK because it narrows the "one number" decision.
+3. Rollout order from the review stands (measure, schema + model_pnl, broker-fill resolution behind a flag with the live-leg guard, then the overwrite with all writers hooked, then calibration/display split, then recalibrate).
