@@ -1570,12 +1570,24 @@ function openPnlEstimate(entry, isLong) {
 // Now falls back to sign-of-actual_pnl for ANY resolution type not already decided by name --
 // not a hardcoded list of the 3 types found today, so a future resolution_method this page has
 // never seen gets classified correctly too, same as TRAIL_EXIT already was.
+// pnlOf (2026-10-19, user: "if there is real pnl i would prefer that it shows real pnl. If its shadow pnl, it can be shadow"):
+// the P&L this page SHOWS and sums for a trade. A trade that really went to the broker carries broker_pnl (what the account actually
+// did, commission included) -- use it; every other row (shadow, never ordered, still model-only) keeps its model actual_pnl. Display only:
+// the backend statistics/calibration still read actual_pnl and are untouched. A row with a broker result is also classified win/loss by
+// the BROKER's sign, so the Wins/Losses tally always agrees with the dollar figure shown beside it (a TARGET_HIT the broker lost money on
+// reads as a loss, not a win).
+function pnlOf(s) {
+  const v = s.broker_pnl != null ? s.broker_pnl : s.actual_pnl;
+  return v != null ? parseFloat(v) : null;
+}
 function isWinRow(s) {
+  if (s.broker_pnl != null) return parseFloat(s.broker_pnl) >= 0;
   if (s.resolution === 'TARGET_HIT') return true;
   if (s.resolution === 'STOP_HIT') return false;
   return s.actual_pnl != null && parseFloat(s.actual_pnl) >= 0;
 }
 function isLossRow(s) {
+  if (s.broker_pnl != null) return parseFloat(s.broker_pnl) < 0;
   if (s.resolution === 'STOP_HIT') return true;
   if (s.resolution === 'TARGET_HIT') return false;
   return s.actual_pnl != null && parseFloat(s.actual_pnl) < 0;
@@ -1676,7 +1688,7 @@ function renderSweepWatch() {
   const isLong = (hit.setup_type || '').includes('_LONG_');
   const levelName = (hit.setup_type || '').replace(/_SWEEP_REVERSAL_(LONG|SHORT)_OVERNIGHT$/, '').replace(/_/g, ' ');
   const resolved = hit.resolution && hit.resolution !== null;
-  const pnl = hit.actual_pnl != null ? Number(hit.actual_pnl) : null;
+  const pnl = pnlOf(hit);
 
   // Auto-hide once resolved and stale (2026-09-02, user-reported: this card sat showing the
   // same closed trade for hours since this mechanism fires rarely and there's nothing to
@@ -1991,7 +2003,7 @@ function renderTimeline() {
   // row (cluster member or not) renders identically flat, since openClusterPopup() and the main
   // loop both benefit from one shared template.
   const rowHtml = (s) => {
-    const rowPnl = s.actual_pnl != null ? parseFloat(s.actual_pnl) : null;
+    const rowPnl = pnlOf(s);
     // Still open (2026-09-22, user request) -- status hasn't reached RESOLVED/EXPIRED yet, so
     // there's no real outcome to badge. Checked BEFORE isWin/isLoss (both already correctly
     // return false for a null resolution, but this makes the open case explicit rather than
@@ -2216,7 +2228,7 @@ function abbrevReasonCode(s) {
 }
 
 function shadowRowHtml(s) {
-  const rowPnl = s.actual_pnl != null ? parseFloat(s.actual_pnl) : null;
+  const rowPnl = pnlOf(s);
   const isOpen = s.status === 'SHADOW' || s.status === 'ACTIVE';
   const isWin = isWinRow(s), isLoss = isLossRow(s);
   const badgeClass = badgeClassFor(s, isOpen, isWin, isLoss);
@@ -2272,7 +2284,7 @@ function getPocGateRows() {
 function pocGateRowHtml(s) {
   const tag = s.rotation_65pt_gate_shadow;
   const agree = tag.agree === true;
-  const rowPnl = s.actual_pnl != null ? parseFloat(s.actual_pnl) : null;
+  const rowPnl = pnlOf(s);
   const isOpen = s.status === 'SHADOW' || s.status === 'ACTIVE';
   const isWin = isWinRow(s), isLoss = isLossRow(s);
   const badgeClass = badgeClassFor(s, isOpen, isWin, isLoss);
@@ -2347,7 +2359,7 @@ function openClusterPopup(clusterTouchId) {
   html += '<div class="m-sub">Each row below is its own real SHADOW/ACTIVE row, kept for that level\'s own calibration credit — never a second real trade on the same event.</div>';
   html += mSection('Members');
   for (const m of members) {
-    const pnl = m.actual_pnl != null ? Number(m.actual_pnl) : null;
+    const pnl = pnlOf(m);
     const outcome = pnl != null ? (pnl >= 0 ? '+' : '') + '$' + pnl.toFixed(2) : (m.resolution || 'open');
     const color = pnl != null ? (pnl >= 0 ? 'var(--green)' : 'var(--red)') : 'var(--dim)';
     html += mRow((m.setup_type || '').replace(/_/g, ' '), outcome, color);
@@ -2532,7 +2544,7 @@ function openTradeModal(id) {
   const isWin = isWinRow(s);
   const isLoss = isLossRow(s);
   const color = isWin ? 'var(--green)' : isLoss ? 'var(--red)' : 'var(--dim)';
-  const pnl = s.actual_pnl != null ? parseFloat(s.actual_pnl) : null;
+  const pnl = pnlOf(s);
 
   let html = '<div class="m-head"><span class="m-title" style="color:' + color + '">' + (s.setup_type || '').replace(/_/g, ' ') + '</span>' +
     '<button class="m-close" onclick="closeTradeModal()">×</button></div>';
@@ -3142,7 +3154,7 @@ function aggregateBySetup(rows) {
     g.n++;
     if (isWinRow(s)) g.wins++;
     else if (isLossRow(s)) g.losses++;
-    if (s.actual_pnl != null) g.pnl += parseFloat(s.actual_pnl);
+    if (pnlOf(s) != null) g.pnl += pnlOf(s);
   }
   return [...map.values()].sort((a, b) => b.pnl - a.pnl);
 }
@@ -3267,7 +3279,7 @@ function computeRangeStats(rows, declustered = false) {
   let running = 0, peak = 0, maxDD = 0;
   let wins = 0, losses = 0;
   for (const s of decided) {
-    running += parseFloat(s.actual_pnl);
+    running += pnlOf(s);
     if (isWinRow(s)) wins++; else if (isLossRow(s)) losses++;
     if (running > peak) peak = running;
     const dd = peak - running;
@@ -3318,7 +3330,7 @@ function renderEquityCurve(canvasId, rows, range, declustered = false) {
   // misleadingly disagree with the curve's own (now resolved-time-ordered) shape.
   const timeOf = (s) => s.resolved_at_str || s.fired_at_str;
   const times = [timeOf(decided[0])]; // matching timestamp per point (point 0 borrows the first trade's time)
-  for (const s of decided) { running += parseFloat(s.actual_pnl); points.push(running); times.push(timeOf(s)); }
+  for (const s of decided) { running += pnlOf(s); points.push(running); times.push(timeOf(s)); }
 
   const min = Math.min(0, ...points), max = Math.max(0, ...points);
   const valRange = (max - min) || 1;
