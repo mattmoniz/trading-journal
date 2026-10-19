@@ -129,6 +129,10 @@ echo "=== Daily calibration: $(date) ==="
 # nightly rather than use the one-off backtest's fixed width.
 /usr/bin/node scripts/calibrate_momentum_chase_width.mjs
 
+# Live SHADOW-record recheck for MOMENTUM_CHASE (2026-10-19): refreshes RESEARCH_CLAIM momentum_chase_live_shadow_record_20261019
+# and flags an OPEN_DECISION once the record reaches N>=20 (it is hardwired SHADOW, so nothing else would ever prompt a look).
+/usr/bin/node scripts/analyze_momentum_chase_shadow_record_20261019.mjs
+
 /usr/bin/node scripts/update_optimal_stops.mjs
 /usr/bin/node scripts/backtest_setup_status.mjs
 /usr/bin/node scripts/derive_day_types.js

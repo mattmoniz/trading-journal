@@ -7448,7 +7448,24 @@ export default function createACDRouter(io) {
         `, [activeIds]).catch(() => ({ rows: [] }));
         for (const n of notesQ.rows) noteById.set(n.sid, n);
       }
+      // shadow_cause (2026-10-19): a SHADOW row written by the shadowCandidates / early-touch inserts has no
+      // suppression_reason column value, so the Shadow tab could only say "no reason recorded". Those inserts now
+      // log the real cause (SHADOW_CAUSE, gated_candidates) -- joined here the same batched way broker_note is,
+      // for unlabeled SHADOW rows only. Rows from before 2026-10-19 08:13 have none and keep the generic text.
+      const causeById = new Map();
+      const unlabeledShadowIds = setupsRes.rows.filter(r => r.origin_status === 'SHADOW' && !r.suppression_reason).map(r => r.id);
+      if (unlabeledShadowIds.length) {
+        const causeQ = await query(`
+          SELECT DISTINCT ON (sid) sid, gate_reason FROM (
+            SELECT (regexp_match(gate_reason, '^setup_id=([0-9]+) '))[1]::int AS sid, gate_reason, evaluated_at
+            FROM gated_candidates
+            WHERE gate_name = 'SHADOW_CAUSE' AND evaluated_at >= NOW() - interval '4 days'
+          ) g WHERE sid = ANY($1) ORDER BY sid, evaluated_at DESC
+        `, [unlabeledShadowIds]).catch(() => ({ rows: [] }));
+        for (const c of causeQ.rows) causeById.set(c.sid, c.gate_reason.replace(/^setup_id=\d+ /, ''));
+      }
       for (const row of setupsRes.rows) {
+        if (causeById.has(row.id)) row.shadow_cause = causeById.get(row.id);
         const eo = entryOrderById.get(row.id);
         row.broker_confirmed = !!(eo && eo.status === 'FILLED' && eo.server_order_id != null);
         if (row.origin_status === 'ACTIVE') {

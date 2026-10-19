@@ -5,8 +5,11 @@ import { query } from '../server/db.js';
 import { REAL_TRADE_FILTER } from './backtest_setup_status.mjs';
 import { dayBlockedBootstrapCI } from '../server/services/rigorDiagnostics.js';
 import { recordClaim } from './record_claim.mjs';
+import { flagDecision } from './flag_decision.mjs';
 
-const UPPER = '2026-10-18'; // pinned, no live-table growth confound
+// Upper bound = yesterday per the DB's own clock (never JS toISOString), so one run is internally consistent and a
+// re-run never reads a half-finished day.
+const UPPER = (await query(`SELECT (CURRENT_DATE - 1)::text AS d`)).rows[0].d;
 const rows = (await query(`
   SELECT trade_date::text AS date, setup_type, resolution, actual_pnl::float AS pnl, (fired_at::time < '09:35:00') AS in_open_dead_zone
   FROM active_setups WHERE setup_type LIKE 'MOMENTUM_CHASE_MEDIUM_%' AND ${REAL_TRADE_FILTER} AND actual_pnl IS NOT NULL
@@ -29,4 +32,13 @@ await recordClaim({
   sourceFile: 'scripts/analyze_momentum_chase_shadow_record_20261019.mjs', sourceDate: '2026-10-19',
   sampleSize: all.n, winRate: all.wins / all.n, evPerTrade: all.perTrade, rigorStatus: 'day-blocked CI crosses zero; N<20', status: 'PROVISIONAL',
 });
+// Closes the loop: the moment the live SHADOW record reaches the N>=20 floor, put the promotion question in front of
+// the user (session-start prints every PENDING decision) instead of relying on anyone remembering to re-run this.
+if (all.n >= 20) {
+  await flagDecision({
+    slug: 'momentum_chase_n20_promotion_review_20261019',
+    decisionText: `MOMENTUM_CHASE live SHADOW record reached N=${all.n} (${all.days} days): WR ${(100 * all.wins / all.n).toFixed(1)}%, $${all.perTrade.toFixed(2)}/trade, day-blocked CI [${all.ci.lo.toFixed(1)},${all.ci.hi.toFixed(1)}]. Backtest claim was N=128, WR 58.6%, +$13.23. Decide: wire momentumChaseDetector.js to getCanonicalLiveStatus() (needs design + code review first; PROMOTE_ALL_MODE leaves a CI-crosses-zero type ACTIVE), keep it SHADOW, or retire it. See momentum_chase_hardwired_shadow_no_promotion_path_20261019 for context.`,
+    sourceFile: 'scripts/analyze_momentum_chase_shadow_record_20261019.mjs', sourceDate: UPPER,
+  });
+}
 process.exit(0);

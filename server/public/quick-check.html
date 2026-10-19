@@ -2173,8 +2173,17 @@ function blockedReasonText(s) {
   if (s.cluster_touch_id && s.is_cluster_primary === false) {
     return 'Lost a same-instant competition: another level touched at the exact same moment and won the single live slot instead. This level was real and eligible -- it just wasn\'t the pick this time.';
   }
-  const reason = s.suppression_reason;
+  // shadow_cause (2026-10-19): the exact cause logged by the server for rows that carry no suppression_reason.
+  const reason = s.suppression_reason || (s.shadow_cause ? s.shadow_cause.split(' ')[0] : null);
   const MAP = {
+    NOT_LIVE_ELIGIBLE: 'This setup type is not live-eligible right now (its calibration is suppressed, still thin, unknown, or it is on the manual suppress list), so it was tracked but not traded.',
+    STOP_SWEEP_PAUSED: 'This setup type (STOP_SWEEP) is paused while its target is re-calibrated.',
+    POST_WIN_OPP_FAMILY_REV: 'A same-family trade just won in the opposite direction -- blocked to avoid reversing straight after a win.',
+    SAME_TYPE_REFIRE: 'This exact setup type fired and resolved recently -- blocked from refiring so soon.',
+    OPENING_DRIVE_COUNTER_TRADE: 'Fading a strong opening drive while it is still happening -- blocked.',
+    ROTATION_DIRECTION_CONFLICT: 'The current 65-point rotation is running against this trade\'s direction -- blocked.',
+    EARLY_TOUCH_BACKFILL: 'A touch that had already happened when the system caught up to it. It is recorded for calibration but a live order can no longer be entered at that price.',
+    ML_VETO_GATE_WINDOW: 'The ML model scored this touch as likely to lose.',
     CLUSTER_ALREADY_FIRED: 'This exact level already fired once today (as part of an earlier touch) -- it can\'t fire a second real trade on the same level today.',
     CLUSTER_SIBLING_TOUCH_CREDIT: 'Lost a same-instant competition to another level, but still recorded as a real touch for its own calibration credit.',
     OPPOSITE_DIRECTION_OPEN: 'A real trade in the opposite direction was already open at this moment -- taking this one too would have meant two conflicting positions at once.',
@@ -2199,6 +2208,7 @@ function blockedReasonText(s) {
 function abbrevReasonCode(s) {
   if (s.cluster_touch_id && s.is_cluster_primary === false) return 'CLUSTER_LOSS';
   if (s.suppression_reason) return s.suppression_reason;
+  if (s.shadow_cause) return s.shadow_cause.split(' ')[0];
   return 'NO_REASON_RECORDED';
 }
 
