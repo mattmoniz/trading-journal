@@ -23,7 +23,7 @@
 //  Controls: (a) label permutation placebo (anti-conservative: ignores day clustering, reported as such); (b) a second,
 //    generic state -- entry beyond the SESSION OPEN price in trade direction -- if the generic state gives the same DiD the
 //    finding is "any directional day", not the IB/prior-day-range break.
-//  Reproduction check: NO_FLIP - NEITHER should land near the shipped claim poc_rotation_breakeven_hold_100pt_stop_20261008
+//  Reproduction check: NO_FLIP - FIXED60 (100pt stop, mark-to-market at 60 min = the old design) should land near the shipped claim poc_rotation_breakeven_hold_100pt_stop_20261008
 //    (+$39.13/trade, CI [16.88, 69.28]); a big miss means this harness is not simulating the real exits.
 import pool from '../server/db.js';
 import { detectSignalEvents } from '../server/services/pocRotationService.js';
@@ -36,7 +36,9 @@ const WINDOW_START = '2025-06-01';
 const BAD_WIN_START = new Date('2025-09-28T18:00:00-04:00');
 const BAD_WIN_END = new Date('2025-11-19T16:15:00-04:00');
 const STOP = 100, ARM_AT = 60, CAP_HOURS = 24, DPP = 2, COMM = 2;
-const ARMS = ['LIVE', 'NO_FLIP', 'NO_BE', 'NEITHER'];
+const ARMS = ['LIVE', 'NO_FLIP', 'NO_BE', 'NEITHER', 'FIXED60'];
+// FIXED60 is ONLY for the reproduction check: the shipped claim's baseline was "100pt stop, mark-to-market at 60 minutes" (the old
+// time exit), not "100pt stop held to the bound". It is not one of the decision arms.
 
 const upper = (await pool.query(`SELECT (CURRENT_DATE - 1)::text AS d, CURRENT_DATE::text AS t`)).rows[0];
 const dates = (await pool.query(`SELECT DISTINCT trade_date::text d FROM developing_value_log WHERE trade_date >= $1::date AND trade_date <= $2::date ORDER BY d`,
@@ -112,9 +114,10 @@ function stateOf(ev) {
 }
 
 // ---- simulation ---------------------------------------------------------------------------------------------
-function simulate(ev, fwd, arm) {
+function simulate(ev, fwdAll, arm) {
+  const fwd = arm === 'FIXED60' ? fwdAll.slice(0, ARM_AT + 1) : fwdAll;
   const useFlip = arm === 'LIVE' || arm === 'NO_BE';
-  const armAt = (arm === 'LIVE' || arm === 'NO_FLIP') ? ARM_AT : Infinity;
+  const armAt = (arm === 'LIVE' || arm === 'NO_FLIP') ? ARM_AT : Infinity;   // NO_BE / NEITHER / FIXED60 never snap to breakeven
   let st = { barsElapsed: 0, armed: false };
   const pnl = (px) => ((ev.long ? px - ev.entry : ev.entry - px) * DPP) - COMM;
   for (const b of fwd) {
@@ -158,9 +161,9 @@ const fmtCi = (c) => c ? `[${f(c.lo)},${f(c.hi)}]` : '[n/a]';
 const deltaEv = (arr, alt, stateKey = 'trend') => arr.map(r => ({ date: r.date, group: r[stateKey], pnl: r.pnl[alt] - r.pnl.LIVE }));
 
 const dayWeighted = (e) => { const m = new Map(); for (const x of e) { if (!m.has(x.date)) m.set(x.date, []); m.get(x.date).push(x.pnl); } const dm = [...m.values()].map(mean); return mean(dm); };
-console.log('\n== reproduction check, ALL events: NO_FLIP - NEITHER (shipped claim +39.13, CI [16.88,69.28]; that claim used the DAY-WEIGHTED mean) ==');
+console.log('\n== reproduction check, ALL events: NO_FLIP - FIXED60 [100pt stop, exit at 60 min] (shipped claim +39.13, CI [16.88,69.28]; that claim used the DAY-WEIGHTED mean) ==');
 {
-  const e = rows.map(r => ({ date: r.date, pnl: r.pnl.NO_FLIP - r.pnl.NEITHER }));
+  const e = rows.map(r => ({ date: r.date, pnl: r.pnl.NO_FLIP - r.pnl.FIXED60 }));
   console.log(`n=${e.length} days=${new Set(e.map(x => x.date)).size} per-trade mean=${f(mean(e.map(x => x.pnl)))} CI${fmtCi(ci(e, 'repro'))} | day-weighted mean=${f(dayWeighted(e))}`);
 }
 console.log('\n== arm levels (per-trade mean) and overall paired delta vs LIVE, by session type ==');
