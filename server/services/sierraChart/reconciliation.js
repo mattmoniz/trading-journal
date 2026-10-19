@@ -729,6 +729,16 @@ function isNewerOrEqual(currentTs, incomingTs) {
  * "Item 1"), separate from the periodic backstop. `false` for every other update
  * (working-state changes, or a message that didn't apply per the terminal-state lattice).
  */
+/**
+ * 2026-10-19: the broker's own TradeAccount on an order update when it differs from the label stored on the order row, else null.
+ * Pure helper (unit-tested). See the DETECT block in applyOrderUpdate() for why this only reports and never rewrites.
+ */
+export function brokerReportedAccountOverride(storedAccount, msg) {
+  const reported = msg && typeof msg.TradeAccount === 'string' ? msg.TradeAccount.trim() : '';
+  if (!reported || !storedAccount || reported === storedAccount) return null;
+  return reported;
+}
+
 export function handleOrderUpdate(msg, dtcClient) {
   const key = msg.ClientOrderID;
   if (!key) return Promise.resolve(false); // nothing to reconcile against
@@ -762,6 +772,21 @@ async function applyOrderUpdate(msg, dtcClient) {
   );
   if (existingQ.rows.length === 0) return false; // not one of ours
   const row = existingQ.rows[0];
+
+  // DETECT (never rewrite) a label/broker account mismatch. Root cause of the 2026-10-18 stranded short: submitAndRecord() stores the
+  // requested account label in order_placements but never puts it on the wire (the default path always sends the logon account), so
+  // "Globex"-labelled orders really lived under DTC-Live-Simulator and every account-scoped read/exit looked in the wrong place.
+  // Fixed at the source by config (DTC_GLOBEX_TRADE_ACCOUNT = the logon account, 2026-10-19, user: keep everything in the live Sierra
+  // account). An earlier draft silently adopted the broker's account here; DeepSeek's review (2026-10-19) showed that is non-retroactive,
+  // flips the per-account DLL buckets and would hide a genuinely different account -- so this only reports it, loudly and queryably.
+  const acctMismatch = brokerReportedAccountOverride(row.trade_account, msg);
+  if (acctMismatch) {
+    console.error(`[sierraChart.reconciliation] ACCOUNT LABEL MISMATCH for ${row.purpose} setup_id=${row.setup_id} (${clientOrderId}): recorded "${row.trade_account}" but the broker reports "${acctMismatch}". Account-scoped position reads and exits for this setup will look in the wrong place -- check it.`);
+    await query(`INSERT INTO gated_candidates (trade_date, setup_type, gate_name, gate_reason)
+        SELECT CURRENT_DATE, a.setup_type, 'ACCOUNT_LABEL_MISMATCH', $2 FROM active_setups a WHERE a.id = $1`,
+      [row.setup_id, `setup_id=${row.setup_id} ${row.purpose} ${clientOrderId}: recorded account "${row.trade_account}" but broker reports "${acctMismatch}"`])
+      .catch((e) => console.error('[sierraChart.reconciliation] could not persist ACCOUNT_LABEL_MISMATCH gate row:', e.message));
+  }
 
   const incomingStatus = ORDER_STATUS_NAME[msg.OrderStatus] || null;
   const incomingTs = Number.isFinite(msg.LatestTransactionDateTime) ? msg.LatestTransactionDateTime : null;

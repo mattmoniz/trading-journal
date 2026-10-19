@@ -455,7 +455,8 @@ CREATE TABLE public.active_setups (
     touch_orderflow_pressure_shadow jsonb,
     bad_bars_basis boolean,
     pnl_source character varying(10),
-    broker_pnl numeric
+    broker_pnl numeric,
+    rotation_65pt_gate_shadow jsonb
 );
 
 
@@ -5755,7 +5756,8 @@ CREATE TABLE public.order_placements (
     server_order_id character varying(64),
     position_open boolean DEFAULT false NOT NULL,
     latest_transaction_time double precision,
-    CONSTRAINT order_placements_purpose_check CHECK (((purpose)::text = ANY ((ARRAY['ENTRY'::character varying, 'EXIT'::character varying, 'STOP'::character varying])::text[]))),
+    position_slot smallint,
+    CONSTRAINT order_placements_purpose_check CHECK (((purpose)::text = ANY ((ARRAY['ENTRY'::character varying, 'EXIT'::character varying, 'STOP'::character varying, 'TARGET'::character varying])::text[]))),
     CONSTRAINT order_placements_side_check CHECK (((side)::text = ANY ((ARRAY['BUY'::character varying, 'SELL'::character varying])::text[])))
 );
 
@@ -5845,10 +5847,74 @@ ALTER SEQUENCE public.order_placements_invariant_baseline_id_seq OWNED BY public
 
 
 --
+-- Name: order_placements_missing_fill_repair_backup_20261006; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.order_placements_missing_fill_repair_backup_20261006 (
+    id integer,
+    setup_id integer,
+    purpose character varying(10),
+    client_order_id character varying(40),
+    symbol character varying(20),
+    exchange character varying(20),
+    side character varying(4),
+    order_type character varying(10),
+    quantity integer,
+    price1 numeric,
+    price2 numeric,
+    trade_account character varying(60),
+    environment_service character varying(60),
+    status character varying(32),
+    filled_quantity integer,
+    avg_fill_price numeric,
+    reject_reason text,
+    submitted_at timestamp without time zone,
+    last_update_at timestamp without time zone,
+    raw_last_order_update jsonb,
+    created_at timestamp without time zone,
+    server_order_id character varying(64),
+    position_open boolean,
+    latest_transaction_time double precision
+);
+
+
+--
 -- Name: order_placements_rawunit_repair_backup_20261006; Type: TABLE; Schema: public; Owner: -
 --
 
 CREATE TABLE public.order_placements_rawunit_repair_backup_20261006 (
+    id integer,
+    setup_id integer,
+    purpose character varying(10),
+    client_order_id character varying(40),
+    symbol character varying(20),
+    exchange character varying(20),
+    side character varying(4),
+    order_type character varying(10),
+    quantity integer,
+    price1 numeric,
+    price2 numeric,
+    trade_account character varying(60),
+    environment_service character varying(60),
+    status character varying(32),
+    filled_quantity integer,
+    avg_fill_price numeric,
+    reject_reason text,
+    submitted_at timestamp without time zone,
+    last_update_at timestamp without time zone,
+    raw_last_order_update jsonb,
+    created_at timestamp without time zone,
+    server_order_id character varying(64),
+    position_open boolean,
+    latest_transaction_time double precision
+);
+
+
+--
+-- Name: order_placements_stale_exit_backup_20261007; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.order_placements_stale_exit_backup_20261007 (
     id integer,
     setup_id integer,
     purpose character varying(10),
@@ -8485,7 +8551,7 @@ CREATE TABLE public.sierra_chart_reconciliation_log (
     broker_net numeric,
     expected_net numeric,
     report jsonb NOT NULL,
-    CONSTRAINT sierra_chart_reconciliation_log_trigger_check CHECK (((trigger)::text = ANY ((ARRAY['LOGON'::character varying, 'TERMINAL_TRANSITION'::character varying, 'PERIODIC'::character varying, 'MANUAL'::character varying])::text[])))
+    CONSTRAINT sierra_chart_reconciliation_log_trigger_check CHECK (((trigger)::text = ANY ((ARRAY['LOGON'::character varying, 'TERMINAL_TRANSITION'::character varying, 'PERIODIC'::character varying, 'MANUAL'::character varying, 'POSITION_SAMPLE'::character varying])::text[])))
 );
 
 
@@ -11661,17 +11727,24 @@ CREATE UNIQUE INDEX idx_order_placements_one_live_exit_per_setup ON public.order
 
 
 --
--- Name: idx_order_placements_one_open_position; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE UNIQUE INDEX idx_order_placements_one_open_position ON public.order_placements USING btree ((1)) WHERE (((purpose)::text = 'ENTRY'::text) AND (position_open = true));
-
-
---
 -- Name: idx_order_placements_one_stop_per_setup; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE UNIQUE INDEX idx_order_placements_one_stop_per_setup ON public.order_placements USING btree (setup_id) WHERE ((purpose)::text = 'STOP'::text);
+
+
+--
+-- Name: idx_order_placements_one_target_per_setup; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX idx_order_placements_one_target_per_setup ON public.order_placements USING btree (setup_id) WHERE ((purpose)::text = 'TARGET'::text);
+
+
+--
+-- Name: idx_order_placements_position_slot; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX idx_order_placements_position_slot ON public.order_placements USING btree (position_slot) WHERE (((purpose)::text = 'ENTRY'::text) AND (position_open = true));
 
 
 --

@@ -170,6 +170,12 @@ function stopPeriodicReconcile() {
 async function connectOnce() {
   const c = buildClient();
   if (!c) { console.log('[sierraChart.connectionManager] DTC_HOST/DTC_PORT not set -- Sierra Chart connection not attempted.'); return; }
+  // 2026-10-19: the default order path sends the LOGON account on the wire regardless of the per-session label (submitAndRecord never forwards
+  // tradeAccount), so a different DTC_GLOBEX_TRADE_ACCOUNT makes the recorded account fictional and breaks account-scoped exits/invariants
+  // (the 2026-10-18 stranded short). Say so loudly at boot; applyOrderUpdate also flags any live mismatch.
+  if (process.env.DTC_GLOBEX_TRADE_ACCOUNT && process.env.DTC_GLOBEX_TRADE_ACCOUNT !== process.env.DTC_TRADE_ACCOUNT) {
+    console.error(`[sierraChart.connectionManager] WARNING: DTC_GLOBEX_TRADE_ACCOUNT (${process.env.DTC_GLOBEX_TRADE_ACCOUNT}) != DTC_TRADE_ACCOUNT (${process.env.DTC_TRADE_ACCOUNT}) but orders are always sent under the logon account -- Globex-session order rows will carry a label the broker does not honor. Set them equal unless per-order account routing has been implemented and verified.`);
+  }
   client = c;
   client.on('error', (err) => console.error('[sierraChart.connectionManager] DTC error:', err.message));
   // handleOrderUpdate() returns whether this update just applied a REAL terminal-state
