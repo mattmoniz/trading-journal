@@ -69,6 +69,11 @@ const pool = new Pool({
 let loggedFirstConnect = false;
 pool.on('connect', (client) => {
   client.query('SET work_mem = \'64MB\'').catch(() => {});
+  // JIT off per connection (2026-10-19). Postgres' JIT compiles machine code for any query whose planner cost is high, and the
+  // price_bars_primary VIEW's plans always look expensive -- measured on the live DB: the prior-day IB query took 1,635 ms with JIT and
+  // 276 ms without (identical rows); the other hot queries were unchanged. Results never depend on JIT, and `SET jit = on` (or deleting
+  // this line) restores the old behaviour.
+  client.query('SET jit = off').catch(() => {});
   if (!loggedFirstConnect || process.env.DEBUG_SQL === '1') { loggedFirstConnect = true; console.log('✅ Connected to PostgreSQL database'); }
 });
 
