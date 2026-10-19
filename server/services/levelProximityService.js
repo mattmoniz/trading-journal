@@ -18,6 +18,7 @@
 // trades were re-tagged with the new method in the same session (retag_level_proximity
 // script, backed up first per DB_MIGRATION_PROTOCOL.md).
 import { query } from '../db.js';
+import { cacheGet, cacheSet } from '../lib/cache.js';
 
 const AT_LEVEL_ATR_FRAC = 0.02;
 const LATE_ATR_FRAC = 0.10;
@@ -43,6 +44,12 @@ export async function getRollingATR(logDate) {
   // stallDefendedLevelDetector.js, minorDefendedLevelDetector.js, pivotConfluenceAnalysis.js)
   // are unaffected since the ORDER BY ... LIMIT ATR_WINDOW_DAYS subquery already only ever
   // wanted the nearest 20 trading days regardless.
+  // Cached 2026-10-19: strictly-before-date => the answer cannot change within a day, yet three live detectors (major pivot, stall,
+  // pivot confluence) each rebuilt it per pivot date on every ~5-minute run (~67-104 calls per burst, median ~590 ms each, measured
+  // from the slow-query log). Wrapped in an object because cacheGet returns null on a miss.
+  const key = `rollingATR|${logDate}`;
+  const hit = cacheGet(key);
+  if (hit) return hit.v;
   const { rows } = await query(`
     SELECT AVG(range)::float as atr, COUNT(*)::int as n FROM (
       SELECT ts::date as d, (MAX(high) - MIN(low)) as range
@@ -54,7 +61,9 @@ export async function getRollingATR(logDate) {
     ) recent
   `, [logDate]);
   const { atr, n } = rows[0] || {};
-  return (atr != null && n >= ATR_WINDOW_DAYS) ? atr : null;
+  const v = (atr != null && n >= ATR_WINDOW_DAYS) ? atr : null;
+  cacheSet(key, { v }, 6 * 60 * 60 * 1000);
+  return v;
 }
 
 export async function tagTradeProximity(tradeId, logDate, entryPrice) {
