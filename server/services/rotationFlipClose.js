@@ -55,7 +55,16 @@ import { getCurrentRotationDirection } from './rotation65ptGateShadow.js';
 import { dropToTimeline } from './acdShared.js';
 import { isRotationGateExempt } from '../config/rotationGateExemptions.js';
 
+// LIVE FORCED CLOSE DISABLED (2026-10-19, explicit user decision: "for now I only want to work on the POC gate toggle"). POC rotation now only
+// TAGS rows (rotation_65pt_gate_shadow, shown on quick-check's POC Gate toggle) -- it no longer force-closes any real position. The entry gate
+// (isRotationDirectionConflict) was already switched off 2026-10-14. Reason in numbers: on 2026-10-19 the closer fired 29 times with a broker net of
+// -534 USD (28 rows with broker P&L), after +211/+322/+823 on the three prior days; its original +80/trade backtest used a much smaller roster and was never
+// re-tested on the current one. Flip enabled back to true to restore it; nothing else about the function changes. Rows already closed this way keep
+// resolution='ROTATION_FLIP'.
+const ROTATION_FLIP_CLOSE = { enabled: false, disabledDate: '2026-10-19' };
+
 export async function closeOnRotationFlip(io) {
+  if (!ROTATION_FLIP_CLOSE.enabled) return;
   try {
     // Filled-entry guard (item 1) -- mirrors sweepExits()'s own JOIN exactly. This app trades
     // exactly 1 MNQ contract, so this is realistically 0-1 rows on any given poll.
