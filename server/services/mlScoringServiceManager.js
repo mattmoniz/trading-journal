@@ -46,17 +46,17 @@ function recordRestartAndCheckBurst() {
 // the port but no longer answering) made every freshly spawned scorer die with EADDRINUSE; after MAX_RAPID_RESTARTS the manager
 // gave up for good, so the ML VETO gate failed closed (force-SHADOW) for every live candidate with nothing to recover it.
 // Before every spawn, kill anything on OUR port whose command line is scoring_service.py (never any other process).
-function reapStaleScorers() {
+export function reapStaleScorers(port = ML_SCORING_SERVICE_PORT) {
   let out = '';
-  try { out = execFileSync('ss', ['-ltnpH', `sport = :${ML_SCORING_SERVICE_PORT}`], { encoding: 'utf8', timeout: 3000 }); } catch { return; }
+  try { out = execFileSync('ss', ['-ltnpH', `sport = :${port}`], { encoding: 'utf8', timeout: 3000 }); } catch { return; }
   for (const m of out.matchAll(/pid=(\d+)/g)) {
     const pid = Number(m[1]);
     if (!pid || pid === process.pid || (child && child.pid === pid)) continue;
     try {
       const cmd = fs.readFileSync(`/proc/${pid}/cmdline`, 'utf8').replace(/\0/g, ' ');
-      if (!cmd.includes('scoring_service.py')) { console.error(`[mlScoringServiceManager] port ${ML_SCORING_SERVICE_PORT} is held by pid ${pid} which is NOT scoring_service.py -- leaving it alone: ${cmd.slice(0, 120)}`); continue; }
+      if (!cmd.includes('scoring_service.py')) { console.error(`[mlScoringServiceManager] port ${port} is held by pid ${pid} which is NOT scoring_service.py -- leaving it alone: ${cmd.slice(0, 120)}`); continue; }
       process.kill(pid, 'SIGKILL');
-      console.error(`[mlScoringServiceManager] killed stale scoring_service.py pid ${pid} holding port ${ML_SCORING_SERVICE_PORT}`);
+      console.error(`[mlScoringServiceManager] killed stale scoring_service.py pid ${pid} holding port ${port}`);
     } catch (e) { console.error(`[mlScoringServiceManager] could not inspect/kill pid ${pid}: ${e.message}`); }
   }
 }
