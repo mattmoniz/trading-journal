@@ -65,7 +65,9 @@ def process(d):
     for code in E.candidate_codes(E.CAL[d]):
         for p in E.scid_paths(code):
             try: tk = ticks_for(p, d)
-            except ValueError: return d, 'nontick'
+            except ValueError as err:
+                if str(err) == 'empty': continue          # this candidate file has no ticks for the date (e.g. the older install stopped earlier): try the next one
+                return d, 'nontick'
             tot = sum(x[2] for x in tk)
             if d in E.DBVOL and abs(tot - E.DBVOL[d]) <= 0.03 * E.DBVOL[d]: best = tk; break
         if best is not None: break
