@@ -8063,6 +8063,26 @@ CREATE MATERIALIZED VIEW public.price_bars_dedup_hist_v2 AS
 
 
 --
+-- Name: price_bars_nq_history_rebuild_backup_20261019; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.price_bars_nq_history_rebuild_backup_20261019 (
+    id bigint,
+    symbol text,
+    contract text,
+    ts timestamp without time zone,
+    open numeric(12,4),
+    high numeric(12,4),
+    low numeric(12,4),
+    close numeric(12,4),
+    volume integer,
+    num_trades integer,
+    bid_volume integer,
+    ask_volume integer
+);
+
+
+--
 -- Name: price_bars_nqh26_sep_nov2025_backup_20261005; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -8272,6 +8292,72 @@ CREATE SEQUENCE public.risk_settings_id_seq
 --
 
 ALTER SEQUENCE public.risk_settings_id_seq OWNED BY public.risk_settings.id;
+
+
+--
+-- Name: rotation_events; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.rotation_events (
+    id bigint NOT NULL,
+    symbol text DEFAULT 'NQ'::text NOT NULL,
+    session text NOT NULL,
+    trade_date date NOT NULL,
+    leg_no integer NOT NULL,
+    pivot_type text NOT NULL,
+    pivot_ts timestamp without time zone NOT NULL,
+    confirm_ts timestamp without time zone NOT NULL,
+    pivot_price numeric NOT NULL,
+    confirm_price numeric NOT NULL,
+    minutes_to_confirm integer,
+    atr20 numeric,
+    tod_min integer,
+    dow integer,
+    roll_gap_day boolean DEFAULT false NOT NULL,
+    prior_leg_pts numeric,
+    prior_leg_minutes integer,
+    vol_win_sum numeric,
+    vol_z numeric,
+    flow12 numeric,
+    prior_leg_flow numeric,
+    vwap_dist_atr numeric,
+    stack_n integer,
+    stack_long integer,
+    near_levels jsonb,
+    out_ret_15 numeric,
+    out_ret_30 numeric,
+    out_ret_60 numeric,
+    out_ret_120 numeric,
+    out_ret_240 numeric,
+    out_mfe_240 numeric,
+    out_mae_240 numeric,
+    out_full_240 boolean,
+    out_leg_pts numeric,
+    out_leg_minutes integer,
+    out_leg_complete boolean,
+    built_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT rotation_events_pivot_type_check CHECK ((pivot_type = ANY (ARRAY['HIGH'::text, 'LOW'::text]))),
+    CONSTRAINT rotation_events_session_check CHECK ((session = ANY (ARRAY['RTH'::text, 'GLOBEX'::text])))
+);
+
+
+--
+-- Name: rotation_events_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.rotation_events_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: rotation_events_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.rotation_events_id_seq OWNED BY public.rotation_events.id;
 
 
 --
@@ -10143,6 +10229,13 @@ ALTER TABLE ONLY public.risk_settings ALTER COLUMN id SET DEFAULT nextval('publi
 
 
 --
+-- Name: rotation_events id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.rotation_events ALTER COLUMN id SET DEFAULT nextval('public.rotation_events_id_seq'::regclass);
+
+
+--
 -- Name: session_analysis id; Type: DEFAULT; Schema: public; Owner: -
 --
 
@@ -11429,6 +11522,22 @@ ALTER TABLE ONLY public.risk_settings
 
 
 --
+-- Name: rotation_events rotation_events_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.rotation_events
+    ADD CONSTRAINT rotation_events_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: rotation_events rotation_events_symbol_session_trade_date_pivot_ts_pivot_ty_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.rotation_events
+    ADD CONSTRAINT rotation_events_symbol_session_trade_date_pivot_ts_pivot_ty_key UNIQUE (symbol, session, trade_date, pivot_ts, pivot_type);
+
+
+--
 -- Name: session_analysis session_analysis_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -12040,6 +12149,13 @@ CREATE INDEX idx_pbdh_symbol_ts ON public.price_bars_dedup_hist USING btree (sym
 
 
 --
+-- Name: idx_pbdh_ts; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_pbdh_ts ON public.price_bars_dedup_hist USING btree (ts);
+
+
+--
 -- Name: idx_pbdh_v2_symbol_ts; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -12142,6 +12258,13 @@ CREATE INDEX idx_ps_calculated_date ON public.pattern_stats USING btree (calcula
 --
 
 CREATE INDEX idx_ps_degrading ON public.pattern_stats USING btree (degrading_alert);
+
+
+--
+-- Name: idx_rotation_events_date; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_rotation_events_date ON public.rotation_events USING btree (trade_date, session);
 
 
 --
