@@ -494,6 +494,9 @@ run ./venv/bin/python3 scripts/backtest_hourly_volume_build_forward.py
 # never changes live behavior. Stays on scratch/ until the rule is promoted by its own decision.
 run ./venv/bin/python3 scratch/stop_width_prereg_eval_20261005.py
 
+# Forward monitor of the rotation-direction gate + context variants (pre-registered, frozen definitions, forward window from 2026-10-21; prints NO DATA YET until the first-look thresholds are met; never changes live behavior).
+run node scripts/monitor_rotation_gate_forward.mjs
+
 if [ ${#FAILED_STEPS[@]} -gt 0 ]; then
   echo "=== ${#FAILED_STEPS[@]} step(s) failed:"
   printf "  %s\n" "${FAILED_STEPS[@]}"
