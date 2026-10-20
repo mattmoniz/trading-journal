@@ -3,7 +3,8 @@ import fs from 'fs';
 import { query } from '../server/db.js';
 import { wantsMarketEntry } from '../server/services/sierraChart/orderSweep.js';
 import { collapseClusterSiblings, dayBlockedBootstrapCI, mulberry32, hashSeed } from '../server/services/rigorDiagnostics.js';
-const REAL = `(resolution_method IS NULL OR resolution_method NOT IN ('MARK_TO_MARKET','RECOVERY_MTM')) AND ib_window_stale_basis IS NOT TRUE AND stale_entry_price_basis IS NOT TRUE AND late_fill_past_expiry_basis IS NOT TRUE AND bad_bars_basis IS NOT TRUE AND resolution IS DISTINCT FROM 'NOT_FILLED' AND actual_pnl IS NOT NULL`;
+const INCLUDE_MTM = process.env.INCLUDE_MTM === '1';   // sensitivity added 2026-10-21: the house filter drops mark-to-market exits, which strips the wins of timeout-exit setups (CLAUDE.md hard rule on REAL_TRADE_FILTER)
+const REAL = `${INCLUDE_MTM ? 'TRUE' : "(resolution_method IS NULL OR resolution_method NOT IN ('MARK_TO_MARKET','RECOVERY_MTM'))"} AND ib_window_stale_basis IS NOT TRUE AND stale_entry_price_basis IS NOT TRUE AND late_fill_past_expiry_basis IS NOT TRUE AND bad_bars_basis IS NOT TRUE AND resolution IS DISTINCT FROM 'NOT_FILLED' AND actual_pnl IS NOT NULL`;
 const SPLIT = '2026-07-09', famOf = (t) => t.replace(/_(LONG|SHORT)(_.*)?$/, '');
 const mean = (a) => a.reduce((s, x) => s + x, 0) / a.length; const med = (a) => { const s = [...a].sort((x, y) => x - y); return s[s.length >> 1]; };
 // real market-entry slippage (points, adverse positive) from real ENTRY fills of setups that now go to market
@@ -49,4 +50,4 @@ if (T1) { const elig = out.filter((r) => r.l && r.cls !== 'EXCLUDED_POC_ROTATION
   for (const [f, o] of rows.slice(0, 12)) { const r = out.find((x) => x.fam === f); console.log(`  ${f.padEnd(30)} ${o.tot.toFixed(0).padStart(7)} | ${String(o.n).padStart(4)} rows ${o.days.size}d | B ${r.b ? r.b.mean.toFixed(1) : '-'} [${r.cls}]`); }
   const top12 = rows.slice(0, 12).reduce((s, [, o]) => s + o.tot, 0); console.log(`  those 12 = ${(top12 / allTot * 100).toFixed(0)}% of the total; families with positive L total: ${rows.filter(([, o]) => o.tot > 0).length} of ${rows.length}`);
   console.log('DRAG families, adjusted vs raw simulated mean (B):'); for (const r of out.filter((x) => x.cls === 'DRAG')) console.log(`  ${r.fam.padEnd(26)} B adjusted ${r.b.mean.toFixed(2)} raw ${r.b.rawMean.toFixed(2)} | L adjusted ${r.l ? r.l.mean.toFixed(2) : '-'} raw ${r.l ? r.l.rawMean.toFixed(2) : '-'}`); }
-fs.writeFileSync('scratch/setup_family_sim_fills_20261021.json', JSON.stringify({ slipPts, out: out.map(({ fam, cls, b, l, status }) => ({ fam, cls, b, l, status })) }, null, 1)); process.exit(0);
+fs.writeFileSync('scratch/setup_family_sim_fills_20261021' + (INCLUDE_MTM ? '_mtm' : '') + '.json', JSON.stringify({ slipPts, out: out.map(({ fam, cls, b, l, status }) => ({ fam, cls, b, l, status })) }, null, 1)); process.exit(0);
