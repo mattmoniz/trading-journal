@@ -26,19 +26,8 @@ def ticks_for(p, d):
         if not (34200 <= s < END): continue
         out.append((s, t.price * sc, t.size, t.aggressor, t.ts_utc))
     return out
-def process(d):
-    fp = os.path.join(OUT, d + '.tsv')
-    if os.path.exists(fp): return d, 'exists'
-    best = None
-    for code in E.candidate_codes(E.CAL[d]):
-        for p in E.scid_paths(code):
-            try: tk = ticks_for(p, d)
-            except ValueError: return d, 'nontick'
-            tot = sum(x[2] for x in tk)
-            if d in E.DBVOL and abs(tot - E.DBVOL[d]) <= 0.03 * E.DBVOL[d]: best = tk; break
-        if best is not None: break
-    if best is None: return d, 'nomatch'
-    tk = best; n = END + 1
+def stuffed_rows(tk):
+    n = END + 1
     hi = [None] * n; lo = [None] * n; last = [None] * n
     for s, px, sz, ag, u in tk:
         i = int(s)
@@ -68,6 +57,20 @@ def process(d):
             win_hi = max((hi[i] for i in range(i0, END) if hi[i] is not None), default=''); win_lo = min((lo[i] for i in range(i0, END) if lo[i] is not None), default='')
         against, withd = (win_hi, win_lo) if ag == 'SELL' else (win_lo, win_hi)
         rows.append([ag[0], f'{t0:.3f}', f'{te:.3f}', sz, npr, f'{pf:.2f}', f'{pl:.2f}', f'{pv / sz:.2f}'] + [('' if at(x) == '' else f'{at(x):.2f}') for x in OFFS] + [('' if against == '' else f'{against:.2f}'), ('' if withd == '' else f'{withd:.2f}')])
+    return rows
+def process(d):
+    fp = os.path.join(OUT, d + '.tsv')
+    if os.path.exists(fp): return d, 'exists'
+    best = None
+    for code in E.candidate_codes(E.CAL[d]):
+        for p in E.scid_paths(code):
+            try: tk = ticks_for(p, d)
+            except ValueError: return d, 'nontick'
+            tot = sum(x[2] for x in tk)
+            if d in E.DBVOL and abs(tot - E.DBVOL[d]) <= 0.03 * E.DBVOL[d]: best = tk; break
+        if best is not None: break
+    if best is None: return d, 'nomatch'
+    rows = stuffed_rows(best)
     with open(fp + '.tmp', 'w') as f:
         for r in rows: f.write('\t'.join(str(x) for x in r) + '\n')
     os.replace(fp + '.tmp', fp); return d, f'{len(rows)} orders'
