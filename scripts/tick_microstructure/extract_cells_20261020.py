@@ -51,8 +51,17 @@ def cells_for_path(p, d, keep_all=False):
     lay = _sniff_layout(p, dd)
     if lay == 'empty': return ({}, []), 0
     if lay == 'other': raise ValueError('unknown record layout')
+    sc = 1.0                                           # the DTC install's NQZ26.scid stores prices at 1/100 of the real price (median about 300 instead of 30000); sizes, sides, times are unaffected
+    if lay == 'std':
+        import statistics
+        pr = []
+        for k, t0 in enumerate(sr.read_ticks(p, start_date=dd, end_date=dd)):
+            pr.append(t0.price)
+            if k >= 300: break
+        if pr and statistics.median(pr) < 1000: sc = 100.0
     for t in (sr.read_ticks(p, start_date=dd, end_date=dd) if lay == 'std' else _legacy_ticks(p, dd)):
         m = t.ts_et.hour * 60 + t.ts_et.minute
+        if sc != 1.0: t.price = t.price * sc
         if not (570 <= m < 960): continue
         if cur is not None and t.aggressor == cur[0] and t.aggressor in ('BUY', 'SELL') and (t.ts_utc - cur[5]).total_seconds() * 1e6 <= AGG_GAP_US:
             cur[2] += t.size; cur[3] += t.price * t.size; cur[4] += 1; cur[5] = t.ts_utc
