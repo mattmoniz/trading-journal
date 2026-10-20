@@ -1,0 +1,21 @@
+// study_rotation_gate_context_20261020.mjs -- DESCRIPTIVE follow-up (not pre-registered as a verdict test): the 65pt rotation-direction gate by point-in-time developing-range context,
+// on the FULL 3.5-year RTH replay rows (no tick data needed). The lead came from Addendum E3 of docs/BUBBLE_GATE_HEADTOHEAD_PREREG_20261020.md (tick-covered subset), so this is NOT an independent confirmation.
+import fs from 'fs';
+import { loadBars, sessionIndex, mean, sum, f } from './lib/pocJoinLoader.mjs';
+const FROM = '2023-03-06', TO = '2026-10-16', SPLIT = '2025-06-01';
+let seed = 20261020; const rnd = () => (seed = (seed * 1664525 + 1013904223) >>> 0) / 4294967296;
+const D = await loadBars(FROM, TO), S = sessionIndex(D); const { H, L, C, TS } = D; const idxOf = new Map(); for (let i = 0; i < TS.length; i++) idxOf.set(TS[i], i);
+const devRange = (d, e) => { const rr = S.rth.get(d); if (!rr || e < rr[0]) return null; let hi = -Infinity, lo = Infinity; for (let i = rr[0]; i <= e; i++) { if (H[i] > hi) hi = H[i]; if (L[i] < lo) lo = L[i]; } const a = S.atr20(d); return a ? (hi - lo) / a : null; };
+const rows = JSON.parse(fs.readFileSync('scratch/rotation_gate_replay_rows_ts_20261020.json', 'utf8')).filter(r => r.agree != null); const dIdx = new Map(S.dates.map((d, i) => [d, i]));
+const out = []; for (const r of rows) { const e = idxOf.get(r.ts); const di = dIdx.get(r.d); if (e == null || di == null || di < 61) continue; const cur = devRange(r.d, e); if (cur == null) continue; const clock = r.ts.slice(10); const past = []; for (let k = 1; k <= 60; k++) { const pd = S.dates[di - k], j = idxOf.get(pd + clock); if (j == null) continue; const v = devRange(pd, j); if (v != null) past.push(v); } if (past.length < 40) continue; r.rank = past.filter(v => v <= cur).length / past.length; out.push(r); }
+console.log(`tagged replay rows ${rows.length}; with a context rank ${out.length}`);
+const q = (a, p) => { const s = [...a].sort((x, y) => x - y); return s[Math.floor(s.length * p)]; }; const ex = out.filter(r => r.d < SPLIT), c1 = q(ex.map(r => r.rank), 1 / 3), c2 = q(ex.map(r => r.rank), 2 / 3);
+const gap = (R) => mean(R.filter(r => r.agree).map(r => r.pnl)) - mean(R.filter(r => !r.agree).map(r => r.pnl));
+function boot(R, fn, n = 1500) { const by = new Map(); for (const r of R) (by.get(r.d) || by.set(r.d, []).get(r.d)).push(r); const ds = [...by.values()], o = []; for (let b = 0; b < n; b++) { const rs = []; for (let k = 0; k < ds.length; k++) rs.push(...ds[Math.floor(rnd() * ds.length)]); const v = fn(rs); if (Number.isFinite(v)) o.push(v); } o.sort((a, b) => a - b); return [o[Math.floor(o.length * .025)], o[Math.floor(o.length * .975)]]; }
+const ctx = [['LOW range (balance-like)', (r) => r.rank < c1], ['MID range', (r) => r.rank >= c1 && r.rank < c2], ['HIGH range (expansion-like)', (r) => r.rank >= c2]];
+console.log(`\ncut points from the explore half (<2025-06): ${c1.toFixed(3)} / ${c2.toFixed(3)}; gap = mean pnl AGREE minus DISAGREE per trade (positive = the gate helps)`);
+for (const [nm, fn] of ctx) { const R = out.filter(fn), g = gap(R), [lo, hi] = boot(R, gap); const E = R.filter(r => r.d < SPLIT), Hh = R.filter(r => r.d >= SPLIT);
+  console.log(`${nm.padEnd(30)} n ${String(R.length).padStart(5)} (AGREE ${R.filter(r => r.agree).length}) | gap ${f(g, 2)} CI [${f(lo, 2)},${f(hi, 2)}] | explore ${f(gap(E), 2)} hold-out ${f(gap(Hh), 2)} | LONG ${f(gap(R.filter(r => r.long)), 2)} SHORT ${f(gap(R.filter(r => !r.long)), 2)} | by year ${['2023', '2024', '2025', '2026'].map(y => y + ' ' + f(gap(R.filter(r => r.d.startsWith(y))), 1)).join(' ')}`); }
+const HI = out.filter(ctx[2][1]), LO = out.filter(ctx[0][1]); const dd = (R) => gap(R.filter(ctx[2][1])) - gap(R.filter(ctx[0][1])); const [dl, dh] = boot(out, dd); console.log(`\ndifference of gaps HIGH minus LOW range: ${f(dd(out), 2)} CI [${f(dl, 2)},${f(dh, 2)}]`);
+console.log('families (HIGH range): ' + ['OR/IB', 'PD', 'PW/PM', 'VWAP', 'other'].map(fm => { const R = HI.filter(r => (/^(OR|IB)/.test(r.lvl) ? 'OR/IB' : /VWAP/.test(r.lvl) ? 'VWAP' : /^PD/.test(r.lvl) ? 'PD' : /^(PW|PM|PY|W|M)/.test(r.lvl) ? 'PW/PM' : 'other') === fm); return `${fm} ${f(gap(R), 1)} (n ${R.length})`; }).join('; '));
+process.exit(0);
