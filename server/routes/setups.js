@@ -10,6 +10,7 @@ import { getDeltaConfirmationCategory } from '../services/deltaConfirmation.js';
 import { REAL_TRADE_FILTER } from '../../scripts/backtest_setup_status.mjs';
 import { MECHANISMS, MIN_REAL_N, evalBucket, modeOf } from '../../scripts/backtest_flush_post_entry_exit_signals_promotion.mjs';
 import { SUPPRESS_ALL_DISABLED, ALL_LEVELS_LIVE } from '../services/setupEligibility.js';
+import { getGateMonitorStatus } from '../services/gateMonitorStatus.js';
 import { killSwitch } from '../services/sierraChart/orderEligibility.js';
 import { gateSignalConfirmation } from '../services/rigorDiagnostics.js';
 import { isGlobexWeekClosed } from './acd.js';
@@ -38,6 +39,14 @@ const PRICE_BARS_STALE_MINUTES = 10;
 // suppress_all_disabled_temporary_override_20260925's own text names this as one of its 3
 // resolution paths -- "someone has to remember to flip this back to enabled:false" -- a
 // visible banner is the one that doesn't need anyone to remember anything).
+// GET /api/setups/gate-forward-monitor -- read-only tally of the pre-registered forward test of the rotation-direction gate
+// (docs/ROTATION_GATE_FORWARD_MONITOR_PREREG_20261020.md), for the quick-check POC Gate tab strip. Needs its own line in
+// ~/.cloudflared/config.yml's ingress allowlist (a missing rule fails silently on the phone).
+router.get('/setups/gate-forward-monitor', async (req, res) => {
+  try { res.json(await getGateMonitorStatus()); }
+  catch (err) { console.error('[setups/gate-forward-monitor]', err.message); res.status(500).json({ error: err.message }); }
+});
+
 router.get('/setups/live-flags', async (req, res) => {
   let priceBarsStale = false;
   let priceBarsLastBar = null;

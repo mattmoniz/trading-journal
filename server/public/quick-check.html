@@ -170,6 +170,14 @@
      than Timeline's Wins/Losses/Net/etc and needs to wrap on a narrow phone screen. */
   #timeline-stats, #shadow-stats, #poc-stats-rth, #poc-stats-globex { display: flex; gap: 14px; font-size: 13px; margin-bottom: 8px; padding: 8px 12px; background: rgba(255,255,255,0.03); border-radius: 6px; border: 1px solid var(--border); flex-wrap: wrap; align-items: center; }
   #poc-stats-globex { margin-bottom: 12px; }
+  /* Forward-test strip on the POC Gate tab (2026-10-20): read-only tally of the pre-registered forward test of the rotation-direction gate
+     (docs/ROTATION_GATE_FORWARD_MONITOR_PREREG_20261020.md), fed by GET /api/setups/gate-forward-monitor (saved nightly by scripts/monitor_rotation_gate_forward.mjs). */
+  #poc-forward-strip { font-size: 13px; margin-bottom: 8px; padding: 8px 12px; background: rgba(255,255,255,0.03); border-radius: 8px; line-height: 1.5; }
+  #poc-forward-strip .fw-head { color: var(--muted); text-transform: uppercase; font-size: 11px; letter-spacing: 0.05em; margin-bottom: 4px; }
+  #poc-forward-strip .fw-row { display: flex; flex-wrap: wrap; gap: 4px 12px; padding: 2px 0; }
+  #poc-forward-strip .fw-lab { min-width: 150px; }
+  #poc-forward-strip b { font-family: monospace; }
+  #poc-forward-strip .fw-note { color: var(--muted); font-size: 12px; margin-top: 4px; }
   #timeline-stats span b, #shadow-stats span b, #poc-stats-rth span b, #poc-stats-globex span b { font-family: monospace; }
 
   /* Page tabs (2026-09-28, replaces the old collapse-to-reach-Performance mechanism -- user
@@ -449,6 +457,7 @@
            differently, and a pooled number can hide opposite-signed subgroups). Reuses
            isRthAdjacent() (already the canonical RTH/Globex classifier on this page, matching
            acd.js's own 9:30am-6pm RTH_SESSION_FIRED_AT_SQL boundary) rather than a new check. -->
+      <div id="poc-forward-strip"><span class="fw-head">Forward test</span> loading…</div>
       <div id="poc-stats-rth"></div>
       <div id="poc-stats-globex"></div>
       <div id="poc-list"><div class="loading">Loading…</div></div>
@@ -2336,7 +2345,32 @@ function pocStatsBarHtml(label, rows) {
     '<span style="color:var(--red)">DISAGREE <b class="mono">' + disagreeRows.length + '</b> (' + disagreeStats.n + ' decided, net <b style="color:' + (disagreeStats.netPnl >= 0 ? 'var(--green)' : 'var(--red)') + '">' + fmtNetPnl(disagreeStats.netPnl) + '</b>)</span>';
 }
 
+// Forward-test strip (2026-10-20). Throttled to one fetch per 5 minutes (the tab re-renders every 20s poll); every failure renders a VISIBLE
+// unavailable state (a silent blank would look the same as "nothing to report"). cache:'no-store' per this file's rule for every fetch().
+let gateFwdFetchedAt = 0, gateFwdLast = null;
+function gateFwdMoney(v) { return v == null ? 'n/a' : (v >= 0 ? '+' : '-') + '$' + Math.abs(v).toFixed(1); }
+function gateFwdEsc(t) { return String(t == null ? '' : t).replace(/[&<>"]/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[c])); }
+function renderGateForwardStrip(d, err) {
+  const el = $('poc-forward-strip'); if (!el) return;
+  const head = '<div class="fw-head">Forward test of the gate</div>';
+  if (err) { el.innerHTML = head + '<div style="color:var(--red)">Forward-test tally unavailable (could not load) — ' + gateFwdEsc(err) + '</div>'; return; }
+  if (!d || d.state === 'NOT_STARTED' || d.state === 'NO_TALLY') { el.innerHTML = head + '<div class="fw-note">Starts ' + gateFwdEsc(d && d.forwardStart || '2026-10-21') + '. The first nightly run after that fills this in; until it has 20 trading days and 300 closed trades per side it shows counts only, never a verdict.</div>'; return; }
+  const rows = (d.rules || []).map(r => {
+    const status = r.ready ? (r.pass ? '<b style="color:var(--green)">PASS</b>' : '<b style="color:var(--red)">FAIL</b>') : '<span style="color:var(--muted)">waiting — needs ' + d.minSide + ' per side (have ' + r.nAgree + '/' + r.nDisagree + ')</span>';
+    const gap = r.gap == null ? 'n/a' : gateFwdMoney(r.gap);
+    return '<div class="fw-row"><span class="fw-lab">' + gateFwdEsc(r.label) + '</span><span>AGREE <b>' + gateFwdMoney(r.avgAgree) + '</b> (' + r.nAgree + ')</span><span>DISAGREE <b>' + gateFwdMoney(r.avgDisagree) + '</b> (' + r.nDisagree + ')</span><span>gap <b style="color:' + (r.gap == null ? 'var(--muted)' : r.gap >= 0 ? 'var(--green)' : 'var(--red)') + '">' + gap + '</b></span><span>' + status + '</span></div>';
+  }).join('');
+  el.innerHTML = head + '<div class="fw-note" style="margin:0 0 4px">since ' + gateFwdEsc(d.forwardStart) + ' · <b>' + d.dates + '</b> of ' + d.minDates + ' trading days · ' + d.rows + ' closed trades · avg $ per trade, regular hours · saved ' + gateFwdEsc(d.savedOn) + '</div>' + rows + '<div class="fw-note">Averages are model P&L per trade. A verdict appears only at the pre-registered first look.</div>';
+}
+async function loadGateForwardStrip() {
+  if (Date.now() - gateFwdFetchedAt < 300000 && gateFwdLast) { renderGateForwardStrip(gateFwdLast); return; }
+  gateFwdFetchedAt = Date.now();
+  try { const r = await fetch('/api/setups/gate-forward-monitor', { cache: 'no-store' }); if (!r.ok) throw new Error('HTTP ' + r.status); gateFwdLast = await r.json(); renderGateForwardStrip(gateFwdLast); }
+  catch (e) { gateFwdLast = null; gateFwdFetchedAt = Date.now() - 270000; renderGateForwardStrip(null, e.message || 'error'); }   // retry in ~30s on failure
+}
+
 function renderPocGateTab() {
+  loadGateForwardStrip();
   const all = getPocGateRows();
   timelineRows = all;
   $('poc-title').textContent = 'POC Gate (' + all.length + ')';
