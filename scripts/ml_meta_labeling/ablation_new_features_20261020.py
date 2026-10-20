@@ -79,5 +79,15 @@ def main():
     print('\n--- B arms: add candidate columns (diff = arm minus baseline; positive = adding it HELPS) ---')
     print('(B arms are judged against their matching control: B1-B3 vs C2, B4 vs C3)')
     for k, v in B.items(): judge(k, summarize(arm_seeds(cols0 + v)), 'B', ref=(C3 if k.startswith('B4') else C2))
+    print('\n--- Addendum B: pruned models (diff = baseline minus arm; positive = pruning loses) ---')
+    def judge_pruned(name, cols):
+        s_ = summarize(arm_seeds(cols)); dd = base3['pol'] - s_['pol']; lo, hi = boot_diff(dd, base3['days']); dauc = s_['auc'] - base3['auc']; z = dauc / sd_auc; m1 = pd.to_datetime(base3['fold']).astype('int64') <= half; h1 = (-dd)[m1].mean(); h2 = (-dd)[~m1].mean()
+        label = 'BETTER' if (z > 2 and -hi > 0 and h1 > 0 and h2 > 0) else ('WORSE' if (z < -2 or lo > 0) else 'SIMPLER AND NOT DISTINGUISHABLE')
+        rows.append(dict(arm=name, auc=s_['auc'], d_auc=dauc, d_auc_in_null_sd=z, policy_per_trade=s_['policy_per_trade'], diff_per_trade=float(dd.mean()), ci_lo=lo, ci_hi=hi, approved=s_['take_n'], label=label, n_features=len(cols)))
+        print(f'{name:60s} {len(cols):2d} inputs | AUC {s_["auc"]:.4f} (delta {dauc:+.4f} = {z:+.1f} null SD) | policy/trade {s_["policy_per_trade"]:+.3f} | diff {dd.mean():+.3f} CI99 [{lo:+.3f},{hi:+.3f}] | approved {s_["take_n"]:.0f} -> {label}')
+    drop = lambda *gs: [c for c in cols0 if not any(c in G[g] for g in gs)]
+    judge_pruned('P1 minus session cumulative delta and nl30', drop('A5 session cumulative delta', 'A8 nl30'))
+    judge_pruned('P2 P1 and minus prior-day structure, confluence, direction', drop('A5 session cumulative delta', 'A8 nl30', 'A2 prior-day structure', 'A9 confluence score', 'A10 trade direction'))
+    judge_pruned('P3 only time in session and recent 15-bar delta', G['A7 time in session'] + G['A6 recent 15-bar delta (raw and aligned)'])
     json.dump(dict(baseline=dict(auc=base['auc'], sd_auc_null=sd_auc, policy=base['policy_per_trade'], sd_pol_null=sd_pol, take_n=base['take_n'], n=base['n']), controls=dict(C1=C1['auc'], C2=C2['auc'], C3=C3['auc']), arms=rows), open(os.path.join(ROOT, 'scratch', 'ml_ablation_results_20261020.json'), 'w'), indent=1)
 if __name__ == '__main__': main()
