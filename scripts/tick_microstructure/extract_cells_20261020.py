@@ -20,10 +20,36 @@ def scid_paths(code):
 def candidate_codes(contract):                       # mapped contract first, then the neighbouring quarters
     q = contract[2]; y = int(contract[-1]); i = QUARTERS.index(q); prev = (QUARTERS[i - 1], y if i else (y - 1) % 10); nxt = (QUARTERS[(i + 1) % 4], y if i < 3 else (y + 1) % 10)
     return [code_of(contract), f'NQ{prev[0]}{prev[1]}', f'NQ{nxt[0]}{nxt[1]}']
+class _T:                       # same fields the extractor reads from scid_reader.Trade
+    __slots__ = ('ts_utc', 'ts_et', 'price', 'size', 'aggressor')
+def _sniff_layout(p, dd):
+    """'std' = Open==0 bid/ask tick records or unbundled sentinels (the layout scid_reader handles); 'legacy' = one trade per record with O=H=L=C=price*100 and the aggressor in BidVolume/AskVolume
+    (seen in the 2024 NQ files; reconciled against price_bars_primary minute by minute before use, 2026-10-20). Anything else: 'other' -> the date is skipped."""
+    n = 0; std = 0; leg = 0
+    for dt, o, h, l, c, nt, tv, bv, av in sr._raw_records(p, start_date=dd):
+        et = dt.astimezone(sr.ET)
+        if et.date() < dd: continue
+        if et.date() > dd: break
+        n += 1
+        if o == 0.0 or o < -1e30: std += 1
+        elif o == h == l == c and nt == 1 and (bv > 0) != (av > 0): leg += 1
+        if n >= 3000: break
+    if n == 0: return 'empty'
+    return 'std' if std >= 0.99 * n else 'legacy' if leg >= 0.99 * n else 'other'
+def _legacy_ticks(p, dd):
+    for dt, o, h, l, c, nt, tv, bv, av in sr._raw_records(p, start_date=dd):
+        et = dt.astimezone(sr.ET)
+        if et.date() < dd: continue
+        if et.date() > dd: break
+        if not (o == h == l == c) or (bv > 0) == (av > 0): raise ValueError('legacy layout violated on ' + str(dd))
+        t = _T(); t.ts_utc = dt; t.ts_et = et; t.price = c / sr.SCID_PRICE_SCALE; t.size = tv; t.aggressor = 'SELL' if bv > 0 else 'BUY'; yield t
 def cells_for_path(p, d, keep_all=False):
     dd = datetime.date.fromisoformat(d); cell = collections.defaultdict(lambda: [0, 0, 0]); tot = 0
     orders = []; cur = None
-    for t in sr.read_ticks(p, start_date=dd, end_date=dd):
+    lay = _sniff_layout(p, dd)
+    if lay == 'empty': return ({}, []), 0
+    if lay == 'other': raise ValueError('unknown record layout')
+    for t in (sr.read_ticks(p, start_date=dd, end_date=dd) if lay == 'std' else _legacy_ticks(p, dd)):
         m = t.ts_et.hour * 60 + t.ts_et.minute
         if not (570 <= m < 960): continue
         if cur is not None and t.aggressor == cur[0] and t.aggressor in ('BUY', 'SELL') and (t.ts_utc - cur[5]).total_seconds() * 1e6 <= AGG_GAP_US:
