@@ -24,3 +24,10 @@ The bubble gate is judged USEFUL only if (i) its marginal-difference CI excludes
 
 ## Rules
 Claude builds, DeepSeek reviews the code before the verdict is final. Record via `recordClaim()` whatever the result. Globex is not covered (no overnight cells extracted yet); flagged.
+
+## Addendum E (pre-registered 2026-10-20, before the first run of this test; the user asked: does it work for longs and shorts, does it only work on huge moves, what about expansion vs balance days)
+Exploratory splits of the same population and the same gates (they do not change the primary verdict above; reported with counts and day-blocked CIs, no fixed cut picked from outcomes):
+- E1 direction: every gate's marginal difference for LONG trades and SHORT trades separately.
+- E2 dose-response (is it only huge moves?): thirds of FALL (cut points from the explore half). Within each third, (a) Spearman of OURS30 with trade pnl, (b) the G1 marginal difference. Also the deciles of FALL ranked against the explore half for the pooled G1 difference, as a smooth gradient instead of one cut.
+- E3 context, expansion vs balance, point in time only (never the end-of-day day-type label, which is lookahead): developing range DR at the touch bar = (highest high - lowest low from the RTH open to the touch bar) / ATR20, ranked against the previous 60 sessions at the same clock time; thirds by explore-half cut points: LOW (balance-like), MID, HIGH (expansion-like). Within each third report G1, G2 and the rotation gate marginal differences and the Spearman of OURS30 with pnl. A second context read: whether the touch is on the side of the day's developing direction (price above or below the RTH open in the trade's own direction).
+- Any context in which the bubble gate looks good is a lead to be pre-registered as its own test, not a finding, because these are several splits.
