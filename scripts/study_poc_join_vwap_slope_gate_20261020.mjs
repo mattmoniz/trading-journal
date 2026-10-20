@@ -20,14 +20,15 @@ function boot(arr, stat, n = 2000) { const by = new Map(); for (const r of arr) 
 const pa = (pick) => mean(pick.filter(r => r.aligned).map(r => r.pnl)) - mean(pick.map(r => r.pnl)), ao = (pick) => mean(pick.filter(r => r.aligned).map(r => r.pnl)) - mean(pick.filter(r => r.opposed).map(r => r.pnl));
 const big = (a) => a.filter(r => r.pnl >= 100).length / a.length;
 function section(label, sub) { const A = sub.filter(r => r.aligned), Op = sub.filter(r => r.opposed), Fl = sub.filter(r => r.flat), am = mean(A.map(r => r.pnl)), all = mean(sub.map(r => r.pnl)), [lo, hi] = boot(sub, pa, 1200);
-  const srt = [...A].sort((x, y) => y.pnl - x.pnl), top5 = sum(srt.slice(0, 5).map(r => r.pnl)) / sum(A.map(r => r.pnl));
-  console.log(`${label.padEnd(10)} N all ${String(sub.length).padStart(4)} | aligned ${String(A.length).padStart(4)} ${f(am, 1).padStart(7)} | opposed ${String(Op.length).padStart(4)} ${f(mean(Op.map(r => r.pnl)), 1).padStart(7)} | flat ${String(Fl.length).padStart(4)} ${f(mean(Fl.map(r => r.pnl)), 1).padStart(7)} | all ${f(all, 1).padStart(6)} | aligned-all ${f(am - all, 1)} [${f(lo, 1)},${f(hi, 1)}] | flipped ${f(mean(A.map(r => r.pnlFlip)), 1)} | P>=100 ${(100 * big(A)).toFixed(0)}%/${(100 * big(sub)).toFixed(0)}% | top5 ${(100 * top5).toFixed(0)}%`);
+  const srt = [...A].sort((x, y) => y.pnl - x.pnl), tot = sum(A.map(r => r.pnl)), top5 = tot > 0 ? sum(srt.slice(0, 5).map(r => r.pnl)) / tot : Infinity;   // guard (DeepSeek 2026-10-20): a non-positive total can never satisfy a concentration criterion
+  console.log(`${label.padEnd(10)} N all ${String(sub.length).padStart(4)} | aligned ${String(A.length).padStart(4)} ${f(am, 1).padStart(7)} | opposed ${String(Op.length).padStart(4)} ${f(mean(Op.map(r => r.pnl)), 1).padStart(7)} | flat ${String(Fl.length).padStart(4)} ${f(mean(Fl.map(r => r.pnl)), 1).padStart(7)} | all ${f(all, 1).padStart(6)} | aligned-all ${f(am - all, 1)} [${f(lo, 1)},${f(hi, 1)}] | flipped ${f(mean(A.map(r => r.pnlFlip)), 1)} | P>=100 ${(100 * big(A)).toFixed(0)}%/${(100 * big(sub)).toFixed(0)}% | top5 ${Number.isFinite(top5) ? (100 * top5).toFixed(0) + '%' : 'n/a (total<=0)'}`);
   return { n: A.length, diff: am - all, lo, hi, am, flip: mean(A.map(r => r.pnlFlip)), top5, bigA: big(A), bigAll: big(sub), nOp: Op.length, opM: mean(Op.map(r => r.pnl)) }; }
 console.log('\n=== PRIMARY (slope window ' + K + ') ===');
 const O = section('OVERALL', rows), pre = section('PRE', rows.filter(r => r.era === 'PRE')), post = section('POST', rows.filter(r => r.era === 'POST')), rth = section('RTH', rows.filter(r => r.session === 'RTH')), glx = section('GLOBEX', rows.filter(r => r.session === 'GLOBEX'));
 const [alo, ahi] = boot(rows, ao, 1500);
 // permutation: shuffle class labels within month x session
-const groups = new Map(); rows.forEach((r, i) => { const k = r.month + r.session; (groups.get(k) || groups.set(k, []).get(k)).push(i); });
+const groups = new Map(); rows.forEach((r, i) => { const k = r.month + r.session + (r.long ? 'L' : 'S');   // shuffle labels WITHIN direction (DeepSeek 2026-10-20: keeps long/short composition fixed)
+   (groups.get(k) || groups.set(k, []).get(k)).push(i); });
 const obs = pa(rows); let ge = 0; const NP = 2000; const cls = rows.map(r => r.cls);
 for (let p = 0; p < NP; p++) { const sh = rows.map(r => ({ ...r })); for (const idx of groups.values()) { const labs = idx.map(i => cls[i]); for (let i = labs.length - 1; i > 0; i--) { const j = (rnd() * (i + 1)) | 0; [labs[i], labs[j]] = [labs[j], labs[i]]; } idx.forEach((i, k) => { sh[i].cls = labs[k]; sh[i].aligned = (sh[i].long && labs[k] === 'UP') || (!sh[i].long && labs[k] === 'DOWN'); }); } if (pa(sh) >= obs) ge++; }
 const pperm = ge / NP; console.log(`\naligned minus opposed (overall): ${f(O.am - O.opM, 1)} CI [${f(alo, 1)},${f(ahi, 1)}] | permutation p (aligned-all >= observed ${f(obs, 2)}): ${pperm.toFixed(4)}`);
@@ -40,6 +41,6 @@ P(O.diff > 0 && O.lo > 0 && pre.diff > 0 && post.diff > 0 && rth.diff > 0 && glx
 P(alo > 0, `3. aligned minus opposed CI above zero ([${f(alo, 1)},${f(ahi, 1)}])`);
 P(pperm <= 0.05, `4. permutation p <= 0.05 (${pperm.toFixed(4)})`);
 P(O.am > O.flip && pre.am > pre.flip && post.am > post.flip, `5. aligned beats flipped-direction placebo overall/PRE/POST`);
-P(O.top5 < 0.5, `6. top-5 share < 50% (${(100 * O.top5).toFixed(0)}%)`);
+P(O.top5 < 0.5, `6. top-5 share < 50% of a POSITIVE total (${Number.isFinite(O.top5) ? (100 * O.top5).toFixed(0) + '%' : 'total<=0'})`);
 P(O.bigA > O.bigAll, `7. P(pnl>=+100) aligned > all (${(100 * O.bigA).toFixed(1)}% vs ${(100 * O.bigAll).toFixed(1)}%)`);
 process.exit(0);
