@@ -5,6 +5,11 @@ import { loadBars, sessionIndex, mean, f, lb, addDay, rnd } from './lib/pocJoinL
 import { detectRotationLegs } from '../server/services/rotationDetector.js';
 import { isRotationGateExempt } from '../server/config/rotationGateExemptions.js';
 import { recordClaim } from './record_claim.mjs';
+if (process.argv.includes('--history')) {   // node scripts/monitor_rotation_gate_forward.mjs --history  -> the saved nightly tally, one line per run_date
+  const h = (await query(`SELECT run_date::text d, sample_size n, notes::json->>'claim_text' t FROM performance_audit WHERE signal_type='RESEARCH_CLAIM' AND signal_name='rotation_gate_forward_monitor_20261020' ORDER BY run_date`)).rows;
+  console.log(h.length ? h.map(r => `${r.d}  rows ${String(r.n).padStart(5)}  ${(r.t.split('LATEST: ')[1] || r.t).slice(0, 230)}`).join('\n') : 'no saved runs yet (the forward window starts 2026-10-21; the first nightly run after that saves one)');
+  process.exit(0);
+}
 const TEST = process.env.TEST_FORWARD_START, FORWARD_START = TEST || '2026-10-21', FREEZE_FROM = '2026-08-15', FREEZE_TO = '2026-10-19', MIN_DATES = 20, MIN_SIDE = 300;
 const today = (await query(`SELECT CURRENT_DATE::text d`)).rows[0].d; if (today < FORWARD_START) { console.log('forward window has not started'); process.exit(0); }
 const RTHSQL = `(EXTRACT(hour FROM fired_at)*60+EXTRACT(minute FROM fired_at)) BETWEEN 575 AND 959`;
