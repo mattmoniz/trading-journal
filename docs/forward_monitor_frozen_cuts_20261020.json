@@ -1,0 +1,6 @@
+{
+  "frozen_on": "2026-10-20",
+  "provenance": "computed on the 3.5-year RTH level-fade replay, explore half 2023-03-06..2025-05-31 only (never refreshed); printed by scripts/study_rotation_gate_context_20261020.mjs and scripts/study_flow_entry_exit_20261020.mjs --cuts",
+  "R4_developing_range_rank_cuts": { "low_mid": 0.300000, "mid_high": 0.650000, "tagged_trades_used": 12889 },
+  "R5_adverse_imbalance_rank_15m_flag_cut": { "flag_if_rank_at_least": 0.750000, "agree_trades_used": 2834 }
+}
