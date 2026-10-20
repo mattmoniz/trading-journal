@@ -1,6 +1,6 @@
 """Per-session (minute, price) volume cells from NQ .scid tick data, RTH 09:30-16:00 ET.
 Derived aggregate for docs/BUBBLE_ABSORPTION_PREREG_20261020.md (not ingested into Postgres). Reuses the canonical scid_reader (merged unbundled sub-trades).
-Usage: extract_cells_20261020.py [--validate DATE ...]  (default: all dates in scratch/contract_by_date_20261020.json up to 2026-10-13)
+Usage: extract_cells_20261020.py [--validate DATE ...]  (default: all dates in scratch/contract_by_date_20261020.json up to LAST_DATE (env, default 2026-10-19))
 Output: scratch/cells_20261020/YYYY-MM-DD.tsv  lines: minute_of_day price total bid_aggr ask_aggr   (cells with total >= 20)
 """
 import sys, os, json, datetime, collections, glob
@@ -14,9 +14,11 @@ OUT2 = os.path.join(ROOT, 'scratch', 'orders_20261020'); os.makedirs(OUT2, exist
 AGG_GAP_US = 1000      # Delta Dynamics Big Trades: Input data Aggregate, Aggregate gap 1 ms: consecutive same-side prints at most 1 ms apart are one order
 DBVOL = json.load(open(os.path.join(ROOT, 'scratch', 'db_rth_volume_20261020.json')))
 QUARTERS = 'HMUZ'
+LAST_DATE = os.environ.get('LAST_DATE', '2026-10-19')           # last COMPLETED RTH session to extract (today's partial session is excluded)
 def code_of(contract): return contract[:2] + contract[2] + contract[-1]       # NQM23 -> NQM3
 def scid_paths(code):
-    return [f'{b}/{code}.CME.scid' for b in ('/mnt/c/SierraChart/Data', '/mnt/c/SierraChart-DTC/Data') if os.path.exists(f'{b}/{code}.CME.scid')]
+    names = [f'{code}.CME.scid', f'{code[:3]}2{code[3]}.scid']          # NQZ6 -> NQZ6.CME.scid (older naming) and NQZ26.scid (the DTC install's 2-digit-year naming, live since 2026-10)
+    return [f'{b}/{n}' for b in ('/mnt/c/SierraChart/Data', '/mnt/c/SierraChart-DTC/Data') for n in names if os.path.exists(f'{b}/{n}')]
 def candidate_codes(contract):                       # mapped contract first, then the neighbouring quarters
     q = contract[2]; y = int(contract[-1]); i = QUARTERS.index(q); prev = (QUARTERS[i - 1], y if i else (y - 1) % 10); nxt = (QUARTERS[(i + 1) % 4], y if i < 3 else (y + 1) % 10)
     return [code_of(contract), f'NQ{prev[0]}{prev[1]}', f'NQ{nxt[0]}{nxt[1]}']
@@ -96,7 +98,7 @@ if __name__ == '__main__':
             for (m, p), v in c.items(): permin[m][0] += v[0]; permin[m][1] += v[1]; permin[m][2] += v[2]
             json.dump({str(m): v for m, v in permin.items()}, open(os.path.join(ROOT, 'scratch', f'cells_validate_{d}.json'), 'w')); print(d, 'minutes', len(permin), 'total vol', sum(v[0] for v in permin.values()))
         sys.exit(0)
-    dates = [d for d in sorted(CAL) if '2023-03-06' <= d <= '2026-10-13']
+    dates = [d for d in sorted(CAL) if '2023-03-06' <= d <= LAST_DATE]
     with Pool(12) as pool:
         n = 0
         for d, s in pool.imap_unordered(work, dates):
