@@ -42,8 +42,9 @@ for (const d of dates) {
     const anchorPrice = long ? Lw[a + ev.leg_start] : H[a + ev.leg_start], legPts = Math.abs(entry - anchorPrice);
     let priorExt = long ? -Infinity : Infinity; for (let i = a; i < a + ev.leg_start; i++) priorExt = long ? Math.max(priorExt, H[i]) : Math.min(priorExt, Lw[i]);
     const legExt = (() => { let e = long ? -Infinity : Infinity; for (let i = a + ev.leg_start; i <= trig; i++) e = long ? Math.max(e, H[i]) : Math.min(e, Lw[i]); return e; })();
-    const ahead = lvls.filter(x => long ? x.p > entry : x.p < entry).map(x => Math.abs(x.p - entry)).sort((p, q) => p - q)[0], behind = lvls.filter(x => long ? x.p < entry : x.p > entry).map(x => Math.abs(x.p - entry)).sort((p, q) => p - q)[0];
-    const crossed = lvls.filter(x => (x.p - anchorPrice) * (x.p - entry) < 0).length;
+    const early = TS[ei] < d + ' 09:30:00', lvE = early ? lvls.filter(x => x.n !== 'ONH' && x.n !== 'ONL') : lvls;   // ONH/ONL for trade date d span 18:00 prior evening .. 09:29, so they are NOT known before 09:30 (DeepSeek review 2026-10-20 caught this lookahead)
+    const ahead = lvE.filter(x => long ? x.p > entry : x.p < entry).map(x => Math.abs(x.p - entry)).sort((p, q) => p - q)[0], behind = lvE.filter(x => long ? x.p < entry : x.p > entry).map(x => Math.abs(x.p - entry)).sort((p, q) => p - q)[0];
+    const crossed = lvE.filter(x => (x.p - anchorPrice) * (x.p - entry) < 0).length;
     events.push({ d, ts: TS[ei], ep: T[ei], ei, entry, long, trig, len: ev.len, d50: ev.d50, A, flow5: fl(5), flow15: fl(15), flow30: fl(30), flowLeg: flLeg, volRatio15: vr15, volRatioLeg: vrLeg, volReg, vwapExt: sg * (entry - vwap) / A, legAtr: legPts / A,
       sessPos: sh > sl ? (long ? (entry - sl) / (sh - sl) : (sh - entry) / (sh - sl)) : null, legCount: legs.length, legVsPrior: prev ? cur.size / prev.size : null, breaksSessionExt: (long ? legExt > priorExt : legExt < priorExt) ? 1 : 0, barsSinceConfirm: cur ? (ev.entry_idx - 1 - cur.idx) : null,
       runwayAtr: ahead != null ? ahead / A : null, supportAtr: behind != null ? behind / A : null, levelsCrossed: crossed, vaPos: pdv && pdl ? (entry > pdv.p ? sg : entry < pdl.p ? -sg : 0) : null });
