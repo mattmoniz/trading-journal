@@ -2354,13 +2354,21 @@ function renderGateForwardStrip(d, err) {
   const el = $('poc-forward-strip'); if (!el) return;
   const head = '<div class="fw-head">Forward test of the gate</div>';
   if (err) { el.innerHTML = head + '<div style="color:var(--red)">Forward-test tally unavailable (could not load) — ' + gateFwdEsc(err) + '</div>'; return; }
-  if (!d || d.state === 'NOT_STARTED' || d.state === 'NO_TALLY') { el.innerHTML = head + '<div class="fw-note">Starts ' + gateFwdEsc(d && d.forwardStart || '2026-10-21') + '. The first nightly run after that fills this in; until it has 20 trading days and 300 closed trades per side it shows counts only, never a verdict.</div>'; return; }
+  if (!d || d.state === 'NOT_STARTED' || d.state === 'NO_TALLY') { el.innerHTML = head + '<div class="fw-note">Starts ' + gateFwdEsc(d && d.forwardStart || '2026-10-21') + '. Five frozen rules are tracked (the three gate versions, the range-context rule and the order-flow flag). The first nightly run after that fills this in; each rule shows counts only, never a verdict, until its own floor of trading days and trades is met.</div>'; return; }
+  const gcol = (g) => g == null ? 'var(--muted)' : g >= 0 ? 'var(--green)' : 'var(--red)';
+  const stat = (r, waitTxt) => r.ready ? (r.pass ? '<b style="color:var(--green)">PASS</b>' : '<b style="color:var(--red)">FAIL</b>') : '<span style="color:var(--muted)">waiting — ' + waitTxt + '</span>';
   const rows = (d.rules || []).map(r => {
-    const status = r.ready ? (r.pass ? '<b style="color:var(--green)">PASS</b>' : '<b style="color:var(--red)">FAIL</b>') : '<span style="color:var(--muted)">waiting — needs ' + d.minSide + ' per side (have ' + r.nAgree + '/' + r.nDisagree + ')</span>';
-    const gap = r.gap == null ? 'n/a' : gateFwdMoney(r.gap);
-    return '<div class="fw-row"><span class="fw-lab">' + gateFwdEsc(r.label) + '</span><span>AGREE <b>' + gateFwdMoney(r.avgAgree) + '</b> (' + r.nAgree + ')</span><span>DISAGREE <b>' + gateFwdMoney(r.avgDisagree) + '</b> (' + r.nDisagree + ')</span><span>gap <b style="color:' + (r.gap == null ? 'var(--muted)' : r.gap >= 0 ? 'var(--green)' : 'var(--red)') + '">' + gap + '</b></span><span>' + status + '</span></div>';
+    if (r.kind === 'context') {
+      const m = r.mid || {}, o = r.other || {}, need = r.floor || {}, have = Math.min(m.nAgree || 0, m.nDisagree || 0, o.nAgree || 0, o.nDisagree || 0);
+      return '<div class="fw-row"><span class="fw-lab">' + gateFwdEsc(r.label) + '</span><span>middle-range days: gate gap <b style="color:' + gcol(m.gap) + '">' + gateFwdMoney(m.gap) + '</b> (' + (m.nAgree || 0) + '/' + (m.nDisagree || 0) + ')</span><span>other days: gap <b style="color:' + gcol(o.gap) + '">' + gateFwdMoney(o.gap) + '</b> (' + (o.nAgree || 0) + '/' + (o.nDisagree || 0) + ')</span><span>difference <b style="color:' + gcol(r.gap) + '">' + gateFwdMoney(r.gap) + '</b></span><span>' + stat(r, 'needs ' + need.dates + ' days and ' + need.perCell + ' trades in each box (smallest has ' + have + ')') + '</span></div>';
+    }
+    if (r.kind === 'flag') {
+      const need = r.floor || {}, have = Math.min(r.nFlagged || 0, r.nUnflagged || 0);
+      return '<div class="fw-row"><span class="fw-lab">' + gateFwdEsc(r.label) + '</span><span>flagged (flow against us) <b>' + gateFwdMoney(r.avgFlagged) + '</b> (' + (r.nFlagged || 0) + ')</span><span>not flagged <b>' + gateFwdMoney(r.avgUnflagged) + '</b> (' + (r.nUnflagged || 0) + ')</span><span>gap, not flagged minus flagged <b style="color:' + gcol(r.gap) + '">' + gateFwdMoney(r.gap) + '</b></span><span>' + stat(r, 'needs ' + need.dates + ' days and ' + need.perSide + ' per side (smallest has ' + have + ')') + '</span></div>';
+    }
+    return '<div class="fw-row"><span class="fw-lab">' + gateFwdEsc(r.label) + '</span><span>AGREE <b>' + gateFwdMoney(r.avgAgree) + '</b> (' + r.nAgree + ')</span><span>DISAGREE <b>' + gateFwdMoney(r.avgDisagree) + '</b> (' + r.nDisagree + ')</span><span>gap <b style="color:' + gcol(r.gap) + '">' + (r.gap == null ? 'n/a' : gateFwdMoney(r.gap)) + '</b></span><span>' + stat(r, 'needs ' + d.minSide + ' per side (have ' + r.nAgree + '/' + r.nDisagree + ')') + '</span></div>';
   }).join('');
-  el.innerHTML = head + '<div class="fw-note" style="margin:0 0 4px">since ' + gateFwdEsc(d.forwardStart) + ' · <b>' + d.dates + '</b> of ' + d.minDates + ' trading days · ' + d.rows + ' closed trades · avg $ per trade, regular hours · saved ' + gateFwdEsc(d.savedOn) + '</div>' + rows + '<div class="fw-note">Averages are model P&L per trade. A verdict appears only at the pre-registered first look.</div>';
+  el.innerHTML = head + '<div class="fw-note" style="margin:0 0 4px">since ' + gateFwdEsc(d.forwardStart) + ' · <b>' + d.dates + '</b> trading days so far (each rule has its own floor) · ' + d.rows + ' closed trades · avg $ per trade, regular hours · saved ' + gateFwdEsc(d.savedOn) + '</div>' + rows + '<div class="fw-note">Averages are model P&amp;L per trade. A rule shows PASS or FAIL only when its own pre-registered floor is met; the last two rules use stricter 99% intervals because five rules are tracked together. Nothing here changes live trading.</div>';
 }
 async function loadGateForwardStrip() {
   if (Date.now() - gateFwdFetchedAt < 300000 && gateFwdLast) { renderGateForwardStrip(gateFwdLast); return; }
