@@ -1,0 +1,11 @@
+// study_poc_join_with_volume_20261020.mjs -- DISCOVERED 2026-10-20: the LIVE detector (server/services/pocRotationJoinDetector.js:131) passes bar VOLUME into detectSignalEvents (volume-weighted rolling median profile), while every research script
+// (including the 2026-10-08 exit validation) passed bars WITHOUT volume. Over Sep20-Oct16 only 27 of ~100 events coincide between the two constructions, and live rows match the with-volume construction 60/91 vs 25/91 without.
+// This re-runs the POC join E1 (realistic fills) on the WITH-VOLUME events over 3.5 years, by year/era/session, next to the no-volume population used so far.
+import { loadBars, buildEvents, fwd, simE1, mean, sum, f, dayCI } from './lib/pocJoinLoader.mjs';
+const FROM = '2023-03-06', TO = '2026-10-16', D = await loadBars(FROM, TO);
+for (const withVolume of [false, true]) { const ev = await buildEvents(D, FROM, TO, { withVolume }); const rows = [];
+  for (let i = 0; i < ev.length; i++) { const w = fwd(D, ev, i); if (!w) continue; const e = ev[i], m = +D.TS[e.ei].slice(11, 13) * 60 + +D.TS[e.ei].slice(14, 16); rows.push({ d: e.d, pnl: simE1(D, e, w[0], w[1]).pnl, year: e.d.slice(0, 4), era: e.d < '2025-06-01' ? 'PRE' : 'POST', session: m >= 570 && m < 960 ? 'RTH' : 'GLOBEX', long: e.long }); }
+  console.log(`\n=== ${withVolume ? 'WITH volume (live construction)' : 'WITHOUT volume (the research population used so far)'} === events ${rows.length}, mean ${f(mean(rows.map(r => r.pnl)), 2)}, total ${f(sum(rows.map(r => r.pnl)), 0)}, P(>=+100) ${(100 * rows.filter(r => r.pnl >= 100).length / rows.length).toFixed(1)}%`);
+  const cell = (label, a) => { if (a.length < 20) return; const [lo, hi] = dayCI(a, r => r.pnl, 1000); console.log(label.padEnd(10), String(a.length).padStart(5), f(mean(a.map(r => r.pnl)), 1).padStart(7), `[${f(lo, 0)},${f(hi, 0)}]`); };
+  for (const y of ['2023', '2024', '2025', '2026']) cell(y, rows.filter(r => r.year === y)); cell('PRE', rows.filter(r => r.era === 'PRE')); cell('POST', rows.filter(r => r.era === 'POST')); cell('RTH', rows.filter(r => r.session === 'RTH')); cell('GLOBEX', rows.filter(r => r.session === 'GLOBEX')); cell('LONG', rows.filter(r => r.long)); cell('SHORT', rows.filter(r => !r.long)); }
+process.exit(0);

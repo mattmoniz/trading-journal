@@ -29,10 +29,10 @@ const _theta = new Map();
 function thetaFor(D, d) { if (_theta.has(d)) return _theta.get(d); const a = lb(D.TS, addDay(d, -180) + ' 00:00:00'), b = lb(D.TS, d + ' 00:00:00'); let out = 6.75; if (b > a) { const v = new Float64Array(b - a); for (let i = a; i < b; i++) v[i - a] = D.H[i] - D.L[i]; v.sort(); const n = v.length, pos = (n - 1) * 0.5, lo = Math.floor(pos), hi = Math.ceil(pos), m = v[lo] + (v[hi] - v[lo]) * (pos - lo); out = Math.max(0.25, m); } _theta.set(d, out); return out; }
 // events from the REAL detector. opts: { R: 65, rMode: 'fixed'|'pct' }. Returns events with entry/anchor/leg info; `ei` = global index of the entry bar.
 export async function buildEvents(D, from, to, opts = {}) {
-  const { R = 65, rMode = 'fixed' } = opts, { T, TS, O, H, L, C } = D, events = [];
+  const { R = 65, rMode = 'fixed', withVolume = true } = opts, { T, TS, O, H, L, C, V } = D, events = [];   // withVolume DEFAULT TRUE (fixed 2026-10-20): the LIVE poller passes bar volume into detectSignalEvents (pocRotationJoinDetector.js:131). Without volume the profile median degenerates to the highest price of the profile (NaN total volume) and the events are a different signal (only ~27 percent overlap with the live-construction events); every 2026-10-08..2026-10-20 research script that omitted volume studied that other signal.
   const dates = (await query(`SELECT DISTINCT trade_date::text d FROM developing_value_log WHERE trade_date >= $1::date AND trade_date <= $2::date ORDER BY d`, [from, to])).rows.map(r => r.d).filter(d => !isInsideNqRollWeek(d));
   for (const d of dates) {
-    const a = lb(TS, addDay(d, -1) + ' 18:00:00'), b = lb(TS, d + ' 17:00:00'); const bars = []; for (let i = a; i < b; i++) bars.push({ ts: TS[i], open: O[i], high: H[i], low: L[i], close: C[i] });
+    const a = lb(TS, addDay(d, -1) + ' 18:00:00'), b = lb(TS, d + ' 17:00:00'); const bars = []; for (let i = a; i < b; i++) bars.push(withVolume ? { ts: TS[i], open: O[i], high: H[i], low: L[i], close: C[i], volume: V[i] } : { ts: TS[i], open: O[i], high: H[i], low: L[i], close: C[i] });
     if (bars.length < 100 || bars.length < 0.9 * (T[b - 1] - T[a] + 1)) continue;
     const theta = thetaFor(D, d);
     const { all_signal } = detectSignalEvents(R, 'standard', theta, [{ t: d, bars }], rMode);
