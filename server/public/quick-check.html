@@ -2277,8 +2277,15 @@ function renderShadowTab() {
 // POC Gate tab (2026-10-14) -- see the panel's own HTML comment for the full context. Every
 // real row carrying rotation_65pt_gate_shadow (tagRotation65ptGateShadow(), unconditional on
 // every real insert since 2026-10-08, independent of the now-disabled live-blocking flag).
+// Scoped to the current session via inCurrentSession() like Session Timeline and the Shadow tab
+// (fix 2026-10-19, user-caught: after the 6PM roll the tab still listed the finished RTH
+// session's trades, because this filter alone ignored session scoping; a still-open row from an
+// earlier session is kept, same rule as the other tabs).
 function getPocGateRows() {
-  return allTimelineRows.filter(r => r.rotation_65pt_gate_shadow);
+  const sessionDate = currentSessionDateET();
+  return allTimelineRows
+    .filter(s => inCurrentSession(s, sessionDate, currentSessionStartET()))
+    .filter(r => r.rotation_65pt_gate_shadow);
 }
 
 function pocGateRowHtml(s) {
