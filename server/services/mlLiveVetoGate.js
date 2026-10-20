@@ -177,7 +177,12 @@ async function scoreMlVetoGateInner({ entry, tradeDate, confluenceScore, minutes
     return { shadow: true, reason: 'ML_VETO_GATE_FEATURE_ERROR', verdict: null, probability: null, modelVersion: null };
   }
 
-  const existing = { nl30_at_detection: nl30AtDetection, confluence_score_at_detection: confluenceScore, minutes_from_open: minutesFromOpen };
+  // `?? null` (2026-10-21, OPEN_DECISION ml_scorer_422_missing_minutes_from_open_20261019): the cluster-sibling
+  // call site deliberately passes no minutesFromOpen (its row stores NULL, see that site's comment), and an
+  // `undefined` here is DROPPED by JSON.stringify, so the scorer saw the key as missing and answered 422.
+  // An explicit null sends the key, scores the same way the stored row would (missing value), and does not
+  // invent a value the row does not have.
+  const existing = { nl30_at_detection: nl30AtDetection, confluence_score_at_detection: confluenceScore, minutes_from_open: minutesFromOpen ?? null };
   const features = {};
   for (const [k, v] of Object.entries(pdFeatures || {})) features[`pd_${k}`] = v;
   for (const [k, v] of Object.entries(intradayFeatures || {})) features[`intraday_${k}`] = v;
