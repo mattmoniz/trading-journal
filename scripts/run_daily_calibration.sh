@@ -280,4 +280,11 @@ timed_step daily /usr/bin/node scripts/recheck_quantile_model_finding.mjs
 # live P. See OPEN_DECISION opening_drive_gate_6week_revisit_20260925.
 timed_step daily /usr/bin/node scripts/recheck_opening_drive_gate.mjs
 
+# Rotation-direction gate forward monitor (pre-registered, frozen definitions; docs/ROTATION_GATE_FORWARD_MONITOR_PREREG_20261020.md,
+# OPEN_DECISION rotation_gate_forward_first_look_20261020). Nightly run keeps the running AGREE/DISAGREE tally current and catches a
+# broken script/data gap within a day; it prints "NO DATA YET" instead of any PASS/FAIL until the pre-registered first-look thresholds
+# (>=20 forward dates and >=300 decided rows per side) are met, so checking nightly cannot cause optional stopping. Also runs weekly in
+# run_weekly_backtests.sh. Read-only except one RESEARCH_CLAIM upsert; never changes live behavior.
+timed_step daily /usr/bin/node scripts/monitor_rotation_gate_forward.mjs
+
 echo "=== Daily calibration complete: $(date) ==="
