@@ -14,3 +14,12 @@ For every episode (trigger = DROP at or above the rolling p50, p70 or p90 of its
 
 ## Rules
 Claude builds; DeepSeek reviews the code before the verdict is final. Record via recordClaim() whatever the result. RTH/Globex: 4h bars cover both sessions (24h), reported as one series; a session split is reported as secondary.
+
+## Addendum C (pre-registered 2026-10-20 before it was run; added after the user pointed out that fixed cutoffs are myopic because the timing and size of a counterpunch vary)
+Parts A/B above used a fixed 3-day horizon, a fixed 1 ATR20 race and a fixed percentile; Part B's primary failed at 18 bars while the 6-bar sensitivity passed, which is exactly the dependence on a chosen horizon the user warned about. Part C removes the fixed horizon and the fixed size.
+- Events: same as Part B (first bullish 4h reversal bar per p90 episode with c 0-17; control = the same bar outside any episode). Entry = that bar's close E. Hwin = highest high of the trailing 12 four-hour bars up to that bar. Skip events with E >= Hwin.
+- Size is each event's OWN: target(q) = E + q*(Hwin - E), q = 0.25, 0.5 (primary), 0.75, 1.0 (a full retrace of the drop). No ATR constant.
+- Timing is the whole curve: T_q = first bar k = 1..30 whose high reaches target(q) (censored at 30 = 5 days). CDF_ep(h) and CDF_ctrl(h) for h = 1..30.
+- Primary statistic (q = 0.5): maxD = max over h of [CDF_ep(h) - CDF_ctrl(h)] (a one-sided KS distance; no horizon is picked). Null: 200 shifted-episode placebo draws (each episode's first reversal re-found 20-120 sessions away in non-episode bars), same statistic. Also the episode-clustered bootstrap CI of D(h) at every h, and the median time to reach q in each group.
+- SUPPORTED only if (i) real maxD exceeds the placebo 95th percentile; (ii) D(h) > 0 for at least 70 percent of h in BOTH halves (explore 2023-03-06..2025-05-31 / hold-out 2025-06-01..2026-10-16); (iii) maxD stays positive after dropping the best episode; (iv) the other q values (0.25, 0.75, 1.0) all have positive maxD. Otherwise NOT SUPPORTED.
+- The sweep test (1-minute) had the same myopia (depth floor 0.03 ATR20 from a median, fixed 15-minute reclaim, fixed forward windows); a scale-free redo (depth as a percentile of the level's own trailing penetration distribution, whole forward path) is queued after this.
