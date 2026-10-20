@@ -1,15 +1,21 @@
 # Open Threads / Pending Work
 
-Older resolved/superseded threads are periodically moved to [OPEN_THREADS_ARCHIVE.md](OPEN_THREADS_ARCHIVE.md) (via `node scripts/archive_open_threads.mjs --apply`) to keep this file's per-session read cost down — nothing is deleted, just relocated. Still-pending items are backed by `OPEN_DECISION`/`RESEARCH_CLAIM` rows regardless, so archiving here never buries anything. Since 2026-09-07 this also applies per-bullet inside evergreen sections ("30-day shadow validation", "Pending decisions") — not just whole dated sections.
-## 2026-10-19 (15:15 ET): A2 range rewrites committed, deploy pending after the 16:05 index; page-load baseline; broker-stop gap found
+Older resolved/superseded threads are periodically moved to [OPEN_THREADS_ARCHIVE.md](OPEN_THREADS_ARCHIVE.md) (via `node scripts/archive_open_threads.mjs --apply`) to keep this file's per-session read cost down — nothing is deleted, just relocated. Still-pending items are backed by `OPEN_DECISION`/`RESEARCH_CLAIM` rows regardless, so archiving here never buries anything. Since 2026-09-07 this also applies per-bullet inside evergreen sections ("30-day shadow validation", "Pending decisions") — not just whole dated sections.## 2026-10-19 (15:15 ET): A2 range rewrites committed, deploy pending after the 16:05 index; page-load baseline; broker-stop gap found
 
 - **Server restarted 14:48 onto HEAD 3e8d7f7** (daily_rth_stats + day caches live; single process, sim auto-armed). Watch DEPLOY row sha `3e8d7f792d`.
+
 - **A2 committed (c2fc728), NOT yet live.** Cast-free `ts` ranges on the recurring bar reads (acd.js per-pass block, setupExpiry, marketPulse, morningBrief VA/overnight, priceRetrieval.getLatestBars, 90-day volume baselines, full-day ATR). `node scripts/test_range_rewrites_20261019.mjs` proves old==new on 8 dates (DST, Monday, roll week, today) for 18 query forms (float sums compared at 1e-9 because a different plan sums in a different order); each rewrite is ~2x faster even before the index. Invariants identical before/after (144 failures / 161 warnings, pre-existing; the 10-12 note of 120 is stale). **Not rewritten (out of scope, still `ts::date`):** the other ~400 sites; re-profile after deploy and take the next shapes by total ms.
+
 - **Pending jobs (detached):** `scratch/index_at_1605.sh` (A1 `idx_pbdh_ts` at 16:05) then `scratch/restart_when_flat_a2.sh` (waits until 16:08 and the index script has exited, then restarts once the account is flat; log `scratch/restart_when_flat_a2.log` + `_waiter.log`). `perf_expect` registered for `db_time_pct` and `detect_avg_ms` down. **Do not edit server files while that waiter is armed** (it restarts whatever is on disk). If it timed out: `./restart.sh`, verify one process.
+
 - **Proof still to do after the restart:** `node scripts/perf_report.mjs` once RTH and Globex are both seen; re-run `node scripts/measure_page_loads.mjs` (needs `npm run client`, stop it afterwards by PID, not `pkill -f`). **Baseline before A1/A2 (14:50 ET): Morning Prep ~20 s / 78 requests / 1.5 MB; Trades ~5 s; Dashboard ~88 s / 59 requests / 8 MB (`/api/stats/rolling` 3.3 MB per call); `/api/case` ~3 s per call alone, 14.7 s under load, polled every 10 s.** If `/api/case` is still ~3 s after A1/A2, wrap it in `microCache` (same pattern as market/pulse) -- deliberately not done yet so the A1/A2 effect stays measurable.
+
 - **Detection-poll outages:** 2 so far on 10-19 (baseline 49-156/day); RESOLVE `detection_poll_chronic_timeouts_rth_20261019` after 3 consecutive RTH days < 10 AND row-to-order median < 10 s.
+
 - **Rotation-flip closes verified working** (real EXIT orders submit and fill, 20+ rows on 10-19). New finding, flagged as `broker_stop_fill_not_reflected_in_app_row_20261019`: a broker STOP fill the app's bar feed did not see (tick 29807.00 vs bar high 29806.75) left rows 136552/136553 open 44 min, then closed as ROTATION_FLIP at +47.5 vs real -37. For real rows `broker_pnl` is the realized number; `actual_pnl` on ROTATION_FLIP rows is a mark against the signal entry.
+
 - **Nightly calibration (~39 min):** per-step timing starts tonight (`job_timings`); look at it tomorrow morning.
+
 - **Needs the user:** Anthropic credit (AI daily review failing since 08-27) -- explicitly set aside this session.
 
 ## 2026-10-19 (evening handoff): speed + monitoring work — what is live, what is pending
@@ -35,18 +41,6 @@ Fixed and re-run: truncate bars to each touch's own index before computing the l
 User's reaction mid-investigation, prompted by "not much firing in RTH" (which turned out to be simply that it was 7:33am ET, RTH hadn't opened yet): "Let move them to live. And review them in 2 months with the poc rotation filters affect" — an explicit instruction to wire the 44-type finding live despite the corrected, much-weaker evidence, which was surfaced plainly before proceeding. Shipped 24 of the 44 (`server/routes/acd.js`'s `WIDER_WINDOW_OVERNIGHT_LEVELS` array), after excluding: `PD2_VAH` (both directions — a dead entry in the research script, no real `level_prices` row under that name ever existed, zero real touches in the whole backtest); `DAILY_OPEN` (both directions — found live-checking this, `level_prices.DAILY_OPEN` has been stale since 2026-08-31, see below); the 16 pairs that already had a direction live elsewhere in the array. Every new entry routes through the exact existing pipeline (dynamic SHADOW→ACTIVE promotion via `getOvernightLevelLiveStatus()`/`PROMOTE_ALL_MODE`'s stat gate, and the rotation filter via `isRotationDirectionConflict()`) with zero new gate code, since both already apply to every candidate in that array. Verified: lint clean, `test_invariants.mjs` identical (120/165) via `git stash`, all 24 new level names confirmed resolving to a real current `level_prices` price, server restarted (the restart itself hit the Bash tool's own 60s foreground timeout and got backgrounded — verified per the standing rule for this exact failure mode that only one `node server/index.js` process existed afterward, correctly bound to port 3002, before trusting it), kill switch auto-rearmed on Sim1 per the standing per-profile exception. Review scheduled: `OPEN_DECISION globex_44type_rotation_filter_2month_review_20261012`, due ~2026-12-12.
 
 **Found along the way, not fixed tonight**: `level_prices.DAILY_OPEN` has not updated since 2026-08-31. Root cause: `scripts/compute_levels.js`'s `DAILY_OPEN` query requires a bar at exactly 9:30:00 ET for the date being computed, but both scheduled crons that call it (`server/index.js`'s Sunday 9:30PM and Mon-Fri 8AM runs) run BEFORE that date's own RTH open exists — structurally can never succeed on either schedule, only ever worked via manual backfill runs that apparently stopped around 8/31. Confirmed this is a safe-but-inert failure, not a mispricing one: the RTH consumer (`acd.js`'s `DAILY_OPEN_FADE` candidate) reads via an exact `trade_date=$1` match with no fallback, so it has simply gone silently dormant since 8/31 (missed real touches, never traded a stale number). `OPEN_DECISION daily_open_level_prices_stale_since_20260831` tracks the real fix (a retroactive "yesterday" catch-up run, not just the existing "today"/"upcoming session" crons).
-
-## 2026-10-11: PROMOTE_ALL_MODE revised to a real statistical gate (DONE, shipped)
-
-Two problems drove this, both raised directly: (1) the user's own 10-day real-trade check on `promote_all_roster_review_20261013` showed primary (real-capital, no live capital at risk — sim/evaluator accounts) trades net negative under the 2026-09-28 unconditional-promote version (mean -$8.91/trade over 250 trades vs +$2.12/trade before); (2) the user pointed out the OLD pre-9/28 `SUPPRESS_MIN_N=20` floor had a real asymmetry bug — LONG and SHORT variants of the same setup_type accumulate real touches at different rates depending on which direction the market favored, so one side could clear the floor and go live while its mirror sat `THIN_N` indefinitely, purely an accumulation-speed artifact, not a quality signal. "The 20 is arbitrary" was the user's framing.
-
-Fix: `scripts/backtest_setup_status.mjs`'s `PROMOTE_ALL_MODE` branch no longer promotes everything unconditionally. Below `MIN_DISTINCT_DAYS_FOR_STAT_GATE=5` real distinct trading days, a type still promotes `ACTIVE` by default (not enough evidence yet — same benefit-of-the-doubt posture, applied symmetrically to both sides of a LONG/SHORT pair). At or above that floor, a `dayBlockedBootstrapCI()` (`server/services/rigorDiagnostics.js`, already built, already used elsewhere — no new statistical machinery) 95% CI is computed on the type's real EV; suppress only if the CI sits entirely below $0 AND the real trades aren't day-clustered (`computeRigor().clustered`, matching the `SETUP_STATUS_DOW` precedent). Deliberately a pure sign test, not a magnitude test — the old `-$5/trade` requirement is gone, per explicit user confirmation ("ignore ev" clarified to mean: EV is the thing being tested, but the dollar-magnitude floor is dropped). Persisted per-type in `notes.stat_gate` for auditability.
-
-Verified: lint clean, full run against real data (exit 0), `test_invariants.mjs` failure/warning set byte-identical before/after (`git stash` comparison), `stat_gate` confirmed landing correctly in `performance_audit` via direct query. This script is cron-only (Sunday 10:30pm ET + daily 8:20pm ET), not imported live by the server, so no restart was needed.
-
-First live run result, worth knowing before assuming this is already biting: 0 new suppressions. 10 setup_types showed a confidently-negative CI (e.g. `CAM_R3_FADE_LONG` CI=[-57.29,-15.79], `PD_SESSION_MID_FADE_SHORT` CI=[-34.78,-1.50]) but all 10 were held back by the day-clustering guard — most of the roster is only ~7-16 distinct real trading days old since `PROMOTE_ALL_MODE` first shipped 2026-09-28, so `top5DayPct` is mechanically high regardless of real quality (a cold-start artifact, not a flaw in the test). Tracked as `OPEN_DECISION promote_all_mode_stat_gate_coldstart_watch_20261011` — revisit in 2-3 weeks once more distinct days have accumulated to confirm the gate actually starts suppressing, not just sitting permanently lenient. The pending `promote_all_roster_review_20261013` decision (keep-vs-revert `PROMOTE_ALL_MODE` entirely, based on real primary-trade P&L) is unaffected by this change and still due 2026-10-13.
-
-Not done: the standing 3-phase DeepSeek review this codebase's own rule calls for on higher-stakes live-wiring changes. Deferred, not skipped — flag before the next related change in this area.
 
 ## 🔴 CURRENT TOP PRIORITY (set 2026-07-29): risk management, not more entry-signal research
 
@@ -125,185 +119,6 @@ Don't reflexively reach for either without re-measuring first — finishing the 
 ## 2026-10-07: DeepSeek review of branch fix/sierra-wiring-items-3-6-7-8-20261007 — one fix applied, two open
 
 Read-only review (plan mode, auto-approve off, full diff embedded in the prompt so no tool calls were needed) found nothing blocking arming, with one real fix applied and two items left open, not blocking:
-
-- **Fixed**: `dllGateDecision()` (`server/services/sierraChart/dllGate.js`) used to report `unknownCount > 0` (a trade closed with no broker_pnl recorded yet) without blocking — fail-open exactly when reconciliation is lagging and a real loss could be hiding past the limit. Now blocks. Test added to `scripts/test_broker_guards.mjs`.
-
-
-
-- **Not a bug (verified against the DB, not just re-asserted)**: the reviewer flagged `scripts/repair_stale_exit_rows_20261007.mjs`'s hardcoded `IDS=[4,16]` against setups 127681/127693 as a discrepancy to confirm — already confirmed earlier the same day via a direct query (row 4 = 127681's EXIT, row 16 = 127693's EXIT).
-
-
-
-- **Open, not blocking**: the position invariant's baseline assumes the broker was flat at `order_placements_invariant_baseline`'s own baseline id — never independently confirmed, just asserted in a comment. `getBrokerSnapshot`'s 3-second collection window could miss a position message in some environment, which would fail-closed (refuse every exit) rather than silently misbehave — also not independently tested against a real DTC session dropping a position message.
-
-## 2026-10-07: Native OCO bracket test on Sim1 -- FAILED, decisive negative, real position opened and closed
-
-Live test (user-authorized): a parent SELL LIMIT far from market (33000, last price ~31267) followed
-immediately by the OCO children (STOP BUY @33200, LIMIT BUY @32800), via the new `placeBracketEntryOrder()`
-build. Intended to be unfillable by all three legs. Instead: the parent filled INSTANTLY at market
-(31267.25, not its 33000 limit -- the same sim-fills-at-market behavior documented 2026-10-05/07), and
-both OCO children were REJECTED with "There is no parent order for child OCO order" -- the parent had
-already transitioned to FILLED before the server processed the OCO submission, even though the two
-messages were sent back to back with no `await` between them. Result: a real, completely unprotected
-short position (-1 MNQZ6), zero stop, zero target. Flattened immediately (BUY @31272.00, -$10.50 before
-commission) and recorded in the ledger (`scripts/record_oco_test_trade_20261007.mjs`); invariant confirmed
-back to 0 against a flat broker.
-
-**This is not "untested" anymore -- it's a decisive negative for Sim1 specifically.** Sierra's own
-documented bracket procedure requires the parent to still be pending/working when the OCO message
-arrives. Sim1's simulator resolves a fill synchronously at order-submission time, before the next
-message can be processed as "parent still pending" -- so ANY parent order (not just one at an extreme
-price) will outrun the OCO submission on this venue, every time. `SIERRA_USE_OCO_BRACKET` must stay off
-on Sim1 -- enabling it would systematically produce naked, unprotected positions, worse than today's
-existing standalone-stop-after-fill path, not just an unverified improvement on it.
-
-**Not yet determined**: whether this is purely a Sim1 (local-fill-simulation) artifact that a venue which
-actually rests orders (the real Rithmic-backed sim, or further up the stack) would not share, or a more
-general DTC-server-side race this build's own back-to-back-no-await submission can't close no matter the
-venue. The message ordering is correct per the protocol doc; the failure is in how fast the venue resolves
-the parent, not in this app's own submission logic. `OPEN_DECISION oco_bracket_sim1_structurally_broken_20261007`
-tracks the follow-up: find a venue that genuinely rests a LIMIT order before testing bracket linking again,
-or confirm this fails the same way there too.
-
-## 2026-10-07: Sierra Chart depth-data recurring cleanup -- PRIORITY, not yet built
-
-One-off cleanup done (746 files/214.58 GB deleted, everything over 90 days, all symbols) during the
-OCO investigation. Still needed: a recurring job (Windows Task Scheduler, daily) running the PowerShell
-delete-older-than-N-days command against `C:\SierraChart\Data\MarketDepthData\*.depth`, matched on the
-real filename date (`SYMBOL.YYYY-MM-DD.depth`, UTC), not file mtime. Also still open: check which other
-symbols (ES confirmed) have "Record Market Depth"=yes in Global Symbol Settings and decide whether that's
-intentional before deciding the recurring window (30 vs 90 days). This is Windows/Sierra-Chart-side
-infrastructure, not app code -- nothing in this repo depends on it, flagged here only so it isn't lost
-across sessions.
-
-## 2026-10-07: Resting-order investigation RESOLVED -- real cause was symbol/exchange format, not the venue
-
-Confirmed via a real round-trip test against the new Trading Evaluator instance (SierraChart-DTC,
-account DTC-Live-Simulator, port 11199): a SELL LIMIT far from market (40000) submitted with Symbol and
-Exchange as separate fields ("MNQZ26"/"CME") rested for the full 15-second test window with no fill, and
-canceled cleanly ("Simulated order canceled") -- the first clean resting-order result all session.
-
-**Root cause of every earlier failure (Sim1 AND the first several Trading Evaluator attempts): the order
-symbol was sent as one combined string ("MNQZ26.CME"/"MNQZ6.CME") with Exchange left empty -- matching
-this app's existing Rithmic convention (contractSymbol.js/dtcClient.js). The Trading Evaluator service
-rejects that format outright ("Order is not allowed based on the symbol"), before ever reaching real
-order-matching logic.** This is NOT the same bug as Sim1's instant-fill-at-market behavior -- it's a
-separate, earlier-stage rejection that looked superficially similar (both prevented an order from
-resting) but has a completely different cause and fix.
-
-Two other real blockers found and fixed along the way, both specific to the new simulated account, not
-the symbol-format bug: (1) Symbol/Product Limits on the account defaulted to Trade Position Limit=0 /
-Order Quantity Limit=0 for ALL_SYMBOLS -- raised to 10, matching the app's own existing position-limit
-convention; (2) the account had $0.00 funded balance with margin required, confirmed via a real manual-UI
-rejection message ("Insufficient Account Value (NLV)... Account Value: 0.00") -- funded to $1,000,000 to
-unblock testing, NOT yet reconciled against MNQ's real margin requirement (the $4,361 margin figure cited
-in that rejection looks like NQ-sized margin, not MNQ -- MNQ is 1/10th NQ's size by design --
-`OPEN_DECISION mnq_margin_config_may_be_using_nq_values_20261007` tracks checking the MNQ symbol's own
-margin setting for a literal NQ-value copy-paste before trusting any further margin-gated test here).
-
-**What this means for the OCO bracket build:** the earlier `oco_bracket_sim1_structurally_broken_20261007`
-finding is correct for Sim1 specifically (it fills everything at submission, confirmed via its own
-"Simulated order accepted" -> immediate fill signature, a real and different behavior from this symbol
-rejection) but does NOT mean native OCO brackets can't work at all. The actual bracket (parent + OCO
-children, not just a single resting order) has STILL NOT been tested on this corrected venue/format --
-`placeBracketEntryOrder()`'s current code sends the combined Symbol.Exchange format everywhere, which
-would hit this same rejection on this venue. Before retrying the bracket test here, either add a
-per-connection symbol-format mode to contractSymbol.js/orderSweep.js, or construct the split-field
-request manually for this one-off test, matching what test_evaluator_resting5.mjs did.
-
-## 2026-10-07: OCO bracket -- REAL FIX FOUND AND CONFIRMED LIVE, two gaps remain before arming
-
-Root cause of every "no parent order for child OCO order" rejection, found after extensive dead-end
-troubleshooting (symbol format, timing, account settings, a restart, a secondhand DeepSeek guess that
-was checked and disproven): `IsParentOrder`/`IsAutomatedOrder` are `uint8_t` in the real DTCProtocol.h
-struct, not `bool`. dtcClient.js was sending them as JSON `true`/`false`. The Trading Evaluator server
-silently never registered the order as a parent when sent that way -- the order itself was accepted
-fine, but `IsParentOrder` effectively never took, so every subsequent OCO child submission correctly
-(if confusingly) found "no parent order." Switching both fields to the integer 1 fixed it immediately,
-confirmed via the real `submitOrder()`/`submitOcoOrder()` methods, not just a hand-built message: parent
-shows "Server side bracket order," both children come back `PENDING_CHILD` (status 3) correctly
-referencing the parent's real ServerOrderID, and canceling the parent correctly cascades to cancel both
-children automatically. Fixed in `server/services/sierraChart/dtcClient.js`; `scripts/test_oco_submission.mjs`'s
-assertions updated to check for the integer (the old assertions had been checking for `true`, which is
-why this bug shipped unnoticed in the first place -- a number computed twice by the same code isn't
-verification, same lesson, now caught in a test rather than a comment).
-
-**Two real gaps before this can be armed in production, not yet closed:**
-
-1. **Never tested against Sim1/Rithmic, only against the Trading Evaluator test instance.** The split
-   Symbol/Exchange field format (`"MNQZ26"`/`"CME"`, not `"MNQZ26.CME"`/`""`) was required by the
-   Evaluator specifically. Production's `contractSymbol.js`/`orderSweep.js` still build the combined
-   format, matching Rithmic's own convention (confirmed working for plain ENTRY/STOP orders all session).
-   Whether Rithmic/Sim1 needs the same split-format fix for a bracket submission, or accepts the combined
-   format brackets use fine, is unverified -- this fix was proven on a different venue than the one
-   `SIERRA_USE_OCO_BRACKET` would actually route through.
-2. **No independent review of this fix**, per the standing higher-stakes-work rule. This is real-money-
-   adjacent code (even though today's testing was entirely on sim/eval accounts) and hasn't been through
-   DeepSeek or a second pass.
-
-`OPEN_DECISION oco_bracket_fix_needs_rithmic_test_review_20261007` tracks both before
-`SIERRA_USE_OCO_BRACKET` is ever set true against the production connection.
-
-## 2026-10-07: Symbol/exchange wire-format fix shipped, isolated to dtcClient.js alone
-
-Resolves item 1 of the decision above (the Rithmic-vs-Evaluator discrepancy) by making the fix
-venue-agnostic rather than venue-specific. Real root cause, confirmed by a controlled A/B test on
-one unchanged account earlier the same day: this app has always sent the order symbol to Sierra
-Chart as one combined string (`"MNQZ6.CME"`) with `Exchange` left empty, matching an assumption in
-`contractSymbol.js`'s own header comment that turned out to be wrong -- the real DTC wire protocol
-wants `Symbol`/`Exchange` as two separate fields, and sending them combined produces two different
-failure modes depending on account/server: Sim1 silently fills at market instantly regardless of
-price (why every real stop today filled far from its calibrated `stop_level`); the Trading
-Evaluator rejects the order outright ("not allowed based on the symbol").
-
-**Fix is isolated to exactly one file.** `dtcClient.js` gained a small module-level helper,
-`_splitSymbolForWire(symbol, exchange)`, called inside `submitOrder()`/`submitOcoOrder()` right
-before the wire message is built -- it splits a combined `"SYMBOL.EXCHANGE"` string on its last
-`.` into the two real fields, or passes through unchanged if the caller already supplied a split
-`exchange`. **Deliberately does NOT touch `orderSweep.js`, `reconciliation.js`, or
-`connectionManager.js`** -- all three keep passing/storing the combined form exactly as before,
-which is correct for them: `order_placements.symbol` (the DB identity column),
-`extractPositionForSymbol()` (matches broker-reported `positionMessages[].Symbol`, which the broker
-always reports in combined form), and `checkPositionInvariant()`'s `WHERE symbol = $1` lookup all
-depend on the combined string staying the single identity key used consistently throughout the
-app. Splitting anywhere upstream of the wire-serialization layer would have silently broken
-position-invariant matching (the DB column would stop matching what the broker reports) -- this
-was checked and specifically avoided, not just an oversight that happened not to bite.
-`contractSymbol.js`'s header comment, which had incorrectly asserted the venue "embeds the
-exchange directly into the Symbol field" as a convention, is corrected to describe the real
-mechanism and explicitly flag which call sites need the combined form.
-
-Also fixed in the same edit: `IsParentOrder` is now always sent explicitly as `0` or `1`, never
-omitted when false (previously conditionally added to the message only when true).
-
-Verified before committing: `scripts/test_oco_submission.mjs` updated (checks the split actually
-happens for a combined-form caller, checks an already-split caller and a bare no-dot symbol both
-pass through unchanged, checks `IsParentOrder` is explicit 0) and passing; `npx eslint` clean on
-all 3 touched files; both edited modules confirmed to import cleanly under real ESM (not just
-`no-undef`); `test_invariants.mjs` byte-identical failure/warning count (129/170) before and after
-via `git stash`. Not yet done: a live round-trip test of this exact diff, and independent review --
-tracked at `OPEN_DECISION oco_bracket_wire_split_fix_needs_review_20261007`, which also carries
-forward that the account switch (new DTC-Live-Globex account on the Evaluator instance), `.env`
-change, restart, and re-arm are all still explicitly deferred pending your separate go-ahead.
-
-## 2026-10-07: `requestSecurityDefinition()` checked, deliberately left unsplit
-
-Per DeepSeek's Q3/S6 ask to grep every Symbol/Exchange construction site, not just order
-submission: `requestSecurityDefinition(symbol, exchange)` (dtcClient.js, called by
-`priceMultiplier.js` with the combined form, no exchange) builds the wire message the same
-unsplit way `submitOrder()` used to. **Deliberately not changed.** This call site is confirmed
-*working* today with the combined format (`priceMultiplier.js`'s own header: a live
-`SECURITY_DEFINITION_FOR_SYMBOL_REQUEST` for `"MNQZ6.CME"` correctly returned
-`DisplayPriceMultiplier`, verified 2026-09-29), and `getPriceMultiplier()`'s response matching
-(`msg.Symbol !== symbol`) depends on the response echoing back the exact combined string sent in
-the request. Splitting the request side without being able to verify from here whether the
-response's `Symbol` field would still come back combined or split risks silently breaking a
-correctness-critical, already-working mechanism (fill-price interpretation) for no demonstrated
-bug -- unlike order submission, which was confirmed broken two separate ways. If this is ever
-revisited, it needs a live A/B on the response format first, not a blind copy of the order-path
-fix.
-
-
 
 ## 2026-10-13: Multi-position-stacking build -- shipped, NOT yet live, DeepSeek review drafted not dispatched
 
@@ -687,36 +502,63 @@ not just in test fixtures.
 
 ## 2026-10-18/19 overnight session (Sierra incident + bias-state research) — handoff
 - **Done and committed (last commit `49af673`):** stranded short 136064 flattened by a guarded manual close; baseline reset id 4; order-account label bug found (the default order path never sends the per-session account; 63 orders 2026-10-13..18 were labelled Globex but ran under DTC-Live-Simulator) — repaired labels (backup `order_placements_trade_account_backup_20261019`), set `DTC_GLOBEX_TRADE_ACCOUNT=DTC-Live-Simulator`, mismatch now DETECTED not rewritten, boot warning; `POSITION_SAMPLE` trigger migration; ML scoring supervisor hardened (reap stale scorer, retry, kill on exit, banner on scorer down / gate fail-closed); daily-loss gate unblocked by repairing 136064's entry price (29784) and `broker_pnl` (+161.00). Details: CLAUDE.md "Where to look" first Sierra entries, `docs/SIERRA_CHART_NOTES.md`.
+
 - **Directional bias state study (crack size + open single print + stretch):** market-level L1 failed its pre-registered kill rule; roster-level "with the prior-2-session direction beats against" exists only in the BACKFILL simulation and does not replicate for the same setup families in the real era; nothing built or wired. `docs/DIRECTIONAL_BIAS_STATE_SPEC.md` sections 10-12, claims `bias_state_*`, `ib_break_hold_continuation_bar_level_20261018`, `globex_heavy_leg_leads_rth_lag_20261018`. Successor decision `bias_state_real_era_recheck_20261019` (data-gated).
+
 - **Open (all flagged as OPEN_DECISIONs, see `node scripts/flag_decision.mjs --list`):** `dll_gate_blocks_entries_if_entry_price_missing_20261019` (HIGH, will recur), `sierra_post_fix_first_live_trade_verification_20261019`, `server_logs_too_noisy_for_incident_diagnosis_20261019`, `shadow_no_reason_rows_leak_to_live_20261019`, `poc_exit_shakeout_in_trend_test_20261019`, `catchup_select_distinct_order_by_error_20261019`, `per_order_account_routing_unproven_20261019`; existing `manual_sierra_action_no_broker_pnl_visibility_20261013` is again relevant (the manual close had no broker P&L until set by hand).
+
 - **Standing user-stated facts from this session:** shadow is a pipeline to live; the declustered lens is the primary one; DeepSeek peak pricing is 21:00-24:00 and 02:00-06:00 ET (off-peak 00:00-02:00 and 06:00-21:00, Fri 20:00-Sun 21:00); the user reads setups as IB break + hold + open TPO single prints below and watches velocity live — none of that is tracked in the app, and the single-print magnet effect was NOT supported in 11 months of data (22-36% reached vs 55-67% for a mirror level, n=9/11).
 
 ## 2026-10-19 (day): daily-loss gate no longer dies on an unpriced fill
 - **Root cause (confirmed from the journal + raw message log, not guessed):** `getPriceMultiplier()` cached a 4s-timeout lookup as `null` for the process lifetime. After the roll to `MNQZ26.CME`, the first fill (setup 136064, 23:29 ET 10-18) and every update after it (10 "no price multiplier known" lines through 23:33) stored `avg_fill_price` NULL, so `dllGate.js` had no worst case and refused all entries until a hand repair + restart.
+
 - **Fixed (live, server restarted 07:50 ET, single process, auto-armed on sim):** short retry window + shared in-flight lookup (`priceMultiplier.js`); `fillPriceRepair.js` repairs NULL fill prices from the kept raw message each sweep; the gate prices a missing-entry trade from the order price / setup entry level instead of blocking everything (no stop or no price at all still blocks). `scripts/test_fill_price_gap.mjs` passes; `test_broker_guards.mjs` passes.
+
 - **Remaining caveats:** the estimate uses the limit price as an upper bound on risk, which does not hold for a MARKET entry that slips (setup entry level is used there). The 3 Sim1 rows from 2026-10-06 (ids 31/33/35) were refused by the sanity check, not a multiplier failure, and are outside the 3-day repair window. Not yet independently reviewed — see `OPEN_DECISION dll_gate_price_fix_needs_independent_review_20261019`.
+
 - **Prevention added (same day):** multiplier warm-up for the current and next contract month every 15s; "SIERRA NEEDS YOU" banner kinds `UNPRICED_FILL` and `ENTRIES_BLOCKED_BY_DATA_GAP`. Not yet observed firing for real (no unpriced fill since); the alerts are covered by `scripts/test_fill_price_gap.mjs` part 4 only. Server restarted 07:57 ET, single systemd process, auto-armed on sim.
 
 ## 2026-10-19 (day, cont.): the 6:33 PM signal and the "no-reason shadow" rows
 - **6:33 PM Sunday signal (setup 136052) was NOT the daily-loss gate.** Row bar time 18:33, inserted 18:41:34 (8.6 min late), expired 18:42:01. The order sweep only enters rows under 3 min old (`ENTRY_LOOKBACK_MINUTES`), so it could never get an order. Why the row was written late is NOT fully established (journal for that window is gone; bars for 18:25-18:49 exist now but their arrival time is unknown). Facts: `process_log` shows 8 SERVER_SHUTDOWN (SIGTERM) events between 17:49 and 18:49 that night (the stranded-short session restarting the server repeatedly), one at 18:40:33; the row was inserted at 18:41:34, on the first poll after that restart. The old process (up since 18:04) did not insert it in the ~7 min after the bar time, which is unexplained (candidates: late Sierra bar export at the Sunday reopen, or the known stale-live-bars issue in the `price_bars_primary` hard rule). `ORDER_LIFECYCLE ... AUTO_RESOLVED MISSING_ORDER` in `scratch/server_errors.jsonl` (18:42) did record that no order ever existed. 4 of ~44 POC rotation rows in 14 days were >3 min late.
+
 - **"No-reason" SHADOW rows = a missing label.** See `OPEN_DECISION shadow_no_reason_rows_leak_to_live_20261019` (updated) for the cause breakdown; the shadowCandidates insert never writes `suppression_reason`, the early-touch insert is hardwired SHADOW. Fix shipped in code (`SHADOW_CAUSE` rows in `gated_candidates`) but the server restart is pending because a real position (setup 136090) was open. `momentumChaseDetector.js` is hardwired SHADOW with no promotion path (new decision `momentum_chase_hardwired_shadow_no_promotion_path_20261019`).
+
 - **Gate-cost test (history only, `scripts/analyze_shadow_gate_cost_20261019.mjs`, `RESEARCH_CLAIM shadow_gate_cost_by_reason_20261019`, PROVISIONAL):** no gate is shown to cost money. Post-10-12 (primaries, REAL_TRADE_FILTER, POC separate): OPPOSITE_DIRECTION_OPEN blocked N=37 at -$15.21/trade (CI -$54..+$2.5; the earlier 5 weeks were +$2.01, N=102); ROTATION_DIRECTION_CONFLICT blocked N=29 at +$9.93 (CI -$58..+$75, 3 days, not decisive); SAME_TYPE_REFIRE N=16 +$13.90 (earlier window -$21.40, N=14: sign flips); STOP_NEVER_SWEPT N=22 -$42.55 (CI excludes zero, the gate is right). The unlabeled SHADOW bucket was +$6.35/trade over N=101 on 5 days that week, but -$5.99/trade over N=419 on 25 days in the previous 5 weeks (sum -$2,509). So the one-week "+$1,994 shadow shorts" is not a repeating pattern. The live baseline for the same week is thin (N=19, 4 days), so deltas vs live are weak. Caveat: a gate-blocked trade is not independent of the position that blocked it, so this is a guide, not collectable P&L.
+
 - **Follow-ups 2-4 done (2026-10-19 08:39 restart, single systemd process, auto-armed on sim):** (2) `/api/setups/today` now returns `shadow_cause` for unlabeled SHADOW rows (batched query, ~1 ms, endpoint 0.16 s) and `quick-check.html`'s Shadow tab maps it to plain English (`blockedReasonText`/`abbrevReasonCode`); rows from before 2026-10-19 08:13 have none and keep the generic text. (3) `scripts/analyze_momentum_chase_shadow_record_20261019.mjs` is now in `run_daily_calibration.sh` and auto-flags `momentum_chase_n20_promotion_review_20261019` once the live SHADOW record reaches N>=20 (now N=14). (4) The last unexplained row, `RSI_DIV_BULLISH` id 136051, is explained: it was that type's first-ever fire (15:57 on 10-16) and its first SETUP_STATUS row was created at 20:22 that night, so `isLiveEligible()` treated it as an unknown type (fail-closed by design). All 6 formerly unexplained rows are accounted for. (1) Verifying SHADOW_CAUSE rows on a real RTH session is still pending (no SHADOW rows existed before 08:37); a background watcher prints the result when 5 cause rows exist.
 
 
 
 ## 2026-10-19 (day, cont.): review of the gate fix, catch-up, logs, late-signal note, POC exit shakeout
 - **DeepSeek review of the daily-loss gate fix** (`scratch/deepseek_response_dll_gate_price_fix_review_20261019.md`): 7 findings, all verified against the code, all fixed (rolling-p95 slippage allowance in the unknown-trade worst case, `NULLIF(price1,0)` for escalated MARKET rows, 5% magnitude guard in the repair, shared banner text constant, qty floor, LastFillPrice fallback, failedAt stamped at request time). Side find: the market-escalation UPDATE set `filled_quantity = NULL` on a NOT NULL column and could never run (proved in a rolled-back txn) -> now 0; that one-line change was not separately reviewed.
-- **Catch-up job** was dead after 2026-08-31 (see the CLAUDE.md entry above); fixed + loaded 09:10. The AI daily review has been failing on exhausted Anthropic credit since at least 10-13 (`anthropic_api_credit_exhausted_ai_review_failing_20261019`, needs the user).
+
 - **Logs**: db.js logs only queries >=500 ms; DTC type 600 (ACCOUNT_BALANCE_UPDATE, confirmed in the local DTCProtocol.h) is handled; ~600 -> far fewer lines/min. **Too-old signals** now always leave a `SIERRA_ENTRY_SKIP` note (once per row, also for rows that already expired). `getFullDayATR` bounded + cached (31 dates byte-identical).
+
 - **POC exit shakeout test** (`scripts/backtest_poc_exit_shakeout_trend_state_20261019.mjs`, `RESEARCH_CLAIM poc_exit_shakeout_trend_state_20261019`): NO state-conditional disable supported (all DiD CIs cross zero, halves flip sign, permutation p>0.3). Incidental, NOT acted on: removing the rotation-flip close beat keeping it by ~$7.91/trade overall (CI $1.03..$16.43, both halves positive; Globex +$9.12 CI $0.09..$19.69, RTH +$5.05 CI crosses zero); the breakeven snap helps (-$4.21 when removed, CI -$6.74..-$1.65). Per the 2026-10-11/12 confound rule the flip-close is judged on forward data, not reverted: see `OPEN_DECISION poc_flip_close_marginal_value_review_20261019`.
+
 - **Harness validated, and the shipped BE-hold headline restated:** the shakeout script reproduces `poc_rotation_breakeven_hold_100pt_stop_20261008` (day-weighted +$37.40 vs claimed +$39.13), but the per-trade mean is +$12.32, CI [$5.20,$20.39] -- still positive, about 3x smaller than the headline (`RESEARCH_CLAIM poc_be_hold_claim_per_trade_vs_dayweighted_20261019`).
+
 - **Chronic detection-poll timeouts found (2026-10-19, HIGH)**: the 15 s poll timed out 49-156 times per RTH day for at least two weeks (92 outages / ~55 min on 10-16). Caches + a query profiler shipped today; objective metric is the `SETUP_DETECTION_POLL` outage count in `process_log` (baseline 49-156/day). See `OPEN_DECISION detection_poll_chronic_timeouts_rth_20261019`.
 
 ## 2026-10-19 (afternoon): speed round, Monday gate, order latency
 - **Result of round 1 (steady state, after warm-up):** DB time 113% -> 22% of wall clock, detection pass avg 9.8 s -> 2.6 s, 0 poll outages in 30 min (baseline 49-156/day). Remaining top queries were 60 s-TTL cache misses (fixed with `DAY_CACHE_TTL`).
+
 - **Shipped after that:** JIT off per connection; 15 s micro-cache on market/pulse + live-session-context; event-loop reading in the profiler; server poller uses `?fresh=1` (the 20 s cache was swallowing every 2nd poll => real passes ~30 s); end-of-pass order sweep; reconciliation confirm-then-halt + 45 s halt recheck (false "unknown order" halt 10:32-10:43 cost >=5 entries); `getFullDayATR`/`getRollingATR`/volume baseline/prior-day range/prior-5 brackets/IB-OR values cached; raw-table window anchors (10x). Monday gate removed (user decision).
+
 - **Order-latency baseline BEFORE the end-of-pass sweep + fresh polls:** row -> ENTRY order median 25.5 s / p90 34.4 s / max 63.5 s (9:30-10:30, n=9); 35.8 s / 60.7 s / 64.0 s (10:30-12:05, n=12). Re-measure after the deploy with `node scratch/...q66` equivalent (`order_placements.created_at - active_setups.created_at` for purpose ENTRY).
+
 - **Open:** compare steady state again after the restart; consider `random_page_cost = 1.1` (volume baseline 170 -> 121 ms in a test) one change at a time; persist day caches across restarts (cold start still costs ~60 s of DB on JIT-off? re-measure first).
+
 - **Post-deploy measurement (restart 12:23, 14 min steady state; `?fresh=1` polls + end-of-pass sweep + JIT off + caches):** row -> ENTRY order delay median 0.8 s, p90 1.0 s, max 1.1 s (n=2 only, 12:25-13:00 was quiet -- thin, re-measure over a full active session; baseline was median 25-36 s, p90 34-61 s, max 64 s). Real passes now run every poll (33 passes / 517 s), avg 2.6 s incl. the end-of-pass sweep; DB time 23% of wall clock; 0 poll outages since 12:25; event loop NOT blocked (mean 20.6 ms = the 20 ms timer resolution, p99 20.9 ms, one 288 ms spike) => remaining time is database wait, not CPU. Top remaining per-pass queries (each ~130-390 ms): rth_low/rth_high, AVG(volume), recent-close series, ib_high/ib_low -- diminishing returns; first poll after a restart still takes ~46 s (cache fill).
 
+
+
+## 2026-10-19 evening: derived tables extended to 3.5 years, level-reaction study, roster replay NEXT
+
+- **Done: derived rows for the 433 missing RTH sessions (2023-03-06..2025-05-21).** `scripts/backfill_derived_tables_long_history_20261019.mjs --write` created developing_value_log (433), acd_daily_log OR/A levels (433; NO a_up/c_up/day_type/daily_score, so A/C/TRT/IB_BULL-BEAR/day-type-gated setups are NOT replayable on these dates) and level_prices (433 dates, 0 failures) through the real producers, insert-only. Created dates are listed in `scratch/longhist_derived_created_dates.json` (delete those dates from the 3 tables to undo). developing_value_log.session_high matches the bars on 433/433.
+- **Open data problem: 6 quarterly-roll Fridays (2023-12-15, 2024-03-15, 2024-06-21, 2024-09-20, 2024-12-20, 2025-03-21) have PD_HIGH/PD_CLOSE ~275 pt off the bars** (derived levels sit on the expiring contract). Any replay must skip days where PD_CLOSE disagrees with the prior session's last RTH close by >0.1 ATR (the level study skipped ~58 days this way, roll days plus a few others; cause of the non-roll mismatches NOT traced). Root cause (compute_levels.js contract choice on roll days) not fixed.
+- **Level-reaction study (user: "does price react at levels, should we fire/time differently") -> NO.** `scripts/study_level_reaction_timing_20261019.mjs`; real vs shifted-placebo levels, 12 families: 60-min difference -0.011..+0.010 ATR, CIs cross zero (IB_today +0.010 vanishes at proximity 0.05); delaying entry 5/15/30 min no help; overshoot past a level median 0.01-0.04 ATR. Independently re-derived by Gemini 3.8 Flash(High) (`scratch/gemini_level_reaction.mjs`, report `reports/gemini_level_reaction_2026-10-19.md`), agrees within ~0.005 ATR. `RESEARCH_CLAIM named_levels_no_reaction_beyond_placebo_20261019` (CONFIRMED). Caveats: levels so dense an isolated-level contrast is untestable; this is an unconditional touch average, not the selected roster with stops/targets.
+- **Gemini note:** its settings model is now `Gemini 3.8 Flash (High)`; `invoke_gemini.sh` refuses non-Pro unless `ALLOW_FLASH=1`. The user chose Flash(High) 2026-10-19; it completed a spec-driven, read-only re-derivation fine (response file stays empty until the run ends -- the wrapper captures stdout, so empty mid-run is normal; check `scratch/gemini_*.mjs` for progress). Old staged request preserved at `scratch/claude_request_20261013_poc_timing_preserved.md`.
+- **NEXT (user asked for a clear-context first): roster-wide 3.5-year replay.** Non-writing script importing `loadData/detectLevelFades/resolve/aggregate` etc. from `scripts/backtest_unified.js` (never its `main()`, which overwrites UNIFIED_BACKTEST/SYSTEM_BACKTEST rows live fallbacks read); skip roll-mismatch days; report per setup N/days/per-trade EV/day-blocked CI/by-year and half splits, family-pooled with multiple-testing control, vs live SETUP_STATUS; only replayable families (level fades with level_prices; NOT A/C/TRT/day-type). Gemini can run long loops, Claude audits.
+- **Queued, awaiting user "go":** force-SHADOW counter-gate for WITH-prior-session MAJOR_PIVOT RTH breaks; "Live means fired" design A; read/audit `scratch/deepseek_response_trendshift_gates_20261019.md`; CLAUDE.md documentation pass (rotation gate disabled 10-14, flip-close disabled 10-19, `server/config/rotationGateExemptions.js`).
+- **Live watch:** POC_ROTATION_JOIN_SHORT id 137375 (fired 19:58 ET, 1 MNQ sold 29748.25, ~+70pt at 20:35, stop 100pt above, breakeven snap due ~20:58) is the first real-money run of the 100pt-stop/breakeven-hold exit shipped without a shadow period; report POC_ROTATION separately from the roster.

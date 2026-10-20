@@ -10238,3 +10238,205 @@ The Sep 28 to Nov 19 2025 NQ window was stored only as the NQH26 back-month cont
 
 - Uncommitted: this repair's scripts and docs. Not committed, awaiting your say-so.
 
+
+---
+## Archive batch: 2026-10-19 (cutoff 2026-10-12, keep last 7 days)
+
+## 2026-10-11: PROMOTE_ALL_MODE revised to a real statistical gate (DONE, shipped)
+
+Two problems drove this, both raised directly: (1) the user's own 10-day real-trade check on `promote_all_roster_review_20261013` showed primary (real-capital, no live capital at risk — sim/evaluator accounts) trades net negative under the 2026-09-28 unconditional-promote version (mean -$8.91/trade over 250 trades vs +$2.12/trade before); (2) the user pointed out the OLD pre-9/28 `SUPPRESS_MIN_N=20` floor had a real asymmetry bug — LONG and SHORT variants of the same setup_type accumulate real touches at different rates depending on which direction the market favored, so one side could clear the floor and go live while its mirror sat `THIN_N` indefinitely, purely an accumulation-speed artifact, not a quality signal. "The 20 is arbitrary" was the user's framing.
+
+Fix: `scripts/backtest_setup_status.mjs`'s `PROMOTE_ALL_MODE` branch no longer promotes everything unconditionally. Below `MIN_DISTINCT_DAYS_FOR_STAT_GATE=5` real distinct trading days, a type still promotes `ACTIVE` by default (not enough evidence yet — same benefit-of-the-doubt posture, applied symmetrically to both sides of a LONG/SHORT pair). At or above that floor, a `dayBlockedBootstrapCI()` (`server/services/rigorDiagnostics.js`, already built, already used elsewhere — no new statistical machinery) 95% CI is computed on the type's real EV; suppress only if the CI sits entirely below $0 AND the real trades aren't day-clustered (`computeRigor().clustered`, matching the `SETUP_STATUS_DOW` precedent). Deliberately a pure sign test, not a magnitude test — the old `-$5/trade` requirement is gone, per explicit user confirmation ("ignore ev" clarified to mean: EV is the thing being tested, but the dollar-magnitude floor is dropped). Persisted per-type in `notes.stat_gate` for auditability.
+
+Verified: lint clean, full run against real data (exit 0), `test_invariants.mjs` failure/warning set byte-identical before/after (`git stash` comparison), `stat_gate` confirmed landing correctly in `performance_audit` via direct query. This script is cron-only (Sunday 10:30pm ET + daily 8:20pm ET), not imported live by the server, so no restart was needed.
+
+First live run result, worth knowing before assuming this is already biting: 0 new suppressions. 10 setup_types showed a confidently-negative CI (e.g. `CAM_R3_FADE_LONG` CI=[-57.29,-15.79], `PD_SESSION_MID_FADE_SHORT` CI=[-34.78,-1.50]) but all 10 were held back by the day-clustering guard — most of the roster is only ~7-16 distinct real trading days old since `PROMOTE_ALL_MODE` first shipped 2026-09-28, so `top5DayPct` is mechanically high regardless of real quality (a cold-start artifact, not a flaw in the test). Tracked as `OPEN_DECISION promote_all_mode_stat_gate_coldstart_watch_20261011` — revisit in 2-3 weeks once more distinct days have accumulated to confirm the gate actually starts suppressing, not just sitting permanently lenient. The pending `promote_all_roster_review_20261013` decision (keep-vs-revert `PROMOTE_ALL_MODE` entirely, based on real primary-trade P&L) is unaffected by this change and still due 2026-10-13.
+
+Not done: the standing 3-phase DeepSeek review this codebase's own rule calls for on higher-stakes live-wiring changes. Deferred, not skipped — flag before the next related change in this area.
+
+## 2026-10-07: Native OCO bracket test on Sim1 -- FAILED, decisive negative, real position opened and closed
+
+Live test (user-authorized): a parent SELL LIMIT far from market (33000, last price ~31267) followed
+immediately by the OCO children (STOP BUY @33200, LIMIT BUY @32800), via the new `placeBracketEntryOrder()`
+build. Intended to be unfillable by all three legs. Instead: the parent filled INSTANTLY at market
+(31267.25, not its 33000 limit -- the same sim-fills-at-market behavior documented 2026-10-05/07), and
+both OCO children were REJECTED with "There is no parent order for child OCO order" -- the parent had
+already transitioned to FILLED before the server processed the OCO submission, even though the two
+messages were sent back to back with no `await` between them. Result: a real, completely unprotected
+short position (-1 MNQZ6), zero stop, zero target. Flattened immediately (BUY @31272.00, -$10.50 before
+commission) and recorded in the ledger (`scripts/record_oco_test_trade_20261007.mjs`); invariant confirmed
+back to 0 against a flat broker.
+
+**This is not "untested" anymore -- it's a decisive negative for Sim1 specifically.** Sierra's own
+documented bracket procedure requires the parent to still be pending/working when the OCO message
+arrives. Sim1's simulator resolves a fill synchronously at order-submission time, before the next
+message can be processed as "parent still pending" -- so ANY parent order (not just one at an extreme
+price) will outrun the OCO submission on this venue, every time. `SIERRA_USE_OCO_BRACKET` must stay off
+on Sim1 -- enabling it would systematically produce naked, unprotected positions, worse than today's
+existing standalone-stop-after-fill path, not just an unverified improvement on it.
+
+**Not yet determined**: whether this is purely a Sim1 (local-fill-simulation) artifact that a venue which
+actually rests orders (the real Rithmic-backed sim, or further up the stack) would not share, or a more
+general DTC-server-side race this build's own back-to-back-no-await submission can't close no matter the
+venue. The message ordering is correct per the protocol doc; the failure is in how fast the venue resolves
+the parent, not in this app's own submission logic. `OPEN_DECISION oco_bracket_sim1_structurally_broken_20261007`
+tracks the follow-up: find a venue that genuinely rests a LIMIT order before testing bracket linking again,
+or confirm this fails the same way there too.
+
+## 2026-10-07: Sierra Chart depth-data recurring cleanup -- PRIORITY, not yet built
+
+One-off cleanup done (746 files/214.58 GB deleted, everything over 90 days, all symbols) during the
+OCO investigation. Still needed: a recurring job (Windows Task Scheduler, daily) running the PowerShell
+delete-older-than-N-days command against `C:\SierraChart\Data\MarketDepthData\*.depth`, matched on the
+real filename date (`SYMBOL.YYYY-MM-DD.depth`, UTC), not file mtime. Also still open: check which other
+symbols (ES confirmed) have "Record Market Depth"=yes in Global Symbol Settings and decide whether that's
+intentional before deciding the recurring window (30 vs 90 days). This is Windows/Sierra-Chart-side
+infrastructure, not app code -- nothing in this repo depends on it, flagged here only so it isn't lost
+across sessions.
+
+## 2026-10-07: Resting-order investigation RESOLVED -- real cause was symbol/exchange format, not the venue
+
+Confirmed via a real round-trip test against the new Trading Evaluator instance (SierraChart-DTC,
+account DTC-Live-Simulator, port 11199): a SELL LIMIT far from market (40000) submitted with Symbol and
+Exchange as separate fields ("MNQZ26"/"CME") rested for the full 15-second test window with no fill, and
+canceled cleanly ("Simulated order canceled") -- the first clean resting-order result all session.
+
+**Root cause of every earlier failure (Sim1 AND the first several Trading Evaluator attempts): the order
+symbol was sent as one combined string ("MNQZ26.CME"/"MNQZ6.CME") with Exchange left empty -- matching
+this app's existing Rithmic convention (contractSymbol.js/dtcClient.js). The Trading Evaluator service
+rejects that format outright ("Order is not allowed based on the symbol"), before ever reaching real
+order-matching logic.** This is NOT the same bug as Sim1's instant-fill-at-market behavior -- it's a
+separate, earlier-stage rejection that looked superficially similar (both prevented an order from
+resting) but has a completely different cause and fix.
+
+Two other real blockers found and fixed along the way, both specific to the new simulated account, not
+the symbol-format bug: (1) Symbol/Product Limits on the account defaulted to Trade Position Limit=0 /
+Order Quantity Limit=0 for ALL_SYMBOLS -- raised to 10, matching the app's own existing position-limit
+convention; (2) the account had $0.00 funded balance with margin required, confirmed via a real manual-UI
+rejection message ("Insufficient Account Value (NLV)... Account Value: 0.00") -- funded to $1,000,000 to
+unblock testing, NOT yet reconciled against MNQ's real margin requirement (the $4,361 margin figure cited
+in that rejection looks like NQ-sized margin, not MNQ -- MNQ is 1/10th NQ's size by design --
+`OPEN_DECISION mnq_margin_config_may_be_using_nq_values_20261007` tracks checking the MNQ symbol's own
+margin setting for a literal NQ-value copy-paste before trusting any further margin-gated test here).
+
+**What this means for the OCO bracket build:** the earlier `oco_bracket_sim1_structurally_broken_20261007`
+finding is correct for Sim1 specifically (it fills everything at submission, confirmed via its own
+"Simulated order accepted" -> immediate fill signature, a real and different behavior from this symbol
+rejection) but does NOT mean native OCO brackets can't work at all. The actual bracket (parent + OCO
+children, not just a single resting order) has STILL NOT been tested on this corrected venue/format --
+`placeBracketEntryOrder()`'s current code sends the combined Symbol.Exchange format everywhere, which
+would hit this same rejection on this venue. Before retrying the bracket test here, either add a
+per-connection symbol-format mode to contractSymbol.js/orderSweep.js, or construct the split-field
+request manually for this one-off test, matching what test_evaluator_resting5.mjs did.
+
+## 2026-10-07: OCO bracket -- REAL FIX FOUND AND CONFIRMED LIVE, two gaps remain before arming
+
+Root cause of every "no parent order for child OCO order" rejection, found after extensive dead-end
+troubleshooting (symbol format, timing, account settings, a restart, a secondhand DeepSeek guess that
+was checked and disproven): `IsParentOrder`/`IsAutomatedOrder` are `uint8_t` in the real DTCProtocol.h
+struct, not `bool`. dtcClient.js was sending them as JSON `true`/`false`. The Trading Evaluator server
+silently never registered the order as a parent when sent that way -- the order itself was accepted
+fine, but `IsParentOrder` effectively never took, so every subsequent OCO child submission correctly
+(if confusingly) found "no parent order." Switching both fields to the integer 1 fixed it immediately,
+confirmed via the real `submitOrder()`/`submitOcoOrder()` methods, not just a hand-built message: parent
+shows "Server side bracket order," both children come back `PENDING_CHILD` (status 3) correctly
+referencing the parent's real ServerOrderID, and canceling the parent correctly cascades to cancel both
+children automatically. Fixed in `server/services/sierraChart/dtcClient.js`; `scripts/test_oco_submission.mjs`'s
+assertions updated to check for the integer (the old assertions had been checking for `true`, which is
+why this bug shipped unnoticed in the first place -- a number computed twice by the same code isn't
+verification, same lesson, now caught in a test rather than a comment).
+
+**Two real gaps before this can be armed in production, not yet closed:**
+
+1. **Never tested against Sim1/Rithmic, only against the Trading Evaluator test instance.** The split
+   Symbol/Exchange field format (`"MNQZ26"`/`"CME"`, not `"MNQZ26.CME"`/`""`) was required by the
+   Evaluator specifically. Production's `contractSymbol.js`/`orderSweep.js` still build the combined
+   format, matching Rithmic's own convention (confirmed working for plain ENTRY/STOP orders all session).
+   Whether Rithmic/Sim1 needs the same split-format fix for a bracket submission, or accepts the combined
+   format brackets use fine, is unverified -- this fix was proven on a different venue than the one
+   `SIERRA_USE_OCO_BRACKET` would actually route through.
+2. **No independent review of this fix**, per the standing higher-stakes-work rule. This is real-money-
+   adjacent code (even though today's testing was entirely on sim/eval accounts) and hasn't been through
+   DeepSeek or a second pass.
+
+`OPEN_DECISION oco_bracket_fix_needs_rithmic_test_review_20261007` tracks both before
+`SIERRA_USE_OCO_BRACKET` is ever set true against the production connection.
+
+## 2026-10-07: Symbol/exchange wire-format fix shipped, isolated to dtcClient.js alone
+
+Resolves item 1 of the decision above (the Rithmic-vs-Evaluator discrepancy) by making the fix
+venue-agnostic rather than venue-specific. Real root cause, confirmed by a controlled A/B test on
+one unchanged account earlier the same day: this app has always sent the order symbol to Sierra
+Chart as one combined string (`"MNQZ6.CME"`) with `Exchange` left empty, matching an assumption in
+`contractSymbol.js`'s own header comment that turned out to be wrong -- the real DTC wire protocol
+wants `Symbol`/`Exchange` as two separate fields, and sending them combined produces two different
+failure modes depending on account/server: Sim1 silently fills at market instantly regardless of
+price (why every real stop today filled far from its calibrated `stop_level`); the Trading
+Evaluator rejects the order outright ("not allowed based on the symbol").
+
+**Fix is isolated to exactly one file.** `dtcClient.js` gained a small module-level helper,
+`_splitSymbolForWire(symbol, exchange)`, called inside `submitOrder()`/`submitOcoOrder()` right
+before the wire message is built -- it splits a combined `"SYMBOL.EXCHANGE"` string on its last
+`.` into the two real fields, or passes through unchanged if the caller already supplied a split
+`exchange`. **Deliberately does NOT touch `orderSweep.js`, `reconciliation.js`, or
+`connectionManager.js`** -- all three keep passing/storing the combined form exactly as before,
+which is correct for them: `order_placements.symbol` (the DB identity column),
+`extractPositionForSymbol()` (matches broker-reported `positionMessages[].Symbol`, which the broker
+always reports in combined form), and `checkPositionInvariant()`'s `WHERE symbol = $1` lookup all
+depend on the combined string staying the single identity key used consistently throughout the
+app. Splitting anywhere upstream of the wire-serialization layer would have silently broken
+position-invariant matching (the DB column would stop matching what the broker reports) -- this
+was checked and specifically avoided, not just an oversight that happened not to bite.
+`contractSymbol.js`'s header comment, which had incorrectly asserted the venue "embeds the
+exchange directly into the Symbol field" as a convention, is corrected to describe the real
+mechanism and explicitly flag which call sites need the combined form.
+
+Also fixed in the same edit: `IsParentOrder` is now always sent explicitly as `0` or `1`, never
+omitted when false (previously conditionally added to the message only when true).
+
+Verified before committing: `scripts/test_oco_submission.mjs` updated (checks the split actually
+happens for a combined-form caller, checks an already-split caller and a bare no-dot symbol both
+pass through unchanged, checks `IsParentOrder` is explicit 0) and passing; `npx eslint` clean on
+all 3 touched files; both edited modules confirmed to import cleanly under real ESM (not just
+`no-undef`); `test_invariants.mjs` byte-identical failure/warning count (129/170) before and after
+via `git stash`. Not yet done: a live round-trip test of this exact diff, and independent review --
+tracked at `OPEN_DECISION oco_bracket_wire_split_fix_needs_review_20261007`, which also carries
+forward that the account switch (new DTC-Live-Globex account on the Evaluator instance), `.env`
+change, restart, and re-arm are all still explicitly deferred pending your separate go-ahead.
+
+## 2026-10-07: `requestSecurityDefinition()` checked, deliberately left unsplit
+
+Per DeepSeek's Q3/S6 ask to grep every Symbol/Exchange construction site, not just order
+submission: `requestSecurityDefinition(symbol, exchange)` (dtcClient.js, called by
+`priceMultiplier.js` with the combined form, no exchange) builds the wire message the same
+unsplit way `submitOrder()` used to. **Deliberately not changed.** This call site is confirmed
+*working* today with the combined format (`priceMultiplier.js`'s own header: a live
+`SECURITY_DEFINITION_FOR_SYMBOL_REQUEST` for `"MNQZ6.CME"` correctly returned
+`DisplayPriceMultiplier`, verified 2026-09-29), and `getPriceMultiplier()`'s response matching
+(`msg.Symbol !== symbol`) depends on the response echoing back the exact combined string sent in
+the request. Splitting the request side without being able to verify from here whether the
+response's `Symbol` field would still come back combined or split risks silently breaking a
+correctness-critical, already-working mechanism (fill-price interpretation) for no demonstrated
+bug -- unlike order submission, which was confirmed broken two separate ways. If this is ever
+revisited, it needs a live A/B on the response format first, not a blind copy of the order-path
+fix.
+
+
+
+
+### From "2026-10-07: DeepSeek review of branch fix/sierra-wiring-items-3-6-7-8-20261007 — one fix applied, two open"
+
+- **Fixed**: `dllGateDecision()` (`server/services/sierraChart/dllGate.js`) used to report `unknownCount > 0` (a trade closed with no broker_pnl recorded yet) without blocking — fail-open exactly when reconciliation is lagging and a real loss could be hiding past the limit. Now blocks. Test added to `scripts/test_broker_guards.mjs`.
+
+
+
+- **Not a bug (verified against the DB, not just re-asserted)**: the reviewer flagged `scripts/repair_stale_exit_rows_20261007.mjs`'s hardcoded `IDS=[4,16]` against setups 127681/127693 as a discrepancy to confirm — already confirmed earlier the same day via a direct query (row 4 = 127681's EXIT, row 16 = 127693's EXIT).
+
+
+
+- **Open, not blocking**: the position invariant's baseline assumes the broker was flat at `order_placements_invariant_baseline`'s own baseline id — never independently confirmed, just asserted in a comment. `getBrokerSnapshot`'s 3-second collection window could miss a position message in some environment, which would fail-closed (refuse every exit) rather than silently misbehave — also not independently tested against a real DTC session dropping a position message.
+
+
+### From "2026-10-19 (day, cont.): review of the gate fix, catch-up, logs, late-signal note, POC exit shakeout"
+
+- **Catch-up job** was dead after 2026-08-31 (see the CLAUDE.md entry above); fixed + loaded 09:10. The AI daily review has been failing on exhausted Anthropic credit since at least 10-13 (`anthropic_api_credit_exhausted_ai_review_failing_20261019`, needs the user).
