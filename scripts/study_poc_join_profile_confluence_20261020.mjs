@@ -17,7 +17,7 @@ function prof(d, N) { const k = d + '|' + N; if (profCache.has(k)) return profCa
   profCache.set(k, out); return out; }
 const upTo = (p, price) => { let lo = 0, hi = p.prices.length; while (lo < hi) { const m = (lo + hi) >> 1; if (p.prices[m] <= price) lo = m + 1; else hi = m; } return lo; };   // count of price levels <= price
 const cumAt = (p, price) => { const n = upTo(p, price); return n ? p.cum[n - 1] : 0; };
-function densAt(p, price) { const n = upTo(p, price); return n && Math.abs(p.prices[n - 1] - price) <= 0.125 ? p.vols[n - 1] : 0; }
+function densAt(p, price) { const n = upTo(p, price); let best = 0; for (const idx of [n - 1, n]) if (idx >= 0 && idx < p.prices.length && Math.abs(p.prices[idx] - price) <= 0.125) best = p.vols[idx]; return best; }   // nearest level within 0.125 (fixed 2026-10-20: the old version only looked at the level at/below, which overstated zero density for off-grid shifted placebo prices; Gemini's independent build rounds to the nearest level)
 function windowDens(p, lo, hi) { if (hi <= lo) return 0; return (cumAt(p, hi) - cumAt(p, lo)) / Math.max(1, (hi - lo) / 0.25); }
 function feats(e, atr, N, shift, rotPoc) {   // shift: place the composite profile `shift` ATR higher (placebo); 0 = real
   const p = prof(e.d, N); if (!p) return null; const sg = e.long ? 1 : -1, off = shift * atr, entry = e.entry - off;      // shifting the profile up by off is equivalent to moving the entry down by off
