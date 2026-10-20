@@ -375,6 +375,7 @@
   <div id="info-chips-row">
     <div id="vol-regime-card" onclick="openVolRegimeHistoryModal()"></div>
     <div id="pulse-reading-card"></div>
+    <div id="day-type-card"></div>
   </div>
   <div id="setup-card"></div>
   <div id="standalone-position-card"></div>
@@ -603,6 +604,20 @@ function renderVolRegimeCard(regime, favorableSetups) {
     : '';
   const subColor = regime.rollWeekPaused ? 'var(--amber)' : 'var(--green)';
   el.innerHTML = chip('Vol', regime.scale.toFixed(2) + 'x' + (regime.degenerateFallback ? ' ⚠' : ''), sub, subColor, 'var(--text)');
+}
+
+// ---- Day type right now (2026-10-20, user request): balance-like / middle / expansion-like from the range used so far vs the previous 60 sessions at this time of day,
+// with the bands frozen for forward-monitor rule R4. Informational only. GET /api/day-type/now (server/services/dayTypeNow.js). It measures range used, not current chop:
+// a day that expands early stays expansion-like all day. Shows an explicit unknown state when the read fails (a hidden chip would look like "nothing wrong").
+async function loadDayType() {
+  const el = $('day-type-card'); if (!el) return;
+  try {
+    const data = await fetch('/api/day-type/now', { cache: 'no-store' }).then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); });
+    const d = data?.dayType; el.style.display = 'flex';
+    if (!d || !d.regime) { el.title = 'Day type: ' + (d?.reason || 'unknown'); el.innerHTML = chip('Day', '--', d?.reason ? d.reason.replace('range still forming (first 15 minutes)', 'forming') : '', 'var(--dim)', 'var(--dim)'); return; }
+    el.title = 'Range used so far ' + d.rangePoints + ' pts = ' + d.rangeXAtr + 'x the 20-session average, ranked ' + d.rank + ' against the previous ' + d.priorSessions + ' sessions at this time. Bands: below ' + d.cuts.low + ' balance-like, ' + d.cuts.low + ' to ' + d.cuts.high + ' middle, above expansion-like. Informational only; it measures range used, not current chop.';
+    el.innerHTML = chip('Day', d.label.charAt(0).toUpperCase() + d.label.slice(1), 'rank ' + d.rank.toFixed(2), 'var(--dim)', d.regime === 'MID' ? 'var(--amber)' : 'var(--text)');
+  } catch (e) { el.style.display = 'flex'; el.title = 'Day type could not be loaded (' + e.message + ')'; el.innerHTML = chip('Day', '?', 'unavailable', 'var(--red)', 'var(--red)'); }
 }
 
 // ---- Live pulse reading (2026-09-09, direct user request after the pulse/VWAP-slope research
@@ -4059,6 +4074,7 @@ loadMomentumFadeShadowSummary(); // slow-changing (live query over real trades) 
 loadOrderflowPressureShadowSummary(); // slow-changing (live query over real trades) -- fetch once, no poll
 loadBreakevenStopShadowSummary(); // slow-changing (live query over real trades) -- fetch once, no poll
 loadEntryFlowShadowSummary(); // slow-changing (live query over real trades) -- fetch once, no poll
+loadDayType();
 loadVolRegime(); // slow-changing (nightly cron writes it) -- poll every 5min below, not every 15s like the live pulse
 loadModelsTab(); // consolidated Models section (2026-09-24) -- slow-changing (daily recheck/manual retrain), poll every 5min below
 loadPulseReading(); // live, but bar-level (5-min) not tick-level -- 60s poll is plenty, no need for loadPulse's 15s cadence
@@ -4072,6 +4088,7 @@ setInterval(loadModelsTab, 300000);
 // which tab is visible" convention rather than gating on pageTab==='ml'.
 setInterval(() => loadMlTabRange(mlTabRange), 300000);
 setInterval(loadPulseReading, 60000);
+setInterval(loadDayType, 60000);
 // Shortened from 5min to 30s (2026-10-13) -- this is the kill-switch armed/disarmed
 // indicator, and a stale reading here is a genuinely different kind of wrong than a stale
 // research-data chip elsewhere on this page. The visibilitychange handler above is the real

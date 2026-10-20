@@ -84,6 +84,7 @@ import { startConnectionManager } from './services/sierraChart/connectionManager
 import { startMlScoringService } from './services/mlScoringServiceManager.js';
 import volatilityRegimeRouter from './routes/volatilityRegime.js';
 import pulseReadingRouter from './routes/pulseReading.js';
+import dayTypeRouter from './routes/dayType.js';
 import globexRotationBadgeRouter from './routes/globexRotationBadge.js';
 import volumePileGaugeRouter from './routes/volumePileGauge.js';
 import mlSiloRouter from './routes/mlSilo.js';
@@ -423,6 +424,7 @@ app.use('/api', phaseChangeRouter);
 app.use('/api', setupsRouter);
 app.use('/api', volatilityRegimeRouter);
 app.use('/api', pulseReadingRouter);
+app.use('/api', dayTypeRouter);
 app.use('/api', globexRotationBadgeRouter);
 app.use('/api', volumePileGaugeRouter);
 app.use('/api', mlSiloRouter);

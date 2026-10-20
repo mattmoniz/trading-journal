@@ -24,7 +24,7 @@ const today = (await query(`SELECT CURRENT_DATE::text d`)).rows[0].d; // ---- ni
 const nowHM = (await query(`SELECT to_char(now(),'HH24MI') hm`)).rows[0].hm; const tickLog = [];
 for (let d = '2026-10-20'; d <= today; d = addDay(d, 1)) { if (hasTicks(d) || (d === today && nowHM < '1605')) continue; const dow = new Date(d + 'T12:00:00Z').getUTCDay(); if (dow === 0 || dow === 6) continue;
   const dbv = Number((await query(`SELECT COALESCE(SUM(volume),0) v FROM price_bars_primary WHERE symbol='NQ' AND ts >= $1::timestamp AND ts < $2::timestamp`, [d + ' 09:30:00', d + ' 16:00:00'])).rows[0].v); if (!(dbv > 0)) continue;
-  const r = spawnSync('python3', ['-I', fileURLToPath(new URL('./tick_microstructure/extract_forward_day.py', import.meta.url)), d, String(dbv)], { encoding: 'utf8', timeout: 240000 }); tickLog.push(`${d}: ${r.status === 0 ? 'tick files written' : 'NO MATCHING TICK FILE (day excluded from R6-R8)'}`); }
+  const r = spawnSync('/usr/bin/python3', ['-I', fileURLToPath(new URL('./tick_microstructure/extract_forward_day.py', import.meta.url)), d, String(dbv)], { encoding: 'utf8', timeout: 240000 }); tickLog.push(`${d}: ${r.status === 0 ? 'tick files written' : 'NO MATCHING TICK FILE (day excluded from R6-R8)'}`); }
 if (tickLog.length) console.log('tick extraction: ' + tickLog.join('; '));
 if (today < FORWARD_START) { console.log('forward window has not started'); process.exit(0); }
 const RTHSQL = `(EXTRACT(hour FROM fired_at)*60+EXTRACT(minute FROM fired_at)) BETWEEN 575 AND 959`;
