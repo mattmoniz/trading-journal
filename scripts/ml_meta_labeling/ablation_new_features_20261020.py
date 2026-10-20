@@ -41,7 +41,7 @@ def boot_diff(d, days, n=BOOT, seed=20261020):
         pick = rng.choice(ud, size=len(ud), replace=True); sel = np.concatenate([idx[u] for u in pick]); out.append(d[sel].mean())
     return float(np.percentile(out, 0.5)), float(np.percentile(out, 99.5))
 def main():
-    conn = get_connection(); hp = load_hyperparams(conn); df, cols0 = fetch_training_dataframe(conn)
+    conn = get_connection(); hp = load_hyperparams(conn); df, cols0 = fetch_training_dataframe(conn, full_features=True)   # the research baseline stays the pre-trim 27 inputs (dataset.py TRIMMED_COLS)
     df = df.assign(_fired_dt=pd.to_datetime(df['fired_at'], format='mixed')).sort_values('_fired_dt').reset_index(drop=True)
     ids = tuple(df['id'].tolist()); df = df.merge(pd.read_sql(f"SELECT id, actual_pnl::float AS actual_pnl FROM active_setups WHERE id IN {ids}", conn), on='id')
     cand = pd.read_csv(os.path.join(ROOT, 'scratch', 'ml_candidate_features_20261020.csv')); df = df.merge(cand, on='id', how='left')

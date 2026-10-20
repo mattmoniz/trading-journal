@@ -113,7 +113,14 @@ EXISTING_FEATURE_COLS = [
 DIRECTION_FEATURE_COLS = ['drv_is_long', 'drv_recentDeltaAligned15Bars']
 
 
-def feature_cols():
+# Inputs REMOVED from the model's training/scoring feature list 2026-10-20 (user decision after docs/ML_INPUT_ABLATION_PREREG_20261020.md, claims ml_input_ablation_and_candidates_20261020 and
+# ml_pruned_models_not_distinguishable_20261020): removing both changed nothing detectable (fold-averaged AUC 0.5857 vs 0.5859 baseline, dollars not distinguishable) and session cumulative delta
+# showed no signal once direction-aligned. They are still CAPTURED and still produced by build_feature_dict() below (stored snapshots, older model bundles that expect them keep scoring);
+# only the list a NEW model trains on excludes them. feature_cols(full=True) restores the old 27-column list (used by the ablation research script so it stays reproducible).
+TRIMMED_COLS = ['intraday_sessionCumulativeDelta', 'nl30_at_detection']
+
+
+def feature_cols(full=False):
     """The full ordered feature column list -- same shape fetch_training_dataframe() returns
     as its second value, but callable without a DB connection/query. Used internally by
     fetch_training_dataframe() itself (single source of truth for the column list). Fire-
@@ -121,13 +128,14 @@ def feature_cols():
     off the persisted model bundle instead (bundle['feature_cols']), which is the more
     correct source there: it reflects exactly what THAT specific model was trained on, and
     stays correct even if this list changes for a later-trained model."""
-    return (
+    cols = (
         [f'pd_{k}' for k in PD_FEATURE_KEYS]
         + [f'intraday_{k}' for k in INTRADAY_FEATURE_KEYS]
         + [f'pd_migration_{c}' for c in MIGRATION_CATEGORIES]
         + EXISTING_FEATURE_COLS
         + DIRECTION_FEATURE_COLS
     )
+    return cols if full else [c for c in cols if c not in TRIMMED_COLS]
 
 
 def build_feature_dict(pd_features: dict, intraday_features: dict, existing: dict, is_long=None) -> dict:
@@ -166,7 +174,7 @@ def build_feature_dict(pd_features: dict, intraday_features: dict, existing: dic
     return out
 
 
-def fetch_training_dataframe(conn, label_column='ml_extended_label'):
+def fetch_training_dataframe(conn, label_column='ml_extended_label', full_features=False):
     """Pulls every real, fully-featured (label + both feature snapshots present) row and
     flattens it into a pandas DataFrame ready for training. No lookahead risk here beyond
     what's already guaranteed by the label/feature columns themselves (see
@@ -205,7 +213,7 @@ def fetch_training_dataframe(conn, label_column='ml_extended_label'):
     # itself requiring a real resolved trade), so this is always resolvable here.
     df['is_long'] = df['stop_level'] < df['entry_zone_low']
 
-    cols = feature_cols()
+    cols = feature_cols(full=full_features)
     flattened = df.apply(
         lambda row: build_feature_dict(
             row['ml_pd_features'], row['ml_intraday_features'],
