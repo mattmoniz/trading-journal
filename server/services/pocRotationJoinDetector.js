@@ -76,7 +76,14 @@ let _cache = { sessionKey: null, lastProcessedEntryTs: null };
 // ($13.24/$7.17 per trade), spread across 30/27 distinct trading days (not day-clustered).
 // Matches globexFlushDetector.js's own getLiveStatus() pattern exactly, per this file's own
 // header comment pointing at that precedent ("add one once real fires start accumulating").
+// 2026-10-21 (user: "just use the poc join on the poc join tab ... keep it on the POC tab which only
+// affects all shadow setups"): POC_ROTATION_JOIN is forced SHADOW -- it still fires, records and
+// resolves every event (so the POC tab and its forward N keep accumulating), but places no real
+// orders. Its live-construction edge is ~+0.8/trade (CI includes zero) and its pooled history mixes
+// three exit designs. Flip enabled back to true to restore the N>=20/EV>-5 dynamic check below.
+const POC_JOIN_LIVE = { enabled: false, disabledDate: '2026-10-21' };
 async function getLiveStatus(setupType) {
+  if (!POC_JOIN_LIVE.enabled) return { status: 'SHADOW', reason: 'POC_JOIN_TAB_ONLY', liveN: null, liveEv: null };
   const { rows } = await query(`
     SELECT COUNT(*) as n, AVG(actual_pnl)::float as ev
     FROM active_setups
