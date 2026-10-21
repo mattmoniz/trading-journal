@@ -1,0 +1,14 @@
+// POC_ROTATION_JOIN stop-width table (plain 60-min exit vs current breakeven-hold exit), live construction with volume, 2023-03 to 2026-10, realistic fills. Claim poc_join_stop_width_and_fade_test_20261021.
+import { loadBars, buildEvents, fwd, simE1, mean, dayCI } from './lib/pocJoinLoader.mjs';
+const FROM = '2023-03-06', TO = '2026-10-20'; const D = await loadBars(FROM, TO); const ev = await buildEvents(D, FROM, TO); console.log('POC join events (live construction, with volume):', ev.length);
+// plain exit: stop at stopPts (market-fill rule: a gap through the stop fills at the bar open), otherwise leave at the close of the holdBars-th bar after entry
+function simPlain(e, fi, last, stopPts, holdBars) { const { O, H, L, C } = D; const long = e.long, stop = long ? e.entry - stopPts : e.entry + stopPts, end = Math.min(last, fi + holdBars);
+  for (let k = fi; k <= end; k++) { if (long ? L[k] <= stop : H[k] >= stop) { const fill = long ? Math.min(stop, O[k]) : Math.max(stop, O[k]); return { pnl: (long ? fill - e.entry : e.entry - fill) * 2 - 2, stopped: true }; } }
+  return { pnl: (long ? C[end] - e.entry : e.entry - C[end]) * 2 - 2, stopped: false }; }
+const rowsFor = (mode, sp) => { const rows = []; for (let i = 0; i < ev.length; i++) { const w = fwd(D, ev, i); if (!w) continue; const e = ev[i]; if (mode === 'plain60') { const r = simPlain(e, w[0], w[1], sp, 60); rows.push({ d: e.d, pnl: r.pnl, stopped: r.stopped }); } else { const r = simE1(D, e, w[0], w[1], { stopPts: sp, armBars: 60 }); rows.push({ d: e.d, pnl: r.pnl, stopped: r.pnl <= -(sp * 2) + 6 }); } } return rows; };
+const f = (x) => (x >= 0 ? '+' : '') + x.toFixed(1); const sd = (a) => { const m = mean(a); return Math.sqrt(mean(a.map((x) => (x - m) ** 2))); };
+for (const mode of ['plain60', 'current']) { console.log(`\n=== ${mode === 'plain60' ? 'PLAIN 60-MINUTE EXIT (the old design family: fixed stop, leave at 60 min)' : 'CURRENT EXIT (breakeven snap at minute 60, then hold up to 24h or next event)'} ===`);
+  console.log('stop  | win rate | stopped out | avg win | avg loss | $/trade [95% day-blocked] | worst | explore(<2025-06) / recent');
+  for (const sp of [20, 40, 60, 100, 150]) { const r = rowsFor(mode, sp), pn = r.map((x) => x.pnl), w = pn.filter((x) => x > 0), l = pn.filter((x) => x <= 0), ci = dayCI(r.map((x) => ({ d: x.d, pnl: x.pnl })), (x) => x.pnl, 800), ex = r.filter((x) => x.d < '2025-06-01'), rc = r.filter((x) => x.d >= '2025-06-01');
+    console.log(`${String(sp).padStart(3)}pt | ${(w.length / pn.length * 100).toFixed(0)}%      | ${(r.filter((x) => x.stopped).length / r.length * 100).toFixed(0).padStart(3)}%        | ${f(mean(w)).padStart(6)} | ${f(mean(l)).padStart(7)}  | ${f(mean(pn)).padStart(6)} [${f(ci[0])},${f(ci[1])}] | ${f(Math.min(...pn)).padStart(6)} | ${f(mean(ex.map((x) => x.pnl)))} / ${f(mean(rc.map((x) => x.pnl)))}`); } }
+process.exit(0);

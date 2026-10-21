@@ -1,0 +1,15 @@
+// POC_ROTATION_JOIN: JOIN (trade with the leg) vs FADE (opposite) on the same events/exits, plus the raw 60-minute continuation rate. Claim poc_join_stop_width_and_fade_test_20261021.
+import { loadBars, buildEvents, fwd, simE1, mean, dayCI } from './lib/pocJoinLoader.mjs';
+const FROM = '2023-03-06', TO = '2026-10-20'; const D = await loadBars(FROM, TO); const ev = await buildEvents(D, FROM, TO); console.log('events', ev.length);
+function simPlain(e, fi, last, stopPts, holdBars, long) { const { O, H, L, C } = D, stop = long ? e.entry - stopPts : e.entry + stopPts, end = Math.min(last, fi + holdBars);
+  for (let k = fi; k <= end; k++) { if (long ? L[k] <= stop : H[k] >= stop) { const fill = long ? Math.min(stop, O[k]) : Math.max(stop, O[k]); return (long ? fill - e.entry : e.entry - fill) * 2 - 2; } } return (long ? C[end] - e.entry : e.entry - C[end]) * 2 - 2; }
+const f = (x) => (x >= 0 ? '+' : '') + x.toFixed(1);
+const run = (label, fn) => { const rows = []; for (let i = 0; i < ev.length; i++) { const w = fwd(D, ev, i); if (!w) continue; rows.push({ d: ev[i].d, pnl: fn(ev[i], w), long: ev[i].long }); } const pn = rows.map((r) => r.pnl), ci = dayCI(rows, (x) => x.pnl, 800), ex = rows.filter((r) => r.d < '2025-06-01'), rc = rows.filter((r) => r.d >= '2025-06-01');
+  console.log(`${label.padEnd(46)} n ${rows.length} win ${(pn.filter((x) => x > 0).length / pn.length * 100).toFixed(0)}% mean ${f(mean(pn))} [${f(ci[0])},${f(ci[1])}] explore ${f(mean(ex.map((r) => r.pnl)))} recent ${f(mean(rc.map((r) => r.pnl)))} | LONG-events ${f(mean(rows.filter((r) => r.long).map((r) => r.pnl)))} SHORT-events ${f(mean(rows.filter((r) => !r.long).map((r) => r.pnl)))}`); };
+console.log('\nJOIN = trade with the leg (what the setup does) vs FADE = the opposite direction, same events, same stop, same exit rules, realistic fills');
+for (const sp of [20, 100]) { run(`JOIN  plain 60-min exit, ${sp}pt stop`, (e, w) => simPlain(e, w[0], w[1], sp, 60, e.long)); run(`FADE  plain 60-min exit, ${sp}pt stop`, (e, w) => simPlain(e, w[0], w[1], sp, 60, !e.long)); }
+run('JOIN  current exit (BE at 60 min), 100pt', (e, w) => simE1(D, e, w[0], w[1], { stopPts: 100, armBars: 60 }).pnl); run('FADE  current exit (BE at 60 min), 100pt', (e, w) => simE1(D, e, w[0], w[1], { long: !e.long, stopPts: 100, armBars: 60 }).pnl);
+// how far does price typically travel with / against the leg in the next 60 min (the raw question: continuation or reversal?)
+const mv = []; for (let i = 0; i < ev.length; i++) { const w = fwd(D, ev, i); if (!w) continue; const e = ev[i], end = Math.min(w[1], w[0] + 60); mv.push((e.long ? D.C[end] - e.entry : e.entry - D.C[end])); }
+const srt = [...mv].sort((a, b) => a - b); console.log(`\nraw move 60 min after entry, in the leg's direction (points): mean ${f(mean(mv))}, median ${f(srt[srt.length >> 1])}, share continuing ${(mv.filter((x) => x > 0).length / mv.length * 100).toFixed(0)}%, p10 ${f(srt[Math.floor(0.1 * srt.length)])}, p90 ${f(srt[Math.floor(0.9 * srt.length)])}`);
+process.exit(0);
