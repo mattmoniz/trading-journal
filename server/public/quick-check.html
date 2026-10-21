@@ -2508,6 +2508,10 @@ function mSection(label) { return '<div class="m-section">' + label + '</div>'; 
 // so no ambient-timezone risk.
 function isRthAdjacent(s) {
   if (!s.fired_at_str) return false;
+  // 2026-10-20 (user: "its a globex trade"): the Globex flush setups are Globex by definition. They can fire in the 16:00-18:00
+  // hand-off (a GLOBEX_FLUSH_REVERSAL_LONG fired 16:48), which the clock-time rule below files under RTH, so the trade was
+  // missing from the Globex tab and its P&L. Keep in sync with range-summary's GLOBEX_FLUSH exclusion (acd.js).
+  if ((s.setup_type || '').startsWith('GLOBEX_FLUSH_')) return false;
   const hh = +s.fired_at_str.slice(11, 13), mm = +s.fired_at_str.slice(14, 16);
   const mod = hh * 60 + mm;
   return mod >= 570 && mod < 1080;

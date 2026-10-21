@@ -7655,6 +7655,10 @@ export default function createACDRouter(io) {
           -- <9:30) still routes to the separate Globex tab only.
           AND (EXTRACT(hour FROM s.fired_at)*60 + EXTRACT(minute FROM s.fired_at)) >= 570
           AND (EXTRACT(hour FROM s.fired_at)*60 + EXTRACT(minute FROM s.fired_at)) < 1080
+          -- 2026-10-20 (user: "its a globex trade"): GLOBEX_FLUSH_* is a Globex setup even when it fires in the 16:00-18:00 hand-off,
+          -- so it stays out of this RTH-only Performance ledger like every other Globex fire (quick-check.html's isRthAdjacent() makes the
+          -- same call; it shows under the Globex tab and in All).
+          AND s.setup_type NOT LIKE 'GLOBEX_FLUSH_%'
         ORDER BY s.fired_at
       `, params);
 
