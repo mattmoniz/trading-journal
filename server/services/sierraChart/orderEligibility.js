@@ -65,7 +65,10 @@ export async function isOrderEligible(setupType, setupId) {
     return { eligible: false, reason: 'kill switch not armed' };
   }
 
-  const { suppressedSetups, dowSuppressToday } = await computeSuppressionSets(todayEtDowInt());
+  const { suppressedSetups, dowSuppressToday, rosterBlocked } = await computeSuppressionSets(todayEtDowInt());
+  if (rosterBlocked?.has(setupType)) {
+    return { eligible: false, reason: `${setupType} is not on the LIVE_ROSTER (or the roster is unavailable)` };
+  }
   if (suppressedSetups.has(setupType)) {
     return { eligible: false, reason: `SETUP_STATUS suppresses ${setupType} (SUPPRESS or THIN_N)` };
   }

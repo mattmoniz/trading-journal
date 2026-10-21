@@ -51,6 +51,7 @@ import { detectSignalEvents } from './pocRotationService.js';
 import { dropToTimeline, computeFireTags, FIRE_TAG_COLS, fireTagValues } from '../routes/acd.js';
 import { getBetClass } from '../config/setupTypes.js';
 import { isOppositeDirectionOpen } from './acdRiskGates.js';
+import { checkLiveRoster } from './setupEligibility.js';
 
 const THETA_CACHE_KEY = 'pocRotationJoin_theta';
 const THETA_CACHE_TTL = 12 * 60 * 60 * 1000; // 12hr -- full-history median bar range moves negligibly intraday
@@ -83,6 +84,7 @@ let _cache = { sessionKey: null, lastProcessedEntryTs: null };
 // three exit designs. Flip enabled back to true to restore the N>=20/EV>-5 dynamic check below.
 const POC_JOIN_LIVE = { enabled: false, disabledDate: '2026-10-21' };
 async function getLiveStatus(setupType) {
+  { const rc = await checkLiveRoster(setupType); if (rc.blocked) return { status: 'SHADOW', reason: rc.reason, liveN: null, liveEv: null }; }
   if (!POC_JOIN_LIVE.enabled) return { status: 'SHADOW', reason: 'POC_JOIN_TAB_ONLY', liveN: null, liveEv: null };
   const { rows } = await query(`
     SELECT COUNT(*) as n, AVG(actual_pnl)::float as ev

@@ -99,6 +99,52 @@ export async function getStopCalibrationConfidence(signalName) {
   return { unvalidated: false, reason: null, method, clustered };
 }
 
+// LIVE_ROSTER gate (2026-10-21, user: live should be only the demonstrated-edge families). The roster is a
+// data-derived row written daily by scripts/calibrate_live_roster.mjs (performance_audit signal_type='LIVE_ROSTER',
+// signal_name='CURRENT'): types passing the demonstrated-edge rule plus their opposite-direction siblings. This is a NEGATIVE
+// gate on the candidate pool layered on top of SETUP_STATUS/DOW/CAPITAL_EXPOSURE_OVERRIDE (live = on roster AND not suppressed
+// by any of those). FAILS CLOSED (DeepSeek design review B): missing, stale or empty roster => every type is shadowed and
+// /api/setups/live-flags raises a red banner; the fallback is an explicit human flip of `enabled`, never an automatic default.
+// Force-SHADOW only: rows still insert and resolve, so forward data keeps accumulating on everything held back.
+// Placed beside CAPITAL_EXPOSURE_OVERRIDE inside isLiveEligible/getCanonicalLiveStatus so SUPPRESS_ALL_DISABLED cannot bypass it.
+// ROSTER_MAX_AGE_DAYS: the writer is a daily cron, so a roster older than 10 days means more than a week of missed runs.
+export const LIVE_ROSTER_GATE = { enabled: true, addedDate: '2026-10-21' };
+const ROSTER_MAX_AGE_DAYS = 10, ROSTER_CACHE_MS = 60_000;
+let _rosterCache = { at: 0, val: null };
+export async function getLiveRoster() {
+  const now = Date.now();
+  if (_rosterCache.val && now - _rosterCache.at < ROSTER_CACHE_MS) return _rosterCache.val;
+  let val;
+  try {
+    const { rows } = await query(`SELECT notes, run_date::text d, (CURRENT_DATE - run_date)::int age FROM performance_audit
+      WHERE signal_type='LIVE_ROSTER' AND signal_name='CURRENT' ORDER BY run_date DESC, id DESC LIMIT 1`);
+    if (!rows[0]) val = { state: 'MISSING', types: new Set(), runDate: null };
+    else {
+      const n = typeof rows[0].notes === 'string' ? JSON.parse(rows[0].notes) : rows[0].notes;
+      const types = new Set((n.roster || []).map((x) => x.type));
+      val = { state: rows[0].age > ROSTER_MAX_AGE_DAYS ? 'STALE' : types.size === 0 ? 'EMPTY' : 'OK', types, runDate: rows[0].d, ageDays: rows[0].age };
+    }
+  } catch (_) { val = { state: 'MISSING', types: new Set(), runDate: null }; }
+  _rosterCache = { at: now, val };
+  return val;
+}
+// Test hook only (scripts/test_live_roster.mjs): inject a roster state to exercise the fail-closed paths without touching the DB.
+export function __setLiveRosterForTest(val) { _rosterCache = { at: Date.now() + 3_600_000, val }; }
+// Sync read of the last-loaded roster for isLiveEligible (a sync function); null before the first load => blocked (fail closed).
+function rosterBlockReason(setupType) {
+  if (!LIVE_ROSTER_GATE.enabled) return null;
+  const r = _rosterCache.val;
+  if (!r || r.state !== 'OK') return 'LIVE_ROSTER_UNAVAILABLE';
+  return r.types.has(setupType) ? null : 'NOT_ON_LIVE_ROSTER';
+}
+export async function checkLiveRoster(setupType) {
+  if (!LIVE_ROSTER_GATE.enabled) return { blocked: false, reason: null };
+  await getLiveRoster();
+  const reason = rosterBlockReason(setupType);
+  return { blocked: !!reason, reason };
+}
+
+
 // Deliberate, human-reviewed capital-exposure overrides -- NOT a WR/EV suppression list (that
 // stays 100% owned by backtest_setup_status.mjs's automatic SETUP_STATUS pipeline per CLAUDE.md's
 // "Unified suppression pipeline" hard rule) and NOT a generic auto-detected rule (see
@@ -210,7 +256,14 @@ export async function computeSuppressionSets(todayDowInt, setupStatusRows = null
     const t = r.signal_name.replace(/_DOW_\d+$/, '');
     if (r.recommendation === 'SUPPRESS') dowSuppressToday.add(t);
   }
-  return { suppressedSetups, dowSuppressToday, knownTypes };
+  // LIVE_ROSTER (see LIVE_ROSTER_GATE): every known type off the roster is added to suppressedSetups ONLY (never knownTypes,
+  // never acd.js's separate _trueSuppressedSetups, which distinguishes SUPPRESS from THIN_N for the backfill loop).
+  const rosterBlocked = new Set();
+  if (LIVE_ROSTER_GATE.enabled) {
+    const roster = await getLiveRoster();
+    for (const t of knownTypes) if (roster.state !== 'OK' || !roster.types.has(t)) { suppressedSetups.add(t); rosterBlocked.add(t); }
+  }
+  return { suppressedSetups, dowSuppressToday, knownTypes, rosterBlocked };
 }
 
 // FIXED 2026-08-16 (DeepSeek QA of the promotion-pipeline structural fix, same session): this
@@ -371,6 +424,8 @@ export function isLiveTimeWindowBlocked(setupType, etMin) {
 }
 
 export function isLiveEligible(setupType, { suppressedSetups, dowSuppressToday, knownTypes }) {
+  // LIVE_ROSTER first, ahead of the SUPPRESS_ALL_DISABLED short-circuit, so no broad override can bypass it.
+  if (rosterBlockReason(setupType)) return false;
   // Placed ahead of the knownTypes check so a setup_type with NO SETUP_STATUS row at all
   // (never calibrated) also becomes eligible under this flag, consistent with "trade
   // everything" -- the normal fail-closed-on-unknown behavior only applies when this is off.
@@ -396,6 +451,8 @@ export function isLiveEligible(setupType, { suppressedSetups, dowSuppressToday, 
 // regression this check caught in an earlier version of the minuteBarSignalDetector.js migration
 // (reverted same session -- see that file's getLiveStatus() for the full writeup).
 export async function getCanonicalLiveStatus(signalName) {
+  const rosterCheck = await checkLiveRoster(signalName);
+  if (rosterCheck.blocked) return { status: 'SHADOW', reason: rosterCheck.reason, liveN: null, liveEv: null, realN: null };
   const { rows } = await query(`
     SELECT recommendation, sample_size, ev_per_trade::float as ev, notes
     FROM performance_audit WHERE signal_type='SETUP_STATUS' AND signal_name=$1

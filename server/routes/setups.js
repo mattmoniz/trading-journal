@@ -9,7 +9,7 @@ import { INSTRUMENTS } from '../config/instruments.js';
 import { getDeltaConfirmationCategory } from '../services/deltaConfirmation.js';
 import { REAL_TRADE_FILTER } from '../../scripts/backtest_setup_status.mjs';
 import { MECHANISMS, MIN_REAL_N, evalBucket, modeOf } from '../../scripts/backtest_flush_post_entry_exit_signals_promotion.mjs';
-import { SUPPRESS_ALL_DISABLED, ALL_LEVELS_LIVE } from '../services/setupEligibility.js';
+import { SUPPRESS_ALL_DISABLED, ALL_LEVELS_LIVE, LIVE_ROSTER_GATE, getLiveRoster } from '../services/setupEligibility.js';
 import { getGateMonitorStatus } from '../services/gateMonitorStatus.js';
 import { killSwitch } from '../services/sierraChart/orderEligibility.js';
 import { gateSignalConfirmation } from '../services/rigorDiagnostics.js';
@@ -48,6 +48,7 @@ router.get('/setups/gate-forward-monitor', async (req, res) => {
 });
 
 router.get('/setups/live-flags', async (req, res) => {
+  const liveRoster = await getLiveRoster();
   let priceBarsStale = false;
   let priceBarsLastBar = null;
   let priceBarsStaleMinutes = null;
@@ -97,6 +98,11 @@ router.get('/setups/live-flags', async (req, res) => {
     brokerAttentionError,
     // Persistent performance regression vs the app's own rolling history (perfTelemetry.js); null = none.
     perfAttention: getPerfAttention(),
+    // LIVE_ROSTER gate (2026-10-21): the gate fails closed, so a missing/stale/empty roster = nothing live; surfaced as a banner.
+    liveRosterGate: !!LIVE_ROSTER_GATE.enabled,
+    liveRosterState: liveRoster.state,
+    liveRosterCount: liveRoster.types.size,
+    liveRosterRunDate: liveRoster.runDate,
     suppressAllDisabled: !!SUPPRESS_ALL_DISABLED.enabled,
     suppressAllDisabledSince: SUPPRESS_ALL_DISABLED.enabled ? SUPPRESS_ALL_DISABLED.addedDate : null,
     allLevelsLive: !!ALL_LEVELS_LIVE.enabled,

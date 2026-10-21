@@ -41,10 +41,14 @@
 // status" convention every other live gate in this codebase uses, so real outcome data
 // keeps accumulating on exactly what's held back.
 import { isOppositeDirectionOpen } from '../routes/acd.js';
-import { CAPITAL_EXPOSURE_OVERRIDE } from './setupEligibility.js';
+import { CAPITAL_EXPOSURE_OVERRIDE, checkLiveRoster } from './setupEligibility.js';
 import { isOpeningDriveCounterTrade, OPENING_DRIVE_GATE } from './openingDriveGate.js';
 
 export async function checkStandardLiveGates({ direction, setupType }) {
+  // LIVE_ROSTER (2026-10-21): these detectors' own getLiveStatus() never consults setupEligibility, so the roster gate would
+  // silently miss them (DeepSeek design review A). Checked first, regardless of direction.
+  const rosterCheck = await checkLiveRoster(setupType);
+  if (rosterCheck.blocked) return { forceShadow: true, reason: rosterCheck.reason };
   // Guard against a future caller passing an unresolved direction -- isOppositeDirectionOpen
   // already no-ops on falsy `direction` (acd.js:348), but be explicit here rather than rely
   // on that internal guard, matching DeepSeek's review point on the directional gates'

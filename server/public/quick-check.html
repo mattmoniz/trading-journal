@@ -4048,6 +4048,11 @@ async function checkFlagsBanner() {
       color = color === '#f87171' ? color : '#facc15';
       lines.push('Could not verify price data freshness');
     }
+    // LIVE_ROSTER gate (2026-10-21): fails CLOSED, so a missing/stale/empty roster means NOTHING is live. Always shown when not OK.
+    if (d.liveRosterGate && d.liveRosterState && d.liveRosterState !== 'OK') {
+      color = '#f87171';
+      lines.push('LIVE ROSTER ' + d.liveRosterState + ' — no setup can go live until scripts/calibrate_live_roster.mjs runs (last roster ' + (d.liveRosterRunDate || 'never') + ')');
+    }
     // ML VETO scorer (2026-10-18): the gate fails CLOSED, so scorer-down means every live candidate is forced to SHADOW with no other visible sign.
     if (d.mlScorerHealthy === false) {
       color = '#f87171';

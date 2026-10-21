@@ -138,6 +138,8 @@ timed_step daily /usr/bin/node scripts/analyze_momentum_chase_shadow_record_2026
 
 timed_step daily /usr/bin/node scripts/update_optimal_stops.mjs
 timed_step daily /usr/bin/node scripts/backtest_setup_status.mjs
+# LIVE_ROSTER (2026-10-21): the set of setup_types allowed to go live; setupEligibility.js fails CLOSED if this row is missing/stale (>10d), so this step must keep running.
+timed_step daily /usr/bin/node scripts/calibrate_live_roster.mjs
 timed_step daily /usr/bin/node scripts/derive_day_types.js
 
 # Day-type-conditioned IB_BEARISH/IB_BULLISH stop/target (2026-08-03,
