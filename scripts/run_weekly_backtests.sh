@@ -500,6 +500,9 @@ run node scripts/monitor_rotation_gate_forward.mjs
 # Merged sweep-reversal detector's hard-drive cutoff (server/services/sweepReversalMerged.js reads performance_audit SWEEP_DRIVE_CUTOFF; no row = the detector stays silent).
 run node scripts/calibrate_sweep_drive_cutoff.mjs
 
+# Standing ML gate rule: weekly scorecard of the live checkpoint on trades it never saw (performance_audit ML_UNSEEN_SCORECARD); flags an OPEN_DECISION only after two consecutive passes. Never changes live behavior.
+run node scripts/ml_unseen_scorecard.mjs
+
 if [ ${#FAILED_STEPS[@]} -gt 0 ]; then
   echo "=== ${#FAILED_STEPS[@]} step(s) failed:"
   printf "  %s\n" "${FAILED_STEPS[@]}"
