@@ -497,6 +497,9 @@ run ./venv/bin/python3 scratch/stop_width_prereg_eval_20261005.py
 # Forward monitor of the rotation-direction gate + context variants (pre-registered, frozen definitions, forward window from 2026-10-21; prints NO DATA YET until the first-look thresholds are met; never changes live behavior).
 run node scripts/monitor_rotation_gate_forward.mjs
 
+# Per-setup_type watch of the rotation gate on tagged rows (RESEARCH_CLAIM rotation_gate_by_type_watch_20261021 overwritten weekly; flags an OPEN_DECISION only when a type reaches >=20 events per arm with a CI above zero). Observation only.
+run node scripts/study_gate_by_type_20261021.mjs
+
 # Merged sweep-reversal detector's hard-drive cutoff (server/services/sweepReversalMerged.js reads performance_audit SWEEP_DRIVE_CUTOFF; no row = the detector stays silent).
 run node scripts/calibrate_sweep_drive_cutoff.mjs
 

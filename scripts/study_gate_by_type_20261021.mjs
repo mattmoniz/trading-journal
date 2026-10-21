@@ -1,4 +1,6 @@
 import { query } from '../server/db.js';
+import { recordClaim } from './record_claim.mjs';
+import { flagDecision } from './flag_decision.mjs';
 import { collapseClusterSiblings, mulberry32, hashSeed } from '../server/services/rigorDiagnostics.js';
 const f=x=>(x>=0?'+':'')+x.toFixed(1), mean=a=>a.length?a.reduce((s,x)=>s+x,0)/a.length:NaN;
 const rows=(await query(`SELECT id, setup_type t, trade_date::text d, cluster_touch_id cl, is_cluster_primary prim, origin_status o, actual_pnl::float p, (rotation_65pt_gate_shadow->>'agree') ag, fired_at::text fa FROM active_setups WHERE rotation_65pt_gate_shadow IS NOT NULL AND origin_status IN ('ACTIVE','SHADOW') AND actual_pnl IS NOT NULL AND resolution IS DISTINCT FROM 'NOT_FILLED' AND ib_window_stale_basis IS NOT TRUE AND stale_entry_price_basis IS NOT TRUE AND late_fill_past_expiry_basis IS NOT TRUE AND bad_bars_basis IS NOT TRUE AND NOT (fired_at::time>='16:00' AND fired_at::time<'18:00')`)).rows;
@@ -18,4 +20,11 @@ out.sort((a,b)=>b.d-a.d);
 console.log(`types with tagged rows: ${by.size}; with >=${MINARM} events in BOTH arms: ${tested}; rows tagged since ${rows.reduce((m,r)=>r.d<m?r.d:m,'9')}`);
 for(const o of out) console.log(`${o.t.padEnd(36)} ${String(o.rec).padEnd(10)} ${o.days}d AGREE n${o.nA} ${f(o.mA)} | DISAGREE n${o.nB} ${f(o.mB)} | delta ${f(o.d)} CI [${f(o.lo)},${f(o.hi)}]${o.lo>0?'  <-- CI above 0':''}`);
 console.log('\nCI above zero:',out.filter(o=>o.lo>0).length,'of',tested,'(about',(0.025*tested).toFixed(1),'expected by chance one-sided at 95%)');
+// Standing watch (user 2026-10-21: "we can watch as the tagged grows"): rerun weekly via run_weekly_backtests.sh; the claim is overwritten each run (fixed slug)
+// and a decision is flagged only when a type reaches >=20 events per arm WITH a day-blocked CI above zero. Observation only; never changes live behavior.
+const TODAY=(await query(`SELECT CURRENT_DATE::text d`)).rows[0].d;
+const QUAL=out.filter(o=>o.nA>=20&&o.nB>=20&&o.lo>0);
+const text=`Weekly watch of the rotation-direction (65pt) gate per setup_type on tagged real-detected rows (tagged since 2026-10-09). Latest run ${TODAY}: ${by.size} types tagged, ${tested} with >=${MINARM} events in both arms, ${out.filter(o=>o.lo>0).length} with a day-blocked CI above zero, ${QUAL.length} qualifying (>=20 per arm and CI above zero). Top deltas: ${out.slice(0,5).map(o=>`${o.t} [${o.rec}] ${f(o.d)} CI [${f(o.lo)},${f(o.hi)}] n${o.nA}/${o.nB}`).join('; ')||'none testable yet'}. Gate is tag-only (ROTATION_GATE_LIVE_BLOCKING off); apply to a setup only where it is shown to help. Script: scripts/study_gate_by_type_20261021.mjs.`;
+await recordClaim({ slug:'rotation_gate_by_type_watch_20261021', claimText:text, sourceFile:'scripts/study_gate_by_type_20261021.mjs', sourceDate:TODAY, sampleSize:tested, winRate:null, evPerTrade:null, rigorStatus:'weekly watch; thin until tagged N grows', status:'PROVISIONAL' });
+if(QUAL.length) await flagDecision({ slug:'rotation_gate_type_qualified_'+QUAL.map(o=>o.t).join('_').slice(0,60).toLowerCase()+'_'+TODAY.replace(/-/g,''), decisionText:`The rotation gate now shows AGREE better than DISAGREE with a day-blocked CI above zero and >=20 events per arm for: ${QUAL.map(o=>`${o.t} (${o.rec}) delta ${f(o.d)} CI [${f(o.lo)},${f(o.hi)}] n${o.nA}/${o.nB}`).join('; ')}. User rule (2026-10-21): apply the gate to a setup only where it improves it. Decide whether to opt these types in (force-SHADOW on DISAGREE) -- check sibling-collapse, day clustering and the multiple-comparison count (${tested} types tested) first.`, sourceFile:'scripts/study_gate_by_type_20261021.mjs' });
 process.exit(0);
