@@ -247,6 +247,18 @@ const MANUAL_SUPPRESS_OVERRIDE = new Map([
   ['FAILED_SWEEP_REVERSAL_SHORT', { reason: 'worst_of_the_120_real_losers_near_zero_risk_mitigation_coverage', addedDate: '2026-09-28' }],
   ['BRACKET_BREAKOUT_SHORT', { reason: 'worst_of_the_120_real_losers_zero_risk_mitigation_coverage', addedDate: '2026-09-28' }],
   ['VWAP_RECLAIM_SHORT', { reason: 'worst_of_the_120_real_losers_zero_risk_mitigation_coverage', addedDate: '2026-09-28' }],
+  // Added 2026-10-21 by explicit user request ("move the negatively performing IB setups to
+  // shadow"). Real live-detected rows since 2026-07-09, cluster siblings collapsed, day-blocked
+  // 95% CI (scripts/family_preview_20261021.mjs / scratch/ib_negatives_20261021.mjs):
+  //   IB_LOW_FADE_SHORT   n47/19d  -34.7  CI [-59,-9]   (entirely below zero)
+  //   PD_IB_MID_FADE_LONG n55/17d  -23.1  CI [-39,-4]   (entirely below zero)
+  //   IB_HIGH_FADE_LONG   n63/27d  -12.4  CI [-26,+3]   (crosses zero; mirror of IB_HIGH_FADE_SHORT, the
+  //                                                       one consistent positive in the IB family)
+  // The positive siblings (IB_HIGH_FADE_SHORT, IB_LOW_FADE_LONG) stay live: the family survives, only
+  // its losing direction moves to SHADOW. Revisit rule: OPEN_DECISION ib_negative_siblings_shadow_recheck_20261021.
+  ['IB_LOW_FADE_SHORT', { reason: 'user_directed_negative_ib_sibling_ci_below_zero', addedDate: '2026-10-21' }],
+  ['PD_IB_MID_FADE_LONG', { reason: 'user_directed_negative_ib_sibling_ci_below_zero', addedDate: '2026-10-21' }],
+  ['IB_HIGH_FADE_LONG', { reason: 'user_directed_negative_ib_sibling_mean_negative', addedDate: '2026-10-21' }],
 ]);
 
 // REVISED 2026-10-11 (superseded the 2026-09-28 "promote everything, no questions asked"
