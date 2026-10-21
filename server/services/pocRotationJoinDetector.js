@@ -55,21 +55,15 @@ import { isOppositeDirectionOpen } from './acdRiskGates.js';
 const THETA_CACHE_KEY = 'pocRotationJoin_theta';
 const THETA_CACHE_TTL = 12 * 60 * 60 * 1000; // 12hr -- full-history median bar range moves negligibly intraday
 const MIN_SESSION_BARS = 40; // matches rthFlushDetector's floor -- not enough bars yet to trust leg detection
-// REVISED 2026-10-11, wired LIVE (replaces the original Time60_Stop20 exit, not additive) --
-// see server/services/pocBreakevenHoldWalker.js's own header for the full backing research
-// and the honest risk this carries (shipped without independent review, on explicit user
-// direction, not the usual SHADOW-first path this codebase's comparable mechanisms take).
-// ARM_AT_MINUTES is the breakeven-arm checkpoint (unchanged from the original Time60's own
-// 60-minute mark) -- no longer the hard exit boundary, just where the stop snaps to
-// breakeven. EXPIRES_CAP_HOURS is the new true outer bound (expires_at), replacing the old
-// flat 60-minute expiry -- the real exit boundary is MIN(next real POC_ROTATION_JOIN event
-// of either direction, this cap), computed live in resolveSetups.js since the "next event"
-// half can't be known at insert time.
-// Exported so resolveSetups.js's resolution branch reads the SAME constants this detector
-// inserts with, rather than a hand-typed duplicate that could silently drift out of sync.
-export const ARM_AT_MINUTES = 60;
-const EXPIRES_CAP_HOURS = 24;
-export const STOP_POINTS = 100; // was 20 -- validated wider-stop construction, see the walker's header
+// REVERTED 2026-10-21 (user: "change the stop on the poc join") to the original Time60_Stop20
+// exit: 20pt stop, 60-minute time limit with mark-to-market (resolveSetups.js). Replaces the
+// 2026-10-11 breakeven-hold exit (100pt stop, breakeven snap at 60min, 24h hold) -- live it
+// lost -439.5 over 20 trades, ~90% from two 100pt stop-outs; the live construction's edge is
+// ~+0.8/trade (CI includes zero) and a wider stop raised win rate, not dollars (claim
+// poc_join_stop_width_and_fade_test_20261021). pocBreakevenHoldWalker.js is kept only because
+// research scripts import it. Constants are exported so research scripts read the live values.
+export const TIME_LIMIT_MINUTES = 60; // 1-min bars, so 60 bars == 60 minutes
+export const STOP_POINTS = 20;
 const T1_PLACEHOLDER_DIST = 1000; // informational-only, see header -- never checked for resolution
 
 let _cache = { sessionKey: null, lastProcessedEntryTs: null };
@@ -155,7 +149,7 @@ export async function detectPocRotationJoin(io) {
       const t1Placeholder = long ? entryPx + T1_PLACEHOLDER_DIST : entryPx - T1_PLACEHOLDER_DIST;
       const firedAt = entryBar.ts;
       const expiresAtDate = new Date(entryBar.ts.replace(' ', 'T') + 'Z');
-      expiresAtDate.setUTCHours(expiresAtDate.getUTCHours() + EXPIRES_CAP_HOURS);
+      expiresAtDate.setUTCMinutes(expiresAtDate.getUTCMinutes() + TIME_LIMIT_MINUTES);
       const expiresAt = expiresAtDate.toISOString().slice(0, 19).replace('T', ' ');
 
       const entryEtMin = (() => {

@@ -25,8 +25,6 @@ import { stepT1FloorRunner, t1FloorPnlFromResolution } from './t1FloorRunnerWalk
 import { getCurrentPrice } from './priceRetrieval.js';
 import { MAX_CHASE_DISTANCE_POINTS } from './sierraChart/orderSweep.js';
 import { stepBreakevenStop } from './breakevenStopWalker.js';
-import { stepPocBreakevenHold } from './pocBreakevenHoldWalker.js';
-import { STOP_POINTS as POC_STOP_POINTS, ARM_AT_MINUTES as POC_ARM_AT_MINUTES } from './pocRotationJoinDetector.js';
 import { detectPostEntryExitSignals } from '../../scripts/pilot_exits_extended.mjs';
 import { getCached, setCached, getGlobalCalib, DAY_CACHE_TTL, getTouchQualityCalib, getTouchQualityBaseline, dropToTimeline } from './acdShared.js';
 
@@ -341,11 +339,10 @@ export async function resolveSetupsByPrice(io) {
       // stop/target DISTANCE and R:R shift with the real fill (this IS the real P&L, that's
       // the point of the fix -- just state it, don't deny it). Three branches also derive a
       // live TRIGGER LEVEL from `entry`, so their resolution thresholds move with it too:
-      // widerTarget = entry ± |t1-entry|*mult (widerTargetWalker.js, called below);
-      // COIL_SURGE's reverted = currentDist < |t1-entry|*0.5; and POC_ROTATION_JOIN's
-      // breakeven-hold arm/stop reference (stepPocBreakevenHold, entry passed directly) --
-      // all three are the intended, correct behavior ("measure everything from the real
-      // entry"), not a bug, but a future reader tracing one of those three needs to know
+      // widerTarget = entry ± |t1-entry|*mult (widerTargetWalker.js, called below) and
+      // COIL_SURGE's reverted = currentDist < |t1-entry|*0.5 -- both are the intended,
+      // correct behavior ("measure everything from the real entry"), not a bug, but a
+      // future reader tracing either needs to know
       // `entry` isn't just cosmetic there. stop_level/t1_level THEMSELVES are deliberately
       // left unchanged (still the theoretical, pre-computed levels) -- the real broker-side
       // stop order is already placed against stop_level directly (placeStopOrder, called
@@ -368,59 +365,36 @@ export async function resolveSetupsByPrice(io) {
     const PNL_PER_POINT = LIVE_INSTRUMENT.dollarsPerPoint;
     const COMMISSION = LIVE_INSTRUMENT.commissionPerRoundTrip;
 
-  // Custom resolution for POC_ROTATION_JOIN_LONG/SHORT — breakeven-hold exit, REVISED
-  // 2026-10-11 (replaces the original Time60_Stop20 design, wired LIVE on explicit user
-  // direction -- see pocBreakevenHoldWalker.js's header for the backing research and the
-  // honest risk this carries without the usual SHADOW-first validation period). 100pt stop
-  // until the trade survives ARM_AT_MINUTES, then the stop snaps to breakeven and the trade
-  // keeps holding -- past the old 60-minute cutoff -- until either the breakeven stop is
-  // hit, or the real exit boundary arrives: the NEXT real POC_ROTATION_JOIN event of EITHER
-  // direction (any setup_type, matched on fired_at), or row.expires_at (now a 24h cap, not
-  // a 60min one), whichever is earlier. t1_level remains an unreachable informational
-  // placeholder (never checked) -- still a genuinely target-less exit shape, deliberately
-  // NOT routed through the shared generic bar-walk further below, same reasoning as before.
+  // Custom resolution for POC_ROTATION_JOIN_LONG/SHORT — Time60_Stop20 exit (see
+  // server/services/pocRotationJoinDetector.js header): 20pt stop, checked bar-by-bar
+  // since fired_at, OR a 60-minute time limit with mark-to-market at the last available
+  // bar's close. REVERTED 2026-10-21 (user: "change the stop on the poc join") from the
+  // 2026-10-11 breakeven-hold exit (100pt stop, breakeven snap at 60min, hold to 24h) --
+  // live it lost -439.5 over 20 trades, ~90% from two 100pt stop-outs, and the live
+  // construction's edge was ~+0.8/trade (CI includes zero); a wider stop raised win rate,
+  // not dollars. Rows opened under the 100pt design resolve against their own stored
+  // stop_level/expires_at, so nothing in flight is stranded. t1_level is an unreachable
+  // informational placeholder (never checked) -- a genuinely target-less exit shape,
+  // deliberately NOT routed through the shared generic bar-walk further below.
     if (row.setup_type.startsWith('POC_ROTATION_JOIN')) {
-      const stop = POC_STOP_POINTS; // 100pt, imported directly from pocRotationJoinDetector.js -- the same constant it inserts row.stop_level with, never a hand-typed duplicate
-      if (entry == null) continue;
+      const stop = row.stop_level;
+      if (entry == null || stop == null) continue;
       const long = row.setup_type.endsWith('_LONG');
-
-      // Real exit boundary: the next real POC_ROTATION_JOIN event (either direction) that
-      // has ACTUALLY fired by now, or the 24h cap -- whichever is earlier. This is
-      // necessarily computed fresh each poll, since "the next event" can't be known at
-      // insert time; a trade with no qualifying next-event yet simply holds to the 24h cap
-      // for now, and this query will start returning one the moment a new real event fires.
-      const nextEventQ = await query(`
-        SELECT fired_at FROM active_setups
-        WHERE setup_type LIKE 'POC_ROTATION_JOIN%' AND id != $1 AND fired_at > $2
-        ORDER BY fired_at ASC LIMIT 1
-      `, [row.id, row.fired_at]);
-      const nextEventAt = nextEventQ.rows[0]?.fired_at ?? null;
-      const exitBoundary = (nextEventAt && nextEventAt < row.expires_at) ? nextEventAt : row.expires_at;
-
       const barsSinceFired = await query(`
         SELECT ts::text as ts, high::float, low::float, close::float
         FROM price_bars_primary WHERE symbol='NQ' AND ts > $1 AND ts <= $2 ORDER BY ts ASC
-      `, [row.fired_at, nowEt < exitBoundary ? nowEt : exitBoundary]);
-
+      `, [row.fired_at, nowEt]);
       let resolution = null, priceAtRes = null, resolvedAt = null, method = null;
-      let walkState = { barsElapsed: 0, armed: false };
       for (const bar of barsSinceFired.rows) {
-        const step = stepPocBreakevenHold(walkState, bar, { entry, long, stop, armAtBars: POC_ARM_AT_MINUTES }); // 1-min bars, so minutes == bar count
-        walkState = step.state;
-        if (step.resolution) {
-          resolution = step.resolution.resolution; method = step.resolution.method;
-          priceAtRes = step.resolution.priceAtRes; resolvedAt = bar.ts;
-          break;
-        }
+        const stopHit = long ? bar.low <= stop : bar.high >= stop;
+        if (stopHit) { resolution = 'STOP_HIT'; method = 'PRICE_CLEAN'; priceAtRes = stop; resolvedAt = bar.ts; break; }
       }
-      // TIMEOUT_EXIT-style method (not MARK_TO_MARKET -- see the 2026-09-15 precedent this
-      // branch already followed before this revision): reaching the real exit boundary
-      // without stopping out is a designed outcome of this exit shape, not an accident of
-      // running out of session time, so it must NOT land in REAL_TRADE_FILTER's
-      // MARK_TO_MARKET/RECOVERY_MTM exclusion list.
-      if (!resolution && nowEt >= exitBoundary && barsSinceFired.rows.length > 0) {
+      // TIMEOUT_EXIT, not MARK_TO_MARKET: the 60-minute mark-to-market IS the designed exit
+      // (see the 2026-09-15 REAL_TRADE_FILTER precedent), so it must not land in that
+      // filter's MARK_TO_MARKET/RECOVERY_MTM exclusion list.
+      if (!resolution && row.expires_at && nowEt >= row.expires_at && barsSinceFired.rows.length > 0) {
         const lastBar = barsSinceFired.rows[barsSinceFired.rows.length - 1];
-        resolution = 'TIME_EXPIRED'; method = 'POC_BEHOLD_TIMEOUT'; priceAtRes = lastBar.close; resolvedAt = lastBar.ts;
+        resolution = 'TIME_EXPIRED'; method = 'TIMEOUT_EXIT'; priceAtRes = lastBar.close; resolvedAt = lastBar.ts;
       }
       if (resolution) {
         const pnl = long ? (priceAtRes - entry) * PNL_PER_POINT - COMMISSION : (entry - priceAtRes) * PNL_PER_POINT - COMMISSION;

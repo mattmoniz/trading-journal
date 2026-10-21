@@ -2029,10 +2029,10 @@ async function main() {
       // Window widened to 3500 chars 2026-10-11 (was 2000) -- the branch legitimately grew
       // with the breakeven-hold exit revision (next-event query, boundary computation, the
       // bar-walk loop itself), confirmed distance ~2644 chars at the time of this change.
-      if (!/if \(row\.setup_type\.startsWith\('POC_ROTATION_JOIN'\)\) \{[\s\S]{0,3500}?method = 'POC_BEHOLD_TIMEOUT'/.test(resolveSetupsSrc)) {
-        fail("[26] resolveSetups.js's POC_ROTATION_JOIN branch no longer writes method = 'POC_BEHOLD_TIMEOUT' within ~3500 chars of its own 'if (row.setup_type.startsWith(...)) {' line -- confirm the branch wasn't refactored back to MARK_TO_MARKET or moved far enough that this check's proximity window needs updating.");
+      if (!/if \(row\.setup_type\.startsWith\('POC_ROTATION_JOIN'\)\) \{[\s\S]{0,3500}?method = 'TIMEOUT_EXIT'/.test(resolveSetupsSrc)) {
+        fail("[26] resolveSetups.js's POC_ROTATION_JOIN branch no longer writes method = 'TIMEOUT_EXIT' within ~3500 chars of its own 'if (row.setup_type.startsWith(...)) {' line -- confirm the branch wasn't refactored back to MARK_TO_MARKET or moved far enough that this check's proximity window needs updating.");
       } else {
-        ok("[26] resolveSetups.js's POC_ROTATION_JOIN branch still writes POC_BEHOLD_TIMEOUT");
+        ok("[26] resolveSetups.js's POC_ROTATION_JOIN branch still writes TIMEOUT_EXIT");
       }
       if (!/if \(row\.setup_type\.startsWith\('IB_LOW_PNR'\)\) \{[\s\S]{0,2000}?method = 'TIMEOUT_EXIT'/.test(resolveSetupsSrc)) {
         fail("[26] resolveSetups.js's IB_LOW_PNR branch no longer writes method = 'TIMEOUT_EXIT' within ~2000 chars of its own 'if (row.setup_type.startsWith(...)) {' line -- confirm the branch wasn't refactored back to MARK_TO_MARKET or moved far enough that this check's proximity window needs updating.");

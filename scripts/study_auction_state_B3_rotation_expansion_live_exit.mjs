@@ -15,7 +15,8 @@
 //   whose exit boundary falls after the loaded data are dropped (right-censored), not marked.
 import { detectSignalEvents } from '../server/services/pocRotationService.js';
 import { stepPocBreakevenHold } from '../server/services/pocBreakevenHoldWalker.js';
-import { STOP_POINTS, ARM_AT_MINUTES } from '../server/services/pocRotationJoinDetector.js';
+// The 2026-10-11 breakeven-hold exit this study replays was reverted live on 2026-10-21; its constants are pinned here rather than imported from the detector (which now holds the 20pt/60min exit).
+const STOP_POINTS = 100, ARM_AT_MINUTES = 60;
 import { mulberry32, hashSeed } from '../server/services/rigorDiagnostics.js';
 import { isInsideNqRollWeek } from '../server/services/acdShared.js';
 import { LIVE_INSTRUMENT } from '../server/config/instruments.js';
