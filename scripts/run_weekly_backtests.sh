@@ -497,6 +497,9 @@ run ./venv/bin/python3 scratch/stop_width_prereg_eval_20261005.py
 # Forward monitor of the rotation-direction gate + context variants (pre-registered, frozen definitions, forward window from 2026-10-21; prints NO DATA YET until the first-look thresholds are met; never changes live behavior).
 run node scripts/monitor_rotation_gate_forward.mjs
 
+# Merged sweep-reversal detector's hard-drive cutoff (server/services/sweepReversalMerged.js reads performance_audit SWEEP_DRIVE_CUTOFF; no row = the detector stays silent).
+run node scripts/calibrate_sweep_drive_cutoff.mjs
+
 if [ ${#FAILED_STEPS[@]} -gt 0 ]; then
   echo "=== ${#FAILED_STEPS[@]} step(s) failed:"
   printf "  %s\n" "${FAILED_STEPS[@]}"

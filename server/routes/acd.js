@@ -71,6 +71,7 @@ import { UNCALIBRATED_SHADOW_TYPES, CONDITIONAL_VARIANTS, STACK_VOL_THRESHOLDS, 
 import { computeMomentumChaseSignal } from '../services/momentumChaseDetector.js';
 import { computeMajorPivotDefendedBreakSignal } from '../services/majorPivotDefendedBreakDetector.js';
 import { computeStallDefendedLevelSignal } from '../services/stallDefendedLevelDetector.js';
+import { detectSweepReversal } from '../services/sweepReversalMerged.js';
 import { computeMinorDefendedLevelSignal } from '../services/minorDefendedLevelDetector.js';
 import { getLevelFadeDefinition } from '../config/setupDefinitions.js';
 import { computeIbBullBear } from '../services/caseEngine.js';
@@ -5678,7 +5679,6 @@ export default function createACDRouter(io) {
       let failedSweepReversalSetup = null;
       try {
       if (currentPrice && allRthBarsRow.rows.length >= 30) {
-        const fsrRecentBars = allRthBarsRow.rows.slice(-10);
         const fsrLevels = [
           pdPOC != null && { name: 'PD_POC', price: pdPOC },
           pdVAH != null && { name: 'PD_VAH', price: pdVAH },
@@ -5697,42 +5697,13 @@ export default function createACDRouter(io) {
         if (fsrOrRow.rows[0]?.or_high != null) fsrLevels.push({ name: 'OR5_HIGH', price: fsrOrRow.rows[0].or_high });
         if (fsrOrRow.rows[0]?.or_low != null) fsrLevels.push({ name: 'OR5_LOW', price: fsrOrRow.rows[0].or_low });
 
+        // 2026-10-21 (user decision "lets do 1"): the inline FAILED_SWEEP_REVERSAL trigger was replaced by the merged sweep detector
+        // (server/services/sweepReversalMerged.js): same reversal-sweep trigger over the UNION of this rule's levels and the old STOP_SWEEP
+        // market levels (ONL/ONH/PDL/PDH/IB), only after a hard drive into the level (rolling-percentile cutoff from performance_audit
+        // SWEEP_DRIVE_CUTOFF, not a typed number), at most once per direction per day. Same type names, so the existing SUPPRESS/
+        // MANUAL_SUPPRESS_OVERRIDE keeps every fire SHADOW. See that file's header and OPEN_DECISION reversal_sweep_stopsweep_merge_into_one_setup_20261021.
         const fsrOpt = getCached(todayET, 'levelFadeStats', DAY_CACHE_TTL)?._opt;
-        for (const lvl of fsrLevels) {
-          if (failedSweepReversalSetup) break;
-          const fsrBrokeBelow = fsrRecentBars.some(b => b.low < lvl.price - 3);
-          const fsrBrokeAbove = fsrRecentBars.some(b => b.high > lvl.price + 3);
-          if (fsrBrokeBelow && currentPrice > lvl.price) {
-            const type = 'FAILED_SWEEP_REVERSAL_LONG';
-            // Fallback literals only cover the narrow window before the OPTIMAL_STOP seed
-            // row (scripts/backtest_setup_b_failed_sweep_reversal_stage1.mjs's own result,
-            // stop=68/target=250) exists or if this lookup fails -- matches the same
-            // bootstrap-default-then-real-data-overrides pattern already used throughout
-            // this file's keepLevelsAll entries (mae_p75/mfe literals overridden by ls()).
-            const stopPts = fsrOpt?.[type]?.stop ?? 68;
-            const targetPts = fsrOpt?.[type]?.target ?? 250;
-            failedSweepReversalSetup = {
-              type, direction: 'LONG', entry: currentPrice,
-              stop: Math.round(currentPrice - stopPts),
-              target: Math.round(currentPrice + targetPts),
-              targetLabel: `${lvl.name} sweep reversal (Setup B)`,
-              description: `Price swept below ${lvl.name} (${Math.round(lvl.price)}), now reclaimed above. Stage 1 bar-history backtest: stop ${stopPts}pt / target ${targetPts}pt (N=803, rigor-clean).`,
-              history: { winRate: null, occurrences: null, avgPnl: null, t1HitRate: null },
-            };
-          } else if (fsrBrokeAbove && currentPrice < lvl.price) {
-            const type = 'FAILED_SWEEP_REVERSAL_SHORT';
-            const stopPts = fsrOpt?.[type]?.stop ?? 68;
-            const targetPts = fsrOpt?.[type]?.target ?? 250;
-            failedSweepReversalSetup = {
-              type, direction: 'SHORT', entry: currentPrice,
-              stop: Math.round(currentPrice + stopPts),
-              target: Math.round(currentPrice - targetPts),
-              targetLabel: `${lvl.name} sweep reversal (Setup B)`,
-              description: `Price swept above ${lvl.name} (${Math.round(lvl.price)}), now reclaimed below. Stage 1 bar-history backtest: stop ${stopPts}pt / target ${targetPts}pt (N=803, rigor-clean).`,
-              history: { winRate: null, occurrences: null, avgPnl: null, t1HitRate: null },
-            };
-          }
-        }
+        failedSweepReversalSetup = await detectSweepReversal({ todayET, etMin, currentPrice, fsrLevels, ibLow, ibHigh, opt: fsrOpt });
       }
       } catch (fsrErr) {
         console.error('[setup-detection] FAILED_SWEEP_REVERSAL block error (isolated, not fatal):', fsrErr.message);
