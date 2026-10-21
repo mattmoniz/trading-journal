@@ -1305,7 +1305,13 @@ function currentSessionStartET() {
   return d.toISOString().slice(0, 10) + ' 18:00:00';
 }
 function inCurrentSession(s, sessionDate, sessionStart) {
-  return s.trade_date === sessionDate || s.status === 'SHADOW' || s.status === 'ACTIVE' || (s.fired_at_str || '') >= sessionStart;
+  // 2026-10-20 (user-caught: a GLOBEX_FLUSH_REVERSAL_LONG that fired 16:48, was visible while open, then vanished from the
+  // timeline and from P&L the moment it resolved +$358 at 20:29): a row also belongs to the current session if it was RESOLVED
+  // since the session started -- realized P&L is booked to the session that was open when it was realized, and a trade that
+  // opened before 6PM but closes after it must not drop off screen at the instant it closes (that was the whole point of the
+  // 10-18 session filter). Keep in sync with GET /api/setups/range-summary?range=today (acd.js), which applies the same rule.
+  return s.trade_date === sessionDate || s.status === 'SHADOW' || s.status === 'ACTIVE' || (s.fired_at_str || '') >= sessionStart
+    || (s.resolved_at_str || '') >= sessionStart;
 }
 
 let lastRotBadge = null;

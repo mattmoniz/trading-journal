@@ -7616,7 +7616,15 @@ export default function createACDRouter(io) {
       const resolved = resolveRangeDates(range, nowET);
       const rangeLabel = resolved.rangeLabel;
       let whereClause, params;
-      if (resolved.mode === 'dates') {
+      if (resolved.mode === 'dates' && range === 'today' && resolved.dates.length === 1) {
+        // 2026-10-20 (user-caught flush trade that fired 16:48 and resolved +$358 at 20:29 vanished from Today): 'today' is the CURRENT
+        // session (it rolls to the next trade_date at 6PM ET), and a trade that opened in the previous session but was RESOLVED since
+        // this session started is realized P&L of this session -- include it, same rule as quick-check.html's inCurrentSession().
+        // Session start = the most recent 6PM ET. Week/month/year/all still go by trade_date, so each trade appears once there.
+        const startDay = new Date(nowET); if (nowET.getHours() < 18) startDay.setDate(startDay.getDate() - 1);
+        whereClause = '(s.trade_date = $1 OR s.resolved_at >= $2::timestamp)';
+        params = [resolved.dates[0], `${startDay.toLocaleDateString('en-CA')} 18:00:00`];
+      } else if (resolved.mode === 'dates') {
         whereClause = resolved.dates.length === 1 ? 's.trade_date = $1' : 's.trade_date = ANY($1)';
         params = resolved.dates.length === 1 ? [resolved.dates[0]] : [resolved.dates];
       } else if (resolved.mode === 'since') {
