@@ -28,3 +28,19 @@ P&L = (exit − entry) × direction × $2/pt − $2 commission (`LIVE_INSTRUMENT
 
 ## What happens with the result
 Nothing live changes from this audit. A HURTS or NOT SHOWN on the live mechanism is flagged as an `OPEN_DECISION` for the user (disable, fix the walker to arm for the next bar with market fills, or leave). The same replay shape is then applied to the other arm-a-stop mechanisms (step-trail, T1-floor runner) as separate pre-registered steps.
+
+---
+
+## Addendum A (committed before running): post-target runner mechanisms — T1-floor runner and step-trail
+
+Same question for the other two arm-a-stop mechanisms. Both start AFTER a target has been banked by the plain path and hold a stop behind price while a runner rides. Script: `scripts/audit_runner_fills_20261026.mjs`, which calls the real walkers (`stepT1FloorRunner`, `stepStepTrail`/`stepWiderTarget`) and changes only the fill rules.
+
+**Realistic rule (same as above):** the runner's stop is effective from the bar AFTER the target-touch bar. If the touch bar closes beyond that stop (the runner is already stopped out), exit at the next bar's open (market). Later stop hits fill at `min(stop, open)` (long) / `max(stop, open)` (short), i.e. a gap through the stop fills at the open. Runner targets fill at their limit price. The T1-floor walker's `Math.max(mark-to-market, floor)` is also removed in the realistic arm (a price below the floor would have hit the floor earlier).
+
+**Baseline:** the plain booked outcome (T1-floor: the row's `actual_pnl` at T1; step-trail: the row's `real_pnl` at the wider target). Both mechanisms' claimed benefit is "runner minus banked".
+
+**Populations (as in the original claims):**
+- T1-floor: `origin_status='ACTIVE'`, `TARGET_HIT`/`PRICE_CLEAN`, no wider_target/trail/extend, not `ABSORPTION_LONG`, last 90 days (`scratch/walkforward_t1floor_runner_20260925.mjs`), plus primary rows, no `*_basis` flags, no NQ roll weeks.
+- Step-trail: rows with `step_trail_shadow` whose `armed_at` is not null (rows that never armed are delta 0 by construction), same filters; step size = stored `frac` x max(distance to the wider target, current `p10BaseFloor` from `STEP_TRAIL_FRACTION`).
+
+**Checks:** (1) parity: the unadjusted replay vs the stored hypothetical (step-trail) / vs the original walk-forward method (T1-floor); (2) per mechanism, mean per trade of `REALISTIC − baseline` and of `STORED/UNADJUSTED − baseline`, day-blocked 95% CI, halves, RTH/Globex, top-5-day share; (3) same frozen verdict rule as above (HELPS / HURTS / NOT SHOWN). No placebo here: these mechanisms hold the stop BEHIND price after a win, so the geometry artifact the placebo targets (a stop moved to entry on a trade that has not moved) does not apply; the fill rule is what is being audited.
