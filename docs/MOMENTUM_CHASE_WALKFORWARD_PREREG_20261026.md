@@ -1,0 +1,20 @@
+# MOMENTUM_CHASE: walk-forward, realistic-fill, regime-gate check — pre-registration (2026-10-25)
+
+Third study of the user-approved "go back to the roster, state-defined setups, be prudent" plan (RTH_FLUSH: NOT SHOWN, GLOBEX_FLUSH: NOT SHOWN). Committed BEFORE the study runs. Nothing live changes.
+
+## What the code does (read from `server/services/momentumChaseDetector.js`, `scripts/calibrate_momentum_chase_width.mjs`, `server/services/volatilityRegime.js`)
+Research version (`RESEARCH_CLAIM setup6_momentum_chase_medium_regime_positive_20260909`, N=128, WR 58.6%, +13.23): a 5-minute RTH bar closes beyond the prior RTH day's high (long) or low (short), morning only (9:30-12:00), enter immediately, symmetric 1:1 stop/target = 75th percentile of 5-minute bar range for the regime (about 46 points), one trade per day, only in the MEDIUM GARCH regime (LOW and HIGH were the losers; MEDIUM was kept after seeing all three). **Live version:** triggers on the live price (a 15-second poll) being beyond PDH/PDL, from 9:35 (dead zone) to 12:00, width from the trailing-90-day regime calibration, SHADOW always. 14 of its 17 live fires happened in the first 6 minutes, so live is mostly a gap-continuation entry at the open. **Regime:** day D is classified from that day's GARCH forecast (`GARCH_VOL_SCALE` row dated D = the forecast for D made from the prior close, walk-forward by construction) against p30/p80 cutoffs of the WHOLE history (796 rows, so the cutoffs use future data).
+
+## Events (2023-03-06 .. last complete RTH date; sparse window 2025-09-28..2025-11-19 and NQ roll weeks (day or prior day) excluded; counts printed)
+PDH/PDL = the previous RTH session's high/low (`daily_rth_stats` calendar). One event per day per arm = the first qualifying bar in the morning window.
+- **Arm B, research-style:** first 5-minute bar (9:30-11:55 buckets) whose close is beyond PDH/PDL; entry at that bar's close, ideal fills (stop/target at exact prices), exit at the 15:59 close if neither is hit.
+- **Arm C, live-like realistic (primary):** first 1-minute bar from 9:35 to 11:59 whose close is beyond PDH/PDL; entry at the OPEN of the next bar; stop and target at entry minus/plus the width, gap-aware fills (open beyond a level fills at the open), stop first, 15:59 close exit.
+- **Arm D, mirrored placebo of C:** same entries and width, direction flipped (fade the break), same fills. A symmetric 1:1 geometry gives a driftless walk no structural edge, so D shows the cost-only baseline and C minus D the directional edge.
+**Width (walk-forward):** the 75th percentile of 5-minute RTH bar ranges over the trailing 90 calendar days strictly before the event date, among days of the same regime class (MEDIUM for the gated arms, all days for ungated arms), needing >= 20 bars; mirrors the live nightly calibration but never uses the event day or later.
+**Regime gate (walk-forward, primary):** day D is MEDIUM if its forecast lies between the p30 and p80 of the `GARCH_VOL_SCALE` rows dated before D (expanding window, at least 150 prior rows, so events start about 2024-03); secondary: the live detector's definition (whole-history cutoffs), reported next to it. Also reported: LOW, HIGH and ungated (ALL) results for context, because MEDIUM was selected after seeing the other two.
+
+## Rule (frozen)
+PRIMARY = arm C, walk-forward MEDIUM gate, both directions pooled: **SURVIVES** only if pooled EV has a day-blocked 95% CI lower bound above 0 AND `C - D` has a CI lower bound above 0 AND both chronological halves of C are positive. LOW/HIGH/ALL, the whole-history-cutoff variant, direction and year splits are descriptive; the selection of MEDIUM among three regimes is a 1-of-3 pick (report all three side by side). Live comparison: the 17 live rows (all SHADOW) next to arm-C simulated P&L on the same dates and direction.
+
+## Limits
+About 250 MEDIUM events at most over 2.5 usable years; width and regime cutoffs are re-derived, not the live values; arm B's 5-minute-bar-close entry is ideal and not tradable; the live poll price is approximated by the 1-minute close; the dead-zone fix (9:30-9:35) postdates 3 of the live fires.
