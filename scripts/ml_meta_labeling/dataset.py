@@ -119,6 +119,13 @@ DIRECTION_FEATURE_COLS = ['drv_is_long', 'drv_recentDeltaAligned15Bars']
 # only the list a NEW model trains on excludes them. feature_cols(full=True) restores the old 27-column list (used by the ablation research script so it stays reproducible).
 TRIMMED_COLS = ['intraday_sessionCumulativeDelta', 'nl30_at_detection']
 
+# CORE_COLS (2026-10-25, user decision: "cut the ML to 4 and build from there. I'm done being conservative"): the 4 inputs a NEW model trains on. Time in session and the recent 15-bar delta
+# (raw + direction-aligned) were the only groups whose removal moved fold AUC beyond the null band (ml_input_ablation_and_candidates_20261020). Greedy forward selection from this base against
+# matched random-column controls (docs/ML_FORWARD_SELECTION_PREREG_20261026.md, scripts/ml_meta_labeling/forward_selection_20261026.py) accepted NOTHING: 4 inputs = AUC 0.5739, +0.36 per
+# trade (27 inputs: 0.5859, +0.51; dollars not distinguishable); the best candidate, setup family, raised AUC (+5.7 null SD) but lowered dollars (-0.43/trade). Everything else is still CAPTURED
+# (build_feature_dict()) and feature_cols(full=True) returns all 27 for research; restore a group by adding it here after it beats its control. Verdict is forward (weekly unseen scorecard).
+CORE_COLS = ['intraday_barsInSessionSoFar', 'minutes_from_open', 'intraday_recentDelta15Bars', 'drv_recentDeltaAligned15Bars']
+
 
 def feature_cols(full=False):
     """The full ordered feature column list -- same shape fetch_training_dataframe() returns
@@ -135,7 +142,10 @@ def feature_cols(full=False):
         + EXISTING_FEATURE_COLS
         + DIRECTION_FEATURE_COLS
     )
-    return cols if full else [c for c in cols if c not in TRIMMED_COLS]
+    if full:
+        return cols
+    assert all(c in cols for c in CORE_COLS), 'CORE_COLS must be a subset of the full column list'
+    return list(CORE_COLS)
 
 
 def build_feature_dict(pd_features: dict, intraday_features: dict, existing: dict, is_long=None) -> dict:
