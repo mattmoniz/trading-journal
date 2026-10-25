@@ -50,6 +50,7 @@ export async function buildDataset(endDate) {
       shBars: sh.length, shBase, sh60: shAt(60), sh180: shAt(180), shEnd: sh.length ? sh[sh.length - 1].close : null,
       r15: (at(15) - O) / atr, r30: (at(30) - O) / atr, r60: (at(60) - O) / atr, rClose: (rth[rth.length - 1].close - O) / atr,
       rthRangeAtr: stats[i].rng / atr, rthHigh: Math.max(...rth.map((b) => b.high)), rthLow: Math.min(...rth.map((b) => b.low)),
+      pdRangeAtr: (Math.max(...prth.map((b) => b.high)) - Math.min(...prth.map((b) => b.low))) / atr, gapAtr: (O - priorClose) / atr,
     });
     if (rthCache.size > 4) rthCache.delete(rthCache.keys().next().value);
   }
