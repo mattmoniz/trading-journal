@@ -1,4 +1,5 @@
 import express from 'express';
+import { getMonitorSummary } from '../services/monitorSummary.js';
 import fs from 'fs';
 import { query, getClient } from '../db.js';
 import { getStructuralLevels } from '../services/phaseChangeDetector.js';
@@ -56,6 +57,13 @@ router.get('/setups/roster-scoreboard', async (req, res) => {
     const n = typeof r.rows[0].notes === 'string' ? JSON.parse(r.rows[0].notes) : r.rows[0].notes;
     res.json({ state: 'OK', savedOn: r.rows[0].d, ...n });
   } catch (err) { console.error('[setups/roster-scoreboard]', err.message); res.status(500).json({ error: err.message }); }
+});
+
+// GET /api/setups/monitor-summary -- read-only; feeds quick-check.html's Monitor tab (hamburger menu): roster scoreboard, ML unseen scorecard, ML ranking test, research-gate states.
+// summary_text is pre-formatted for a Home Assistant REST sensor. Needs its own ~/.cloudflared/config.yml line.
+router.get('/setups/monitor-summary', async (req, res) => {
+  try { res.json(await getMonitorSummary()); }
+  catch (err) { console.error('[setups/monitor-summary]', err.message); res.status(500).json({ error: err.message }); }
 });
 
 router.get('/setups/live-flags', async (req, res) => {

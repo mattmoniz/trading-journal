@@ -189,7 +189,7 @@
      unlike performanceFilter/clusterView/liveAllFilter below, this is pure navigation state,
      never hides real data within a view, so it doesn't carry that same footgun. */
   #page-tabs { display: flex; gap: 1px; border-radius: 8px; overflow: hidden; border: 1px solid var(--border); margin-bottom: 12px; }
-  #page-tabs button { flex: 1; padding: 9px; font-size: 12.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; cursor: pointer; border: none; background: rgba(15,23,42,0.8); color: var(--dim); }
+  #page-tabs button { flex: 1; padding: 9px 4px; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; cursor: pointer; border: none; background: rgba(15,23,42,0.8); color: var(--dim); }
   #page-tabs button.active { background: rgba(51,65,85,0.6); color: var(--text); }
   /* Shared Live/All + Clustered/Declustered filter row (2026-09-28, user request: "they both
      share a live and all tab i think... clustered and declustered too to make the filtering
@@ -364,6 +364,9 @@
   <a href="/setup-performance">Setup Performance →</a>
   <a href="/loss-prevention">Loss Prevention →</a>
   <a onclick="jumpTo('sec-models')">Models</a>
+  <a onclick="openMonitor('mon-scoreboard')">Monitor: Roster Scoreboard</a>
+  <a onclick="openMonitor('mon-ml')">Monitor: ML Scorecard &amp; Ranking Test</a>
+  <a onclick="openMonitor('mon-gates')">Monitor: Research Gates</a>
 </div>
 
 <div id="pulse-bar"><div id="pulse-col-1" class="pulse-col"></div><div id="pulse-col-2" class="pulse-col"></div></div>
@@ -388,6 +391,7 @@
     <button data-ptab="performance">Performance</button>
     <button data-ptab="ml">ML</button>
     <button data-ptab="shadow">Shadow</button>
+    <button data-ptab="monitor">Monitor</button>
   </div>
   <div id="shared-filter-row">
     <!-- POC Gate is a THIRD pill inside this same toggle (2026-10-14, user request: "the
@@ -447,6 +451,13 @@
        to see its real outcome either way. Not clusterView/liveAllFilter-scoped, same reasoning
        as the Shadow tab above: the whole point is "show every tagged candidate," not a filtered
        subset. -->
+  <!-- Monitor tab (2026-10-25, user request: extra monitor sections in the hamburger menu). Read-only view of the scheduled research gates, fed by
+       GET /api/setups/monitor-summary (server/services/monitorSummary.js). Not clusterView/liveAllFilter-scoped: it shows account-level research state, not trades. -->
+  <div id="tab-panel-monitor" style="display:none">
+    <div class="tab-head"><h2>Monitor</h2></div>
+    <div id="monitor-body"><div class="loading">loading…</div></div>
+  </div>
+
   <div id="tab-panel-poc" style="display:none">
     <div class="tab-head">
       <h2 id="poc-title">POC Gate</h2>
@@ -3796,6 +3807,76 @@ document.querySelectorAll('.range-btn').forEach(btn => {
   btn.addEventListener('click', () => loadRange(btn.dataset.range));
 });
 
+// ---- Monitor tab (2026-10-25) ----
+// Every fetch is cache:'no-store'; a failed fetch renders an explicit "can't load" state, never an empty panel. Polled ~5min while the tab is visible.
+let monitorFetchedAt = 0, monitorLast = null;
+const monEsc = (v) => String(v == null ? '' : v).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const monMoney = (v) => v == null ? 'n/a' : (v < 0 ? '-$' : '+$') + Math.abs(v).toFixed(2);
+function monBox(id, title, inner) { return '<div id="' + id + '" style="border:1px solid var(--border);border-radius:8px;padding:10px 12px;margin-bottom:12px"><div style="font-weight:700;margin-bottom:6px">' + title + '</div>' + inner + '</div>'; }
+function monRow(k, v) { return '<div style="display:flex;justify-content:space-between;gap:10px;font-size:13px;padding:2px 0"><span style="color:var(--dim)">' + k + '</span><span style="text-align:right">' + v + '</span></div>'; }
+function monErr(x) { return x && x.state === 'ERROR' ? '<div style="color:#e0a030;font-size:13px">could not load: ' + monEsc(x.error) + '</div>' : null; }
+function renderMonitor(d, err) {
+  const el = $('monitor-body'); if (!el) return;
+  if (!d) { el.innerHTML = '<div style="color:#e0a030;font-size:13px">Monitor data could not be loaded (' + monEsc(err || 'unknown') + '). Will retry.</div>'; return; }
+  const sb = d.scoreboard || {}, un = d.mlUnseen || {}, rk = d.mlRanking || {}, gt = d.gates || {};
+  let h = '';
+  // roster scoreboard
+  let b = monErr(sb);
+  if (!b) {
+    if (sb.state !== 'OK') b = '<div class="loading">No scoreboard data yet</div>';
+    else {
+      const A = sb.arms || {}, arm = (k, label) => A[k] ? monRow(label, A[k].n + ' trades · ' + A[k].days + ' days · ' + monMoney(A[k].perTrade) + '/trade · ' + monMoney(A[k].sum) + ' total') : '';
+      b = monRow('Progress to first look', '<b>' + monEsc(sb.daysSoFar) + ' / ' + monEsc(sb.firstLookDays) + '</b> trading days (since ' + monEsc(sb.start) + ')')
+        + monRow('Verdict so far', monEsc(sb.verdict)) + monRow('Roster now', monEsc((sb.rosterNow || []).join(', ') || 'none'))
+        + arm('ROSTER_LIVE', 'Roster, live') + arm('ROSTER_WOULD_BE', 'Roster, would-be') + arm('TAKE_ALL', 'Take everything') + arm('TAKE_ALL_EX_ROSTER', 'Everything else')
+        + (sb.poc ? monRow('POC join (separate)', sb.poc.n + ' trades · ' + monMoney(sb.poc.perTrade) + '/trade') : '')
+        + '<div style="font-size:11.5px;color:var(--dim);margin-top:4px">Pre-registered; nothing is concluded before the first look. Saved ' + monEsc(sb.savedOn) + '.</div>';
+    }
+  }
+  h += monBox('mon-scoreboard', 'Roster Scoreboard', b);
+  // ML
+  b = monErr(un);
+  if (!b) {
+    const L = un.latest;
+    if (!L) b = '<div class="loading">No scorecard run yet</div>';
+    else b = monRow('Live checkpoint', monEsc((un.checkpoint && un.checkpoint.model_version) || 'unknown') + (un.checkpoint ? ' (AUC ' + monEsc(un.checkpoint.auc) + ')' : ''))
+      + monRow('Last scorecard (' + monEsc(L.date) + ') was for', monEsc(L.checkpoint))
+      + monRow('Unseen days', '<b>' + monEsc(L.unseenDays) + ' / ' + monEsc(un.daysNeeded) + '</b> needed · ' + monEsc(L.unseenTrades) + ' trades')
+      + monRow('Policy minus random', monMoney(L.policyMinusRandom) + (L.ci ? ' (CI ' + monMoney(L.ci[0]) + ' to ' + monMoney(L.ci[1]) + ')' : ''))
+      + monRow('Score vs P&L (Spearman)', monEsc(L.spearman) + (L.spearmanCi ? ' (' + monEsc(L.spearmanCi[0]) + ' to ' + monEsc(L.spearmanCi[1]) + ')' : ''))
+      + monRow('Passes gate rule', L.pass ? '<b style="color:#4ade80">yes</b>' : 'no')
+      + (L.bySession ? monRow('By session', monEsc(JSON.stringify(L.bySession))) : '')
+      + '<div style="font-size:11.5px;color:var(--dim);margin-top:4px">Weekly (Sunday night). The ML stays log-only unless it passes two weeks in a row.</div>';
+  }
+  const rkb = monErr(rk) || (rk.state === 'DONE' ? monRow('Ranking test', 'done ' + monEsc(rk.date)) + '<div style="font-size:12.5px;margin-top:4px">' + monEsc(rk.text || 'see Research Ledger') + '</div>'
+    : monRow('Ranking test (pre-registered)', rk.state === 'DUE_NOT_RUN' ? '<b style="color:#e0a030">due, not run yet</b>' : 'pending — runs from ' + monEsc(rk.runsFrom)) + '<div style="font-size:11.5px;color:var(--dim);margin-top:4px">Runs once on its own after the window closes; the result appears here and in the Research Ledger.</div>');
+  h += monBox('mon-ml', 'ML Scorecard &amp; Ranking Test', b + '<div style="border-top:1px solid var(--border);margin:6px 0"></div>' + rkb);
+  // gates
+  b = monErr(gt);
+  if (!b) {
+    const r = gt.liveRoster || {}, on = (v) => v ? '<b style="color:#e0a030">ON</b>' : 'off';
+    const c = gt.overnightLevelsCron;
+    b = monRow('Live roster gate', monEsc(r.state) + (r.enabled ? '' : ' (gate disabled)') + ' · ' + monEsc((r.types || []).join(', ') || 'none') + (r.ageDays != null ? ' · ' + monEsc(r.ageDays) + 'd old' : ''))
+      + monRow('ML veto gate', gt.mlVeto ? (gt.mlVeto.enabled ? (gt.mlVeto.enforce ? '<b style="color:#e0a030">ENFORCING</b>' : 'log-only') : 'disabled') : 'unknown')
+      + monRow('Breakeven stop (live)', on(gt.breakevenStopLive)) + monRow('T1-floor runner shadow', on(gt.t1FloorShadow))
+      + monRow('09:31 overnight-levels refresh', c ? monEsc(c.status) + ' · ' + monEsc(c.t) : 'no run recorded yet');
+  }
+  h += monBox('mon-gates', 'Research Gates', b);
+  h += '<div style="font-size:11.5px;color:var(--dim)">Updated ' + monEsc(d.generatedAt) + '. Read-only; nothing here changes live trading.</div>';
+  el.innerHTML = h;
+}
+async function loadMonitor(force) {
+  if (!force && Date.now() - monitorFetchedAt < 300000 && monitorLast) { renderMonitor(monitorLast); return; }
+  monitorFetchedAt = Date.now();
+  try { const r = await fetch('/api/setups/monitor-summary', { cache: 'no-store' }); if (!r.ok) throw new Error('HTTP ' + r.status); monitorLast = await r.json(); renderMonitor(monitorLast); }
+  catch (e) { monitorLast = null; monitorFetchedAt = Date.now() - 270000; renderMonitor(null, e.message || 'error'); }
+}
+function openMonitor(id) {
+  switchPageTab('monitor');
+  setTimeout(() => { const el = $(id); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 400);
+}
+setInterval(() => { if (pageTab === 'monitor' && !document.hidden) loadMonitor(); }, 60000);
+
 // ---- Hamburger nav ----
 function toggleNavMenu() { $('nav-menu').classList.toggle('open'); }
 function jumpTo(id) {
@@ -3832,13 +3913,14 @@ document.addEventListener('click', (e) => {
 // (like the collapse state it replaces) -- pure navigation state, never hides real data within
 // a view the way performanceFilter/clusterView/liveAllFilter's OWN persistence used to (that's
 // why those are forced-default/not persisted, and this is different).
-let pageTab = ['performance', 'ml', 'shadow', 'poc'].includes(localStorage.getItem('pageTab')) ? localStorage.getItem('pageTab') : 'timeline';
+let pageTab = ['performance', 'ml', 'shadow', 'poc', 'monitor'].includes(localStorage.getItem('pageTab')) ? localStorage.getItem('pageTab') : 'timeline';
 function applyPageTab() {
   $('tab-panel-timeline').style.display = pageTab === 'timeline' ? '' : 'none';
   $('sec-performance').style.display = pageTab === 'performance' ? '' : 'none';
   $('sec-ml').style.display = pageTab === 'ml' ? '' : 'none';
   $('tab-panel-shadow').style.display = pageTab === 'shadow' ? '' : 'none';
   $('tab-panel-poc').style.display = pageTab === 'poc' ? '' : 'none';
+  $('tab-panel-monitor').style.display = pageTab === 'monitor' ? '' : 'none';
   // Shared Live/All/POC-Gate + Clustered/Declustered toggle row -- now also shown on the POC
   // Gate tab itself (2026-10-14, since the merged toggle that NAVIGATES there also lives in
   // this row -- it has to stay visible once you've arrived, or there'd be no way back to
@@ -3869,6 +3951,7 @@ function switchPageTab(tab) {
   else if (tab === 'ml') renderMlTab();
   else if (tab === 'shadow') renderShadowTab();
   else if (tab === 'poc') renderPocGateTab();
+  else if (tab === 'monitor') loadMonitor();
   $('nav-menu').classList.remove('open');
   // Deliberately no scrollIntoView here (2026-09-28, user report: "it keeps scrolling down" --
   // the tab buttons are already on screen when tapped, so force-scrolling back to them on every

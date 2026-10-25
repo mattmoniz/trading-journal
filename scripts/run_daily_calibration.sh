@@ -142,6 +142,8 @@ timed_step daily /usr/bin/node scripts/backtest_setup_status.mjs
 timed_step daily /usr/bin/node scripts/calibrate_live_roster.mjs
 # Roster scoreboard (2026-10-25): live roster gate vs trading everything, pre-registered (docs/ROSTER_SCOREBOARD_PREREG_20261025.md). Must run AFTER calibrate_live_roster.mjs (it reads the roster history).
 timed_step daily /usr/bin/node scripts/roster_scoreboard.mjs
+# Pre-registered ML ranking test (docs/ML_RANKING_TEST_ADDENDUM_20261025.md): does nothing before 2026-10-28, runs once, records the verdict and resolves its decision. Read-only on live behavior.
+timed_step daily /usr/bin/node scripts/run_ml_ranking_test_20261027.mjs
 timed_step daily /usr/bin/node scripts/derive_day_types.js
 
 # Day-type-conditioned IB_BEARISH/IB_BULLISH stop/target (2026-08-03,
