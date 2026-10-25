@@ -10475,3 +10475,387 @@ Read-only review (plan mode, auto-approve off, full diff embedded in the prompt 
 ### From "2026-10-20 late afternoon: rotation-direction gate (the "POC Gate" pill) -- is it the one thing that works?"
 
 - User: the POC Gate toggle is "pretty good compared to everything else we have". Live tags (collapsed, 8 dates 2026-10-09..20, 817 decided): AGREE -2.9 vs DISAGREE -2.4 per trade overall; RTH +4.1 (CI [-12.5,+17.1]); GLOBEX -17.5 (reversed); AGREE better on only 3 of 8 days (10-09, 10-19, 10-20 strongly; 10-12..16 the other way). Today (declustered, RTH): AGREE +803 on 19 decided vs DISAGREE -734 on 64 (tab), +633/-590 by my stored-P&L query; collapsed +402/-430.
+
+---
+## Archive batch: 2026-10-21 (cutoff 2026-10-14, keep last 7 days)
+
+## 2026-10-13: Multi-position-stacking build -- shipped, NOT yet live, DeepSeek review drafted not dispatched
+
+Per explicit user directive ("Yea build it and raise to 10"): the DeepSeek-reviewed design to
+allow multiple same-direction real positions (direction-aware, opposite-direction still blocked,
+capped at MAX_CONCURRENT_POSITIONS=10 -- the user's own override of DeepSeek's recommended cap
+of 2, matching the broker's real Trade Position Limit) is built, unit-tested, and committed as
+`575e27f`. See that commit and `checkEntryGates()`/`brokerExitDecision()`'s own header comments
+in `server/services/sierraChart/reconciliation.js` for the full design.
+
+**Status at session pause, exact next steps:**
+1. The `position_slot` schema migration was run manually by the user (the sandbox's auto-mode
+   classifier denied it as a schema-altering Bash action) -- independently verified afterward
+   (information_schema + a direct read of the one real open position, correctly backfilled to
+   slot=1). Done, not pending.
+2. The entry-gate rewrite itself (`checkEntryGates()` replacing `isAnotherPositionOpen()` at
+   both real insert sites; `brokerExitDecision()` relaxed to sign+magnitude-floor) is committed.
+   Verified: lint clean, both files import cleanly under real ESM, `test_invariants.mjs`
+   byte-identical (138/166) before/after via `git stash`, `brokerExitDecision()` unit-tested
+   against 7 cases including the original misattribution-bug shape, `checkEntryGates()`
+   exercised against the real live DB state.
+3. **A DeepSeek code-review request for the actual diff was DRAFTED (`scratch/claude_request_
+   deepseek.md`, the diff itself exported to `/tmp/stacking_diff_for_review.txt`) but NOT YET
+   DISPATCHED** -- the session paused before calling `invoke_gemini.sh`'s DeepSeek sibling
+   (`scripts/invoke_deepseek.sh`). This review is the real next step, before restarting live --
+   matches this codebase's own standing "a fix applied in response to a review finding needs the
+   same discipline as the original change" rule, since the original DeepSeek pass only reviewed
+   the PLAN, not this actual code.
+4. **The server has NOT been restarted** -- the old strict 0-or-1-position singleton is still
+   what's actually running live. Per the standing restart rule, a restart disarms the kill
+   switch; `DTC_AUTO_REARM_SAFE=true` is set on the active Sim1 profile, so it should auto-rearm
+   on its own once a fresh post-restart reconciliation comes back clean -- but the restart itself
+   should only happen after the DeepSeek review above, and the user should be told it's
+   happening (per the standing restart-disarms rule), not treated as a silent follow-up.
+5. Three real follow-on gaps from the same review, deliberately NOT built in this pass, flagged
+   as `OPEN_DECISION`s (`node scripts/flag_decision.mjs --list` to see full text):
+   - `dual_account_position_snapshot_blind_spot_20261013` (HIGH) -- confirmed, not just
+     theorized: `getBrokerSnapshot()` never even requests the Globex account's positions at all
+     (`requestCurrentPositions()` defaults to `this._tradeAccount` only), so
+     `checkPositionInvariant()`/`brokerExitDecision()` are structurally blind to any real Globex
+     position. Predates this build but is more consequential now that RTH+Globex positions can
+     coexist under stacking.
+   - `dll_gate_blind_to_open_exposure_20261013` (MEDIUM-HIGH) -- `evaluateDailyLossLimit()` only
+     sums realized broker P&L; has zero visibility into unrealized exposure across up to 10
+     stacked open positions.
+   - `same_setup_type_stacking_rule_undecided_20261013` (MEDIUM) -- no same-setup-type-specific
+     cap exists at the real-order layer; governed only by whatever the upstream simulated-layer
+     refire gate already filters before a candidate reaches ACTIVE.
+
+**If a future session picks this thread up cold: read `575e27f`'s diff and `scratch/claude_
+request_deepseek.md` first, then either dispatch that review as-is or re-derive whether it's
+still accurate against any code that's changed since.**
+
+**UPDATE, same session: the DeepSeek review above WAS dispatched and came back.** Found 2 real
+issues (verified independently before accepting, not taken on faith): (1) `sweepExits()` hardcoded
+`tradeAccount: dtcClient.tradeAccount` for every exit instead of reusing the entry's own stored
+account -- a Globex-originated exit was being submitted to the wrong account; (2) the new slot
+index only enforces capacity, not direction (the old singleton index was a true table-wide "at
+most one, ever" constraint that made opposite-direction coexistence structurally impossible as a
+side effect -- the new one doesn't have an equivalent). Both fixed, committed as `d150292`
+(verified: lint clean, both files import under real ESM, `test_invariants.mjs` byte-identical
+138/166, and a new real-DB test exercising the actual SQL against two borrowed-inert setup_ids).
+A third, minor issue (the escalation UPDATE could throw a real exception on a rare slot race
+instead of returning "no slot") was fixed in the same commit.
+
+The `dual_account_position_snapshot_blind_spot_20261013` decision was updated with DeepSeek's
+sharper assessment -- the SUBMISSION-routing half is now fixed by `d150292`, but the pre-exit
+SAFETY GUARD (`brokerExitDecision()`/`checkPositionInvariant()`, fed by `getBrokerSnapshot()`)
+remains account-blind, which DeepSeek thinks should be a near-term priority, not an indefinitely-
+deferred item, since it's a live misattribution risk on the exit path, not just a halt risk.
+
+**Status: both rounds of fixes committed (`575e27f`, `d150292`). Server NOT YET restarted** --
+still pending, and separately, the real broker-side mismatch from the earlier manual "Reverse"
+incident (setup 134421, kill switch currently halted/disarmed, real broker position short 1 that
+this app has no record of) needs the user's own resolution before a restart/re-arm makes sense
+regardless of this code being ready.
+
+## 2026-10-13 (continued): DLL gate fixed, market-entry-order-type build in progress, note field added
+
+**The DLL-gate-blocks-everything incident from earlier today is resolved.** A reconstructed EXIT
+row for setup 134421 (the real long closed by the manual Reverse -- see the entry above) was
+inserted using the broker's own confirmed real fill price (30767.25), and
+`recordBrokerPnlForSetup()` computed a real `broker_pnl=$8.50`. Independently verified:
+`evaluateDailyLossLimit()` now returns `{blocked:false, reason:'within limit'}`, kill switch
+confirmed still armed. Real order placement should be back to normal.
+
+**"Fire at MARKET instead of LIMIT" for specific moving-reference setup_types -- built,
+unit-tested, DeepSeek code-review dispatched, NOT yet restarted/deployed.** Per explicit user
+decision (overriding DeepSeek's own recommended narrower fix -- the Phase 0 design critique is
+in `scratch/deepseek_response.md`, NOT in this doc as an earlier version of this entry
+incorrectly said -- it's a 541-line raw response file including DeepSeek's own thinking trace;
+the final verdict starts at its own `## Verdict` heading).
+
+**STACK_VOL_BREAK_LIVE_LONG/SHORT -- checked directly against the real code, EXCLUDED.** This was
+added to scope mid-build by explicit user request, after the Phase 0 critique had already been
+sent, so DeepSeek was never asked about it. Checked directly: `acd.js`'s `computeStackVolSignal()`
+(~line 3133) sets `const svEntry = bar.close` -- the triggering bar's own FIXED breakout price at
+detection time, not a continuously-recomputed moving reference like `vwap24`/`earlyVwap`. Same
+underlying reason `GLOBEX_VWAP_MAGNET` is excluded (entry already a point-in-time snapshot, not
+something that keeps drifting away from the frozen LIMIT while unfilled) -- excluded on that
+basis. Final scope, 6 setup_types: `GLOBEX_VWAP_FADE_LONG/SHORT`, `RTH_VWAP_FADE_LONG/SHORT`,
+`POC_ROTATION_JOIN_LONG/SHORT` (the last pair confirmed moot today -- real N<20, SHADOW-only, can
+never place a real order -- but kept in scope per the same principle for when it eventually
+promotes, matching DeepSeek's own Phase 0 note).
+
+**Built:**
+1. `dtcClient.js`'s `submitOrder()` -- `freeFormText` param (confirmed real against
+   `/mnt/c/SierraChart/DTC/DTCProtocol.h`'s `ORDER_FREE_FORM_TEXT_LENGTH=48`), truncated
+   defensively to 47 chars at the one wire-serialization point.
+2. `reconciliation.js`'s `placeEntryOrder()` -- `marketEntry` param (default `false`, every
+   existing caller unaffected) + `freeFormText` pass-through via `submitAndRecord()`. When
+   `marketEntry=true`: `orderType: 'MARKET'`, `price1: 0` (matching
+   `placeMarketEscalationEntryOrder()`'s own established convention for a MARKET order's
+   ignored-but-required wire Price1). `entryPrice` still required/validated even in MARKET mode
+   (bookkeeping use by the caller).
+3. `orderSweep.js`'s `sweepEntries()` -- `MARKET_ENTRY_SETUP_TYPES` Set (originally 6 types, now
+   4 -- see the Phase 2 review outcome below), `fired_at` added to the row SELECT,
+   `marketEntry`/`freeFormText` (`setup_type + setup_id + fired_at-time`) passed through. Bracket
+   path (`placeBracketEntryOrder`, off by default) untouched -- this only touches the standalone
+   LIMIT/MARKET path.
+
+**Phase 2 DeepSeek code review came back (`scratch/deepseek_response.md`, overwritten -- Phase 0's
+critique is gone from that file now, only the Phase 2 review remains) with 1 real correctness
+defect and 1 real scoping inconsistency, both independently verified against the actual code
+before accepting (not taken on faith), both fixed, committed as `3dabe74` (initial build) +
+a follow-up commit (the fixes):**
+
+1. **`price1` DB sentinel bug (the one correctness defect, confirmed real).** The first draft
+   stored `price1=0` in BOTH the DB row and the wire message for a market entry, copying
+   `placeMarketEscalationEntryOrder()`'s own `price1=0` convention -- but that function's row is
+   protected from three downstream "treat price1 as a real limit" consumers
+   (`escalateUnfilledEntriesToMarket`, `resolveSetups.js`'s chase-abandon check,
+   `check_order_lifecycle_health.mjs`'s `checkStuckUnfilled`) by its client_order_id's trailing
+   `'M'` suffix, which all three explicitly filter on. A FRESH market entry has no such suffix, so
+   `price1=0` flows straight into their chase-distance math as a real (wildly wrong) limit price
+   -- and does so ASYMMETRICALLY by side: confirmed directly in `resolveSetups.js` (`orderInfo.
+   status === 'OPEN' && Number.isFinite(orderInfo.price1)` -- `Number.isFinite(0)` is `true`, so
+   this branch runs) that a BUY reads `current - 0` as "too far to ever chase" (silently never
+   escalates/abandons) while a SELL reads `0 - current` as a large negative distance that never
+   trips the "too far" guard (pointlessly cancels-and-resubmits MARKET every poll). Fixed by
+   decoupling DB `price1` (now `null` for a market entry, matching `fillPriceSanity`'s own
+   existing null-as-no-constraint convention -- `orderType==='MARKET' || !Number.isFinite(price1)`
+   -- independently re-read and confirmed in `priceMultiplier.js`) from the wire `Price1` (still
+   `0`, unaffected). `placeEntryOrder()` now computes `dbPrice1`/`wirePrice1` separately instead
+   of one shared value.
+
+2. **POC_ROTATION_JOIN scoping inconsistency (confirmed, dropped from scope).** DeepSeek pointed
+   out that `pocRotationJoinDetector.js`'s `entryPx = entryBar.open` (line 153, independently
+   re-read and confirmed) is a FIXED point-in-time bar price, not a moving reference -- the
+   identical shape to the already-excluded `STACK_VOL_BREAK_LIVE`. Including it was a
+   thesis-level argument ("price will join back to a moving fair-value median"), not an
+   entry-staleness one, and inconsistent with the rule actually being applied everywhere else.
+   Dropped from `MARKET_ENTRY_SETUP_TYPES` for consistency -- was moot anyway (SHADOW-only, real
+   N<20). Final scope: `GLOBEX_VWAP_FADE_LONG/SHORT`, `RTH_VWAP_FADE_LONG/SHORT` (4 types, not 6).
+
+3. **GLOBEX_VWAP_FADE RTH/Globex naming collision (a real landmine the Phase 0 critique hadn't
+   fully flagged, since it wasn't asked specifically about this).** Independently re-confirmed by
+   reading both insert sites directly (I had already read the RTH-hours copy myself earlier this
+   session, lines ~3630-3680): `detectGlobexSetup()` fires `GLOBEX_VWAP_FADE_LONG/SHORT` with
+   `level: vwap24` (the genuinely moving reference), but a SEPARATE RTH-hours `shadowCandidates`
+   block (`globexVwapFadeRTH`) fires the SAME setup_type string with `entry: currentPrice` -- a
+   fixed snapshot, the exact shape `GLOBEX_VWAP_MAGNET` is excluded for. A setup_type-keyed set
+   can't distinguish the two by name alone. Fixed via a `wantsMarketEntry(row)` guard (exported
+   from `orderSweep.js` for direct unit testing) that additionally checks `row.is_rth` -- the two
+   insert paths are time-exclusive (the Globex path only runs during `inGlobex`, the RTH-hours
+   block only runs when NOT `inGlobex`), so `is_rth` (a real, persisted GENERATED column derived
+   from `fired_at`'s time-of-day, already selected in `sweepEntries()`'s row for
+   `selectTradeAccount()`) reliably tells them apart without needing a new column.
+
+4. **Structural-advantage confound (already a known, flagged risk -- `OPEN_DECISION
+   primary_phantom_resolution_no_fill_gate_20261012`) -- now documented at THIS decision site
+   too**, since this change makes a mechanism that was a rare escalation fallback into the
+   default entry path for 4 setup_types: a MARKET fill's real price can differ from the frozen
+   `entry_zone_low` the stop/target were calibrated against, so the real risk distance on a
+   market-filled trade isn't exactly what `OPTIMAL_STOP` assumed for that setup_type. Not a new
+   mechanism, just a wider blast radius for an already-accepted one -- documented inline, not
+   separately re-litigated.
+
+5. **Minor, not fixed (deliberately, low-value):** `wantsMarketEntry()` is not consulted on the
+   OCO-bracket branch (`SIERRA_USE_OCO_BRACKET`, off by default) -- a bracket parent can't itself
+   be MARKET. Documented inline at that branch so flipping the flag on later doesn't silently and
+   confusingly revert these 4 types to LIMIT with no explanation.
+
+**Re-verified after the fixes (not just the first pass):** `npx eslint` clean, both files import
+cleanly under real ESM, `node scripts/test_invariants.mjs` unchanged at 139/166 via `git stash`.
+Extended `scratch/test_market_entry_20261013.mjs` to 7 cases (added: DB `price1` is `null` not
+`0` for a market entry; `wantsMarketEntry()`'s `is_rth` guard, 4 sub-cases; `POC_ROTATION_JOIN`
+confirmed dropped from scope) -- all 7 pass. Residue/real-position check re-run clean (setup_id
+134421 untouched).
+
+**RESOLVED, same session -- restarted, live, verified clean.** User gave the explicit
+go-ahead ("Yea restart"). `./restart.sh` timed out once under an EXTERNAL 100s Bash-tool
+timeout (not the script's own logic) -- per the standing rule, verified directly with
+`ps -ef` afterward rather than assumed: zero duplicate processes, the server was simply
+fully stopped (systemd `inactive (dead)`, no node/nodemon running at all), not a dangerous
+duplicate-supervisor state. Re-ran via `run_in_background: true` with no external
+timeout; completed cleanly -- single `nodemon`/`node server/index.js` pair, kill switch
+armed (`auto-rearm-on-simulation-boot`), reconciliation clean (`brokerPositionCount:0`,
+`clean:true`). Confirmed the new code is actually live (not just "server is up"): the ML
+tab's `resolved_at_str` column (added in the equity-curve fix below) is present in a live
+`/api/ml-silo/range-trades` response, which only happens on a genuine process restart since
+that file is server-side JS, not a static asset. `node scripts/test_invariants.mjs`
+unchanged (139/166) post-restart; no new `scratch/server_errors.jsonl` entries since.
+
+**Separately, a real, previously-undiagnosed root cause for the "1 trade still without
+broker P&L" DLL block was found and flagged, not just patched around -- CORRECTED after a
+second, deeper pass the same session (the first pass below got the mechanism half right and
+mischaracterized the other half; read this version, not an earlier description).** Traced
+directly from the raw broker messages in `order_placements_updates` and
+`journalctl`/`checkPositionInvariant()`'s own logged output (not guessed): Sierra Chart's
+"Reverse and Cancel" command (12:54:42pm ET) canceled the resting stop order
+(`client_order_id=S134421`) normally, then submitted a MARKET flatten + a new bracket pair
+per Sierra's own documented Reverse mechanism (fetched, not assumed) -- but those 3
+resulting orders carried an EMPTY `ClientOrderID` (`""`), so this app's LIVE event-stream
+handler (`handleOrderUpdate()`) never received them at all, not even as an unattributed
+`UNOWNED:` entry (confirmed: zero `UNOWNED:` rows in `order_placements_updates` that day).
+They only ever surfaced via the SEPARATE periodic reconciliation snapshot path
+(`checkPositionInvariant()`, which polls broker state rather than consuming the live push
+stream) -- **and that path caught the mismatch and halted the kill switch 4 SECONDS after
+the Reverse action** (`UNKNOWN-TO-APP MISMATCH (TERMINAL_TRANSITION)`, logged at 12:54:46).
+Detection was fast and visible (`quick-check.html`'s `checkFlagsBanner()`, 30s poll, shows
+"SIERRA CHART DISARMED" with the halt reason) -- an EARLIER draft of this entry wrongly
+claimed the reconciliation backstop "didn't catch this in real time," based on a LATER,
+unrelated `lastInvariantCheck: {checked:false, reason:"no broker response"}` reading that
+was conflated with the original incident; that claim is retracted. **The real, still-open
+gap is RECOVERY, not detection**: `checkPositionInvariant()`'s own mismatch report already
+contained the broker's real average fill price (30767.25 -- the exact number later used in
+the manual reconstruction), but nothing automatically turns "a confidently-attributable
+unknown-to-app fill" into a `broker_pnl`/`active_setups.status` correction -- it just halts
+and waits for a human to read the log and hand-write the fix, which is why this sat broken
+for hours despite being flagged in seconds. Flagged as `OPEN_DECISION
+manual_sierra_action_no_broker_pnl_visibility_20261013` (HIGH, text updated with the
+corrected mechanism) -- two real follow-ups, neither built yet: (1) auto-reconciling an
+unknown-to-app fill against `broker_pnl`/`active_setups` when it can be confidently matched
+to the single currently-open real position, instead of requiring a manual reconstruction
+every time (explicit user request to look into this, not yet started -- a real-P&L-writing
+change, needs the user's sign-off on the approach before building, not just proceeding); (2)
+WHY Reverse's orders carry an empty `ClientOrderID` at the DTC level is understood only via
+Sierra's own Trade Window documentation (what Reverse mechanically does), not via official
+documentation of the DTC-visibility consequence itself -- treat as a strong, evidence-based
+inference (confirmed against real traffic), not a verified protocol guarantee. **Both
+findings (and the general "manual Sierra Chart actions can bypass this app's live event
+visibility" lesson) are now also recorded in [docs/SIERRA_CHART_NOTES.md](SIERRA_CHART_NOTES.md)**
+-- a new running notebook for this exact purpose, added the same session per direct user
+request ("I feel like you need to keep a notebook of how you need to interact with sierra
+chart dtc" -> broadened to "a sierra chart notes file for anything you need").
+
+**One small, separate loose end, not yet chased:** of the 15 trades that resolved in a
+batch at RTH close the same day (the equity-curve-ordering bug below), one real-eligible
+(`origin_status='ACTIVE'`) cluster-sibling row (`C_PAIRED_LONG`, id 134731,
+`is_cluster_primary=false`, fired 15:58:00) got no `gated_candidates` skip logged at all --
+unlike its sibling at 134708, which was correctly logged as blocked by the DLL gate. Not
+investigated further this session; flagged in conversation, not yet in `flag_decision.mjs`.
+
+This fix round's own diff was NOT sent back to DeepSeek for a second review pass (matching
+this codebase's own "2 correction attempts then Claude takes over" convention is about
+Gemini/DeepSeek being WRONG twice, not about every follow-up fix needing a fresh dispatch --
+both findings here were independently verified against the real code directly, not just
+trusted).
+
+**If a future session picks this up cold:** read this entry in full (it now contains the
+complete before/after), then `scratch/deepseek_response.md` if more of DeepSeek's own reasoning
+is needed (it currently holds the Phase 2 review only -- the Phase 0 critique was overwritten,
+its conclusions are already folded into this entry and the earlier one above it).
+
+## 2026-10-13 (continued): equity curve/maxDD was sorted by fire time, not resolve time -- fixed
+
+**RESOLVED, same session.** User-caught live: quick-check.html's Net P&L chart showed negative
+most of the day, then jumped to +$419 on a single refresh with no warning -- "the chart did not
+accurately reflect what I saw all day... and it suddenly changes." Root-caused, not assumed:
+15 trades fired between 10:05am-3:58pm but all resolved in one `TIME_EXPIRED` batch at RTH close
+(4:00:00-4:00:22pm, +$649.50 net) -- `getDecidedRows()`'s cumulative curve was sorted by
+`fired_at_str` (when each trade STARTED), not `resolved_at_str` (when its P&L actually became
+known), so the moment those 15 trades resolved, they were spliced into the MIDDLE of the
+already-drawn curve at their original fire-time slots -- retroactively shifting every later point
+and rewriting hours of already-displayed chart shape with no real-time event to explain it. This
+also silently corrupted `maxDD` (computed by walking the same mis-ordered sequence peak-to-trough)
+-- a real risk-management number, not just a cosmetic chart issue.
+
+Fixed in `getDecidedRows()` (sort key: `resolved_at_str || fired_at_str`, falls back for ~578
+all-time pre-2026-07-20 rows that predate `resolved_at` being reliably populated -- 0 for any date
+this sort actually matters for live) and the equity curve's x-axis time labels to match. Found and
+fixed the SAME bug shape in the ML tab's `computeMlRangeStats()`/`renderMlSiloRangeEquityChart()`
+(mlSiloService.js's `getRangeTrades()` needed `resolved_at_str` added to its SELECT -- it didn't
+have the column at all). Committed `2e8821d`. Verified: `node --check` on the extracted inline
+script (clean -- no Playwright/browser tool was available this session, said explicitly rather than
+claiming an interactive check was done), live page confirmed serving the edit immediately
+(`quick-check.html` is a static file, no restart needed), `/api/ml-silo/range-trades` confirmed
+returning `resolved_at_str` post-restart, `test_invariants.mjs` unchanged (139/166), no new
+`CLIENT_ERROR`/`SERVER_ERROR` entries since.
+
+**Of the $649.50 batch itself, a direct follow-up question ("if those fired trades actually
+traded we would have been up +$649?") was checked against the real data, not assumed: NO.**
+13 of 15 were `SHADOW`-origin (never real alerts, background-tracked only, $596.50 of the total)
+-- not money that was ever going to trade regardless of anything else. Only 2 were
+`origin_status='ACTIVE'` ($53 combined), and NEITHER got a real order placed: one (+$55.50,
+`OR10_HIGH_FADE_LONG`) was explicitly blocked by the DLL-gate incident (see the entry above --
+skip logged at 15:54, before the 16:27 fix); the other (-$2.50, `C_PAIRED_LONG` cluster sibling)
+has no logged skip reason at all, the small loose end flagged above. The real, honest "cost of
+today's incident" figure is +$55.50, not +$649.50.
+
+
+## 2026-10-13/14: Silent-close auto-reconciliation shipped; two more real "stuck pending" bugs found and fixed live
+
+**Silent-close auto-reconciliation (`attemptSilentCloseReconciliation()`, reconciliation.js) --
+built, DeepSeek-reviewed (Phase 0 design critique, independently verified before accepting),
+real DB-backed unit + end-to-end tests, shipped.** Addresses the manual-Reverse incident
+documented above: when `checkPositionInvariant()` confirms a real quantity mismatch, and exactly
+one real `active_setups` row still believes it has an open position that could explain it, this
+auto-writes the real closing price (recovered from the broker's own settled position snapshot,
+not guessed) and calls `recordBrokerPnlForSetup()` -- same bookkeeping fix done manually this
+morning, now automatic. Deliberately auto-WRITE, not pending-approval (explicit user decision,
+"fire this market" / "lets try autoapprove for now" -- argued through directly: a pending-
+approval queue doesn't actually help if nobody's watching, which was the whole problem today).
+Never re-arms the kill switch, never places an order -- bookkeeping only. User explicitly
+confirmed understanding the real risk (an estimated, not directly-confirmed, price) before
+approving.
+
+**A real bug was found and fixed via the feature's own end-to-end test, not assumed clean**:
+`checkPositionInvariant()` does its own internal retry with a FRESH broker snapshot when the
+first reading is stale, but never returned that fresher snapshot to its caller -- so
+`attemptSilentCloseReconciliation()` was reading price data from the ORIGINAL, possibly-stale
+snapshot instead of the one that actually confirmed the real mismatch. Fixed by having
+`checkPositionInvariant()` return `freshSnapshot` (excluded from the persisted reconciliation
+log to avoid bloating every row with a full position-message array). Caught specifically
+because the E2E test modeled a REALISTIC broker (the retry call returns only the settled state,
+not a replay of the original in-flux window) rather than a naive fake that happened to mask the
+bug. 5/5 E2E cases + 7/7 unit cases pass after the fix.
+
+**Two more real, independently-discovered "stuck pending" bugs, found live while investigating
+user reports, both fixed the same night:**
+
+1. **Missing-order resolution was too slow (user: "It needs to be seconds nor minutes" /
+   "We're too slow").** The existing MISSING_ORDER auto-resolve (5-min cron + a deliberate
+   5-10min visibility buffer) meant a real setup with no order ever placed could show
+   misleading "pending fill" for up to 15 minutes -- confirmed live: 3 real setups
+   (134732/134735/134736) sat that way from 18:30 until the cron caught them at 18:45. The
+   buffer was NEVER about correctness (the code's own comment said so) -- it assumed a human
+   would be watching and benefit from seeing the alert first, which this exact session already
+   established isn't true in practice (nobody's watching the dashboard in real time). Extracted
+   the resolve logic into `server/services/missingOrderAutoResolve.js` and wired it into the
+   main 15s live poll loop (acd.js) as well as the 5-min cron (now a redundant backstop only) --
+   resolves within one poll cycle instead of minutes.
+
+2. **A real order CANCELED fast (by something outside this app) falls through every existing
+   resolution path.** Found live: setup 134741 (`PD_POC_FADE_SHORT`, 7:05pm fire) had its real
+   entry order canceled only ~93 seconds after submission -- confirmed via `journalctl`, zero
+   app-side activity at that moment, not this app's own escalation logic. Traced precisely by
+   timestamp comparison against two OTHER real cancels that DID resolve cleanly (134738/134739,
+   canceled at exactly ~15 minutes, crossing `resolveSetups.js`'s own `CHASE_ABANDON_MINUTES=15`
+   threshold while still `status='OPEN'`) -- chase-abandon only fires for an order still OPEN
+   past 15 minutes; an order canceled THIS fast is no longer OPEN by the time 15 minutes pass,
+   so it can never satisfy that condition. The existing MISSING_ORDER check doesn't apply either
+   (a real order row exists). Sat stuck ~11.5 hours before being found and manually resolved.
+   Built `autoResolveDeadCanceledEntries()` (same file) -- catches a real ENTRY order CANCELED
+   with zero fill and no market-escalation resubmit (`client_order_id NOT LIKE '%M'`, confirmed
+   that suffix is what a successful resubmit actually gets) after a 3-min buffer. Wired into the
+   live loop and the cron the same way as the missing-order fix. 4/4 real DB-backed test cases
+   pass (the dead-cancel shape resolves, an escalated order is left alone, a too-recent cancel
+   waits out the buffer, no residue).
+
+**Also fixed in passing**: both resolve functions now set `actual_outcome='NOT_FILLED'`
+(the original missing-order fix didn't -- every OTHER resolution writer in this codebase does,
+confirmed by grep before fixing, a real inconsistency even if nothing was actively broken by it).
+
+**Not yet investigated**: WHY setup 134741's order was canceled from outside the app in the
+first place (cause unknown -- broker/Trading Evaluator side, no explanation in the raw message
+beyond "Simulated order canceled"). The two new auto-resolve functions are a safety net for the
+SYMPTOM (a dead order that will never get a real position), not a fix for whatever caused the
+fast external cancel. Worth a closer look if this recurs with any frequency -- not chased
+tonight given the fixes already close the user-facing "stuck pending" problem regardless of
+root cause.
+
+**Verification, all of it, not assumed**: lint clean on all touched files;
+`node scripts/test_invariants.mjs` byte-identical (141/168, confirmed via a live `git stash`
+comparison against the exact same baseline, not the earlier-in-session 139/166 number -- real
+data drift over hours, not a regression); real DB-backed tests for all three mechanisms
+(unit + end-to-end for silent-close, unit for both new resolve functions); the real stuck
+trades (134741, and the earlier 3 missing-order cases) all confirmed resolved in the live DB,
+not just in test fixtures.
+
