@@ -10,9 +10,10 @@ const rank = (a) => { const idx = a.map((v, i) => [v, i]).sort((x, y) => x[0] - 
 const spearman = (x, y) => { const rx = rank(x), ry = rank(y), mx = mean(rx), my = mean(ry); let n = 0, dx = 0, dy = 0; for (let i = 0; i < rx.length; i++) { n += (rx[i] - mx) * (ry[i] - my); dx += (rx[i] - mx) ** 2; dy += (ry[i] - my) ** 2; } return n / Math.sqrt(dx * dy); };
 async function main() {
   const today = (await query(`SELECT CURRENT_DATE::text AS d`)).rows[0].d;   // trading-day date from the database (America/New_York), never JS toISOString
-  const ck = (await query(`SELECT model_version, trained_at::text t FROM ml_models WHERE is_checkpoint ORDER BY trained_at DESC LIMIT 1`)).rows[0];
+  const ck = process.env.SCORECARD_MODEL ? (await query(`SELECT model_version, trained_at::text t FROM ml_models WHERE model_version=$1`, [process.env.SCORECARD_MODEL])).rows[0]
+    : (await query(`SELECT model_version, trained_at::text t FROM ml_models WHERE is_checkpoint ORDER BY trained_at DESC LIMIT 1`)).rows[0];   // SCORECARD_MODEL: test/backfill against another model; use with --dry
   if (!ck) throw new Error('no checkpoint model');
-  const rows = (await query(`SELECT a.trade_date::text d, a.actual_pnl::float p, v.verdict, v.probability::float prob FROM ml_verdicts v JOIN active_setups a ON a.id = v.active_setup_id
+  const rows = (await query(`SELECT a.trade_date::text d, a.is_rth, a.actual_pnl::float p, v.verdict, v.probability::float prob FROM ml_verdicts v JOIN active_setups a ON a.id = v.active_setup_id
     WHERE v.model_version = $1 AND a.fired_at >= $2::timestamp + interval '3 days' AND a.origin_status IN ('ACTIVE','SHADOW') AND a.is_cluster_primary IS NOT FALSE AND a.actual_pnl IS NOT NULL
       AND a.ib_window_stale_basis IS NOT TRUE AND a.stale_entry_price_basis IS NOT TRUE AND a.late_fill_past_expiry_basis IS NOT TRUE AND a.bad_bars_basis IS NOT TRUE AND a.resolution IS DISTINCT FROM 'NOT_FILLED'
       AND NOT (a.fired_at::time >= '16:00' AND a.fired_at::time < '18:00')`, [ck.model_version, ck.t])).rows;
@@ -31,6 +32,20 @@ async function main() {
     const pass = days >= 20 && lo(diffs) > 0 && lo(rhos) > 0;
     notes = { ...base, take_share: +frac.toFixed(3), take_all_mean: +all.toFixed(2), take_mean: +mean(take.map((r) => r.p)).toFixed(2), veto_mean: +mean(rows.filter((r) => r.verdict !== 'TAKE').map((r) => r.p)).toFixed(2), policy_minus_random: +polMinusRand.toFixed(2), policy_minus_random_ci: [+lo(diffs).toFixed(2), +hi(diffs).toFixed(2)], spearman: +rho.toFixed(3), spearman_ci: [+lo(rhos).toFixed(3), +hi(rhos).toFixed(3)], pass };
   }
+  // INFORMATIONAL per-session split (added 2026-10-25): the unseen-trade evidence so far has the gate helping RTH and hurting Globex, consistent with the documented RTH->Globex sign reversal.
+  // Not part of the frozen gate rule (pass/fail above is unchanged); it only accrues forward evidence for a possible RTH-only scope.
+  if (rows.length >= 100) {
+    const sessionStat = (sub) => {
+      if (sub.length < 30) return { n: sub.length, note: 'too few' };
+      const take = sub.filter((r) => r.verdict === 'TAKE'), frac = take.length / sub.length, g2 = (r) => (r.verdict === 'TAKE' ? r.p : 0) - frac * r.p;
+      const bd = new Map(); sub.forEach((r, i) => (bd.get(r.d) || bd.set(r.d, []).get(r.d)).push(i)); const dk = [...bd.keys()], rg = mulberry32(hashSeed('mlscore-session' + ck.model_version + sub.length)), ds = [];
+      for (let b = 0; b < 1000; b++) { const idx = []; for (let k = 0; k < dk.length; k++) idx.push(...bd.get(dk[Math.floor(rg() * dk.length)])); ds.push(mean(idx.map((i) => g2(sub[i])))); }
+      ds.sort((x, y) => x - y);
+      return { n: sub.length, days: dk.length, take_share: +frac.toFixed(3), take_all_mean: +mean(sub.map((r) => r.p)).toFixed(2), take_mean: take.length ? +mean(take.map((r) => r.p)).toFixed(2) : null, policy_minus_random: +mean(sub.map(g2)).toFixed(2), policy_minus_random_ci: [+ds[Math.floor(0.025 * ds.length)].toFixed(2), +ds[Math.floor(0.975 * ds.length)].toFixed(2)] };
+    };
+    notes.by_session = { RTH: sessionStat(rows.filter((r) => r.is_rth === true)), GLOBEX: sessionStat(rows.filter((r) => r.is_rth !== true)) };
+  }
+  if (process.argv.includes('--dry')) { console.log('DRY', JSON.stringify(notes)); return; }
   await query(`INSERT INTO performance_audit (run_date, window_days, signal_type, signal_name, sample_size, notes) VALUES (CURRENT_DATE, 1, 'ML_UNSEEN_SCORECARD', 'LATEST', $1, $2) ON CONFLICT (run_date, window_days, signal_type, signal_name) DO UPDATE SET notes = EXCLUDED.notes, sample_size = EXCLUDED.sample_size`, [rows.length, JSON.stringify(notes)]);
   console.log('ML_UNSEEN_SCORECARD', JSON.stringify(notes));
   if (notes.pass) {
