@@ -20,3 +20,10 @@ Per direction and pooled: N, win rate, EV per trade (sum/N), day-blocked 95% boo
 
 ## Limits
 28 live fires cannot judge the setup; the reconciliation is about whether live and backtest are the same strategy, not about live profitability. One year of intraday history of the tick-rebuilt contracts (the first six months NQM23/NQU23 are tick-rebuild-only) is reported by year. The walk-forward drops the first 30 events. The volume baseline (90-bar per-minute rolling) is the backtest's own, not the live `getVolumeBaseline`; any difference between the two is itself a reconciliation finding to report, not to fix here.
+
+---
+
+## Amendment 1 (2026-10-25, committed BEFORE any arm B/C/D result was read)
+
+The first run stopped at the arm A parity gate: A on current bars gives N=362 LONG / 332 SHORT (EV +6.83 / +13.72) versus the stored N=177 / 182 (EV +15.72 / +20.85). Diagnosis (verified): the stored `FLUSH_BACKTEST_REFERENCE` rows were written at 01:23 on 2026-10-19, BEFORE that day's NQ history rebuild (KNOWN_ISSUES #17; `price_bars` then held only the last ~30 days of each pre-2025 contract plus daily placeholders), and their N was flat at 177-179 on 10-05, 10-12 and 10-19. They describe a different, patchier bar set and cannot be reproduced on today's data. The procedure itself is not in question here.
+Changes: (1) arm A parity vs the stored numbers is demoted from a stop-gate to an informational line (A is still printed on all dates and is the in-sample number to compare with). (2) The procedure-parity gate becomes the **live-window match rate**: over 2026-07-09 onward, the share of backtest-event days that have a live row with the same direction and entry/stop within 1 point. If that share is below 80%, the report states that live and backtest are not the same strategy and C/D must be read as the backtest's strategy only. (3) Everything else (arms B/C/D, the frozen verdict rule, splits, the live comparison) is unchanged. The important finding to carry forward either way: the stored in-sample reference numbers (+15.7 / +20.9, WR 66 / 60) predate the rebuild and are superseded by arm A on current bars (+6.8 / +13.7, WR 63 / 57.5).
