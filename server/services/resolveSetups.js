@@ -28,6 +28,13 @@ import { stepBreakevenStop } from './breakevenStopWalker.js';
 import { detectPostEntryExitSignals } from '../../scripts/pilot_exits_extended.mjs';
 import { getCached, setCached, getGlobalCalib, DAY_CACHE_TTL, getTouchQualityCalib, getTouchQualityBaseline, dropToTimeline } from './acdShared.js';
 
+// Kill switch for the live breakeven stop (breakevenStopWalker.js). DISABLED 2026-10-25 by explicit user decision after the realistic-fill audit
+// (docs/BREAKEVEN_STOP_FILL_AUDIT_PREREG_20261026.md, RESEARCH_CLAIM breakeven_stop_realistic_fill_audit_20261026): the walker arms and checks the stop on the same bar and
+// books the exit at entry (-2), so its booked +18.46/trade vs plain became -2.81 (CI -12.0..+6.3, NOT SHOWN) with the stop effective from the next bar and market fills.
+// While false, every row resolves on the plain stop/target path (or its other dynamic-exit mechanism) and no breakeven_stop_live payload is written.
+// Do not re-enable without a walker that arms for the NEXT bar and books the real exit price, and a fresh pre-registered test.
+export const BREAKEVEN_STOP_LIVE = { enabled: false, disabledDate: '2026-10-25' };
+
 // User-picked (2026-10-13, asked directly: 10/15/30min) -- how long a resting LIMIT entry
 // beyond MAX_CHASE_DISTANCE_POINTS gets to come back on its own before the chase-abandon
 // check below gives up on it. See that check's own comment for the full mechanism.
@@ -655,7 +662,7 @@ export async function resolveSetupsByPrice(io) {
     // validated BE against the ORIGINAL fixed stop/target; composing it with a widened target
     // or a trailing stop is an untested combination, so BE only engages when NONE of the other
     // three are set on this row (mirrors their own existing pairwise-exclusivity invariant).
-    const breakevenStopEligible = row.breakeven_stop_eligible === true
+    const breakevenStopEligible = BREAKEVEN_STOP_LIVE.enabled && row.breakeven_stop_eligible === true
       && trailWidth == null && extendTarget == null && widerTargetMult == null;
 
     let resolution = null, resolvedAt = null, priceAtRes = null, method = null;
