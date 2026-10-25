@@ -80,6 +80,7 @@
 // backtest_setup_status.mjs scan will pick this setup_type up automatically once real fires
 // accumulate.
 
+import { tagRotation65ptGateShadow } from './rotation65ptGateShadow.js';
 import { query } from '../db.js';
 import { findSwingPoints } from './swingPivots.js';
 import { getVolumeBaseline } from './touchQuality.js';
@@ -387,6 +388,8 @@ export async function computeMinorDefendedLevelSignal(todayET, etMin) {
         liveStatus.status, liveStatus.reason,
       ]);
       if (ins.rows[0]) {
+      // POC Gate tab (2026-10-25): these standalone detectors never tagged their rows with the 65pt-rotation AGREE/DISAGREE read, so they were invisible there. Observation-only.
+      try { await tagRotation65ptGateShadow(ins.rows[0].id, s.direction); } catch (_) {}
         try { await dropToTimeline(ins.rows[0]); } catch (_) {}
         inserted.push(ins.rows[0]);
       }

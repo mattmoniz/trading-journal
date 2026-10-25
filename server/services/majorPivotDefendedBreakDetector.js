@@ -51,6 +51,7 @@
 // with a short TTL so the 15s poller doesn't re-walk the whole lookback window on every tick --
 // only roughly once per 5-min bar close.
 
+import { tagRotation65ptGateShadow } from './rotation65ptGateShadow.js';
 import { query } from '../db.js';
 import { getRollingATR } from './levelProximityService.js';
 import { findSwingPoints } from './swingPivots.js';
@@ -348,6 +349,8 @@ export async function computeMajorPivotDefendedBreakSignal(todayET) {
         liveStatus.status, liveStatus.reason,
       ]);
       if (ins.rows[0]) {
+      // POC Gate tab (2026-10-25): these standalone detectors never tagged their rows with the 65pt-rotation AGREE/DISAGREE read, so they were invisible there. Observation-only.
+      try { await tagRotation65ptGateShadow(ins.rows[0].id, b.direction); } catch (_) {}
         try { await dropToTimeline(ins.rows[0]); } catch (_) {}
         inserted.push(ins.rows[0]);
       }

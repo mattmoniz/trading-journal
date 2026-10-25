@@ -30,6 +30,7 @@
 // anyway). Matches this codebase's own "genuinely new setup outside the level-fade roster gets
 // its own standalone poller" precedent (detectGlobexSetup(), STACK_VOL_BREAK_LIVE).
 
+import { tagRotation65ptGateShadow } from './rotation65ptGateShadow.js';
 import { query } from '../db.js';
 import { getPriorDayRthRange } from './queries.js';
 import { getCurrentGarchRegime } from './volatilityRegime.js';
@@ -155,7 +156,7 @@ export async function computeMomentumChaseSignal(todayET, etMin) {
     `, [todayET, mcSetupType, mcExpiresAt, candidate.entry, candidate.stop, candidate.target,
         `${candidate.width}pt (rolling MEDIUM-regime 75th-pctile bar range, see MOMENTUM_CHASE_WIDTH_CALIB)`,
         ...regimeStampValues(mcRegimeStamp), ...fireTagValues(mcFireTags), getBetClass(mcSetupType)]);
-    if (ins.rows[0]) { try { await dropToTimeline(ins.rows[0]); } catch (_) {} }
+    if (ins.rows[0]) { try { await tagRotation65ptGateShadow(ins.rows[0].id, candidate.direction); } catch (_) {} try { await dropToTimeline(ins.rows[0]); } catch (_) {} }
     return candidate;
   } catch (err) {
     logComputeErrorOnce(err);

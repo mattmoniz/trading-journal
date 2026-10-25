@@ -18,6 +18,7 @@
 //
 // Stop/target are NEVER hardcoded here — read live from the OPTIMAL_STOP row in
 // performance_audit (per CLAUDE.md's New Setup Type checklist), cached for the trading day.
+import { tagRotation65ptGateShadow } from './rotation65ptGateShadow.js';
 import { query } from '../db.js';
 import { dropToTimeline, computeFireTags, FIRE_TAG_COLS, fireTagValues } from '../routes/acd.js';
 import { getBetClass } from '../config/setupTypes.js';
@@ -203,7 +204,9 @@ export async function detectMomentum60Trend(io) {
       // that here so this setup type shows up in the timeline the same as any other, once it's
       // ever surfaced (SHADOW rows aren't shown live, but the row should still exist for when
       // this graduates to ACTIVE, and for any tooling that reads the timeline directly).
-      if (ins.rows[0]) { try { await dropToTimeline(ins.rows[0]); } catch (_) {} }
+      if (ins.rows[0]) {
+      // POC Gate tab (2026-10-25): these standalone detectors never tagged their rows with the 65pt-rotation AGREE/DISAGREE read, so they were invisible there. Observation-only.
+      try { await tagRotation65ptGateShadow(ins.rows[0].id, long ? 'LONG' : 'SHORT'); } catch (_) {} try { await dropToTimeline(ins.rows[0]); } catch (_) {} }
 
       // Only emit once this has actually graduated to ACTIVE (matches acd.js's own convention
       // of gating 'setup-fired' emits to status==='ACTIVE' only) — silent-but-tracked until then.

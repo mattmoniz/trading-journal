@@ -27,6 +27,7 @@
 // Volume-building window is capped at the ENTRY bar (departure exclusive through entry
 // inclusive) -- no lookahead, unlike the original (pre-redesign) design's bug where the
 // measurement window could extend past the entry bar.
+import { tagRotation65ptGateShadow } from './rotation65ptGateShadow.js';
 import { query } from '../db.js';
 import { dropToTimeline, computeFireTags, FIRE_TAG_COLS, fireTagValues } from '../routes/acd.js';
 import { getBetClass } from '../config/setupTypes.js';
@@ -306,6 +307,8 @@ export async function detectGlobexFlush(io) {
         ...fireTagValues(fireTags), getBetClass(setupType)]);
 
     if (ins.rows[0]) {
+      // POC Gate tab (2026-10-25): these standalone detectors never tagged their rows with the 65pt-rotation AGREE/DISAGREE read, so they were invisible there. Observation-only.
+      try { await tagRotation65ptGateShadow(ins.rows[0].id, long ? 'LONG' : 'SHORT'); } catch (_) {}
       try { await dropToTimeline(ins.rows[0]); } catch (_) {}
       if (live.status === 'ACTIVE' && io) {
         io.emit('setup-fired', { setupId: ins.rows[0].id, setupType, entry, stop, target, direction: long ? 'LONG' : 'SHORT' });

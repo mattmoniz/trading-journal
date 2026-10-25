@@ -22,6 +22,7 @@
 // Type checklist). Stop is STRUCTURAL (opposite balance edge), computed per-instance -- the
 // OPTIMAL_STOP row's own `optimal_stop` value is INFORMATIONAL ONLY (avg observed balance width,
 // for the Setup Reference page), never read here for the actual live stop.
+import { tagRotation65ptGateShadow } from './rotation65ptGateShadow.js';
 import { query } from '../db.js';
 import { dropToTimeline, computeFireTags, FIRE_TAG_COLS, fireTagValues } from '../routes/acd.js';
 import { isInRthOpenDeadZone } from './acdShared.js';
@@ -227,6 +228,8 @@ export async function detectRthFlush(io) {
         `${triggerSource}-break, ${targetPts.toFixed(0)}pt target`, ...fireTagValues(fireTags), getBetClass(setupType)]);
 
     if (ins.rows[0]) {
+      // POC Gate tab (2026-10-25): these standalone detectors never tagged their rows with the 65pt-rotation AGREE/DISAGREE read, so they were invisible there. Observation-only.
+      try { await tagRotation65ptGateShadow(ins.rows[0].id, long ? 'LONG' : 'SHORT'); } catch (_) {}
       try { await dropToTimeline(ins.rows[0]); } catch (_) {}
       _cache.firedToday = true;
       if (live.status === 'ACTIVE' && io) {

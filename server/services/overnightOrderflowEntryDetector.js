@@ -32,6 +32,7 @@
 // every poll recomputes the entry fresh from real bar history; fired_at is the entry bar's OWN
 // timestamp (not NOW()), so a re-poll harmlessly no-ops against active_setups' unique
 // (trade_date, setup_type, fired_at) index. _cache.firedToday is a POLL-SKIP OPTIMIZATION ONLY.
+import { tagRotation65ptGateShadow } from './rotation65ptGateShadow.js';
 import { query } from '../db.js';
 import { detectRotationLegs, getOvernightSessionBars } from './rotationDetector.js';
 import { minutesSinceOvernightOpen } from './globexRotationBadge.js';
@@ -163,6 +164,8 @@ export async function detectOvernightOrderflowEntry() {
         reason, ...fireTagValues(fireTags), getBetClass(setupType)]);
 
     if (ins.rows[0]) {
+      // POC Gate tab (2026-10-25): these standalone detectors never tagged their rows with the 65pt-rotation AGREE/DISAGREE read, so they were invisible there. Observation-only.
+      try { await tagRotation65ptGateShadow(ins.rows[0].id, direction); } catch (_) {}
       _cache.firedToday = true;
       try {
         await dropToTimeline({
