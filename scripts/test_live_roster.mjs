@@ -1,5 +1,5 @@
 // Tests for the LIVE_ROSTER gate (2026-10-21): pure roster-building logic + the gate against the real DB row + fail-closed paths.
-import { oppositeOf, evaluateType, buildRoster } from './calibrate_live_roster.mjs';
+import { oppositeOf, evaluateType, buildRoster, MIN_DAYS } from './calibrate_live_roster.mjs';
 import { computeSuppressionSets, isLiveEligible, getCanonicalLiveStatus, checkLiveRoster, getLiveRoster, __setLiveRosterForTest, LIVE_ROSTER_GATE } from '../server/services/setupEligibility.js';
 import { checkStandardLiveGates } from '../server/services/detectorLiveGates.js';
 let fails = 0; const ok = (c, m) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${m}`); if (!c) fails++; };
@@ -19,7 +19,13 @@ ok(r.has('A_FADE_LONG') && r.has('B_FADE_LONG'), 'previous member stays on base 
 r = buildRoster(new Map([['B_FADE_LONG', ev(true, false)]]), new Set(['A_FADE_LONG']), known);
 ok(r.size === 0, 'new promotion failing leave-best-day-out is held back; previous member that no longer passes is demoted instantly');
 const t = (d, p) => ({ date: d, pnl: p, cluster_touch_id: null });
-ok(evaluateType([t('2026-08-01', 5)], 'x').thin === true, 'evaluateType: too few events => thin');
+ok(evaluateType([t('2026-08-01', 5)], 'x').thin === true, 'evaluateType: too few days => thin');
+const mk = (n, f) => Array.from({ length: n }, (_, i) => t('2026-08-' + String(i + 1).padStart(2, '0'), f(i)));
+ok(evaluateType(mk(MIN_DAYS - 1, () => 10), 'x').thin === true, 'evaluateType: MIN_DAYS-1 days => thin');
+const atFloor = evaluateType(mk(MIN_DAYS, (i) => 10 + (i % 3)), 'x');
+ok(atFloor.thin === false && atFloor.pass === true && atFloor.passLeaveBestDayOut === false, 'evaluateType: exactly MIN_DAYS days can pass the base rule but cannot be promoted fresh (leave-best-day-out needs one more day)');
+const aboveFloor = evaluateType(mk(MIN_DAYS + 3, (i) => 10 + (i % 3)), 'x');
+ok(aboveFloor.pass === true && aboveFloor.passLeaveBestDayOut === true, 'evaluateType: a clearly positive, steady type with MIN_DAYS+3 days passes both tests');
 // live DB row
 const roster = await getLiveRoster();
 ok(roster.state === 'OK' && roster.types.size >= 1, `real roster row loads (state ${roster.state}, ${roster.types.size} types, run ${roster.runDate})`);

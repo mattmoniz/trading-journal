@@ -5,8 +5,8 @@
 // signal_name='CURRENT'. server/services/setupEligibility.js reads the newest row (DISTINCT ON ... run_date DESC, id DESC)
 // and force-SHADOWs every setup_type that is not on it.
 //
-// RULE (data-derived, the same one scripts/family_preview_20261021.mjs prints): a type "passes" with >=20 cluster-collapsed
-// events on >=10 distinct days, a day-blocked bootstrap 95% CI lower bound above 0, and both chronological halves positive.
+// RULE (data-derived; floors relaxed 2026-10-25, see MIN_DAYS below; scripts/family_preview_20261021.mjs still prints the old 20/10 version): a type "passes" with >=MIN_DAYS distinct days of cluster-collapsed
+// events, a day-blocked bootstrap 95% CI lower bound above 0, and both chronological halves positive.
 // Roster = passing types only (the user restricted live to the 3 demonstrated-edge types to start); INCLUDE_OPPOSITE_SIBLINGS=true would add each
 // passing type's opposite-direction sibling (LONG<->SHORT at the same level) -- the earlier "whole family survives" directive.
 // Promotion hysteresis (DeepSeek C): once a previous roster exists, a type NOT on it must also keep ci.lo > 0 after its single best day is
@@ -18,7 +18,11 @@
 import { query } from '../server/db.js';
 import { collapseClusterSiblings, dayBlockedBootstrapCI } from '../server/services/rigorDiagnostics.js';
 
-export const MIN_EVENTS = 20, MIN_DAYS = 10;
+// 2026-10-25 (user: "I just want to get things promoted ... not sure I care if it's 10 or 20 or 30"): the hardcoded 20-events/10-days floors were replaced
+// by the interval test doing the work. A what-if (scratch/roster_floor_whatif_20261025.mjs) showed the floors were NOT the binding constraint (20/10 -> 1 type passing,
+// 8/4 -> 4 passing), so MIN_DAYS=5 is kept only as a day-clustering guard (a bootstrap over fewer than 5 days is meaningless) and MIN_EVENTS is derived from it
+// (each distinct day contributes at least one collapsed event, so events >= days >= MIN_DAYS). No separate event count to argue about.
+export const MIN_DAYS = 5, MIN_EVENTS = MIN_DAYS;
 // User directive 2026-10-21 (second message): "the gate for live was only supposed to be for these 3 setups to start" -- so opposite-direction
 // siblings are OFF for now. Flip to true to restore the family rule (passing type + its opposite-direction sibling); tests cover both.
 export const INCLUDE_OPPOSITE_SIBLINGS = false;
@@ -42,7 +46,8 @@ export function evaluateType(events, seed) {
   const byDay = new Map(); for (const e of events) byDay.set(e.date, (byDay.get(e.date) || 0) + e.pnl);
   const bestDay = [...byDay].sort((a, b) => b[1] - a[1])[0][0];
   const rest = events.filter((e) => e.date !== bestDay);
-  const ci2 = rest.length >= MIN_EVENTS ? dayBlockedBootstrapCI(rest, seed + ':lobd') : null;
+  const restDays = new Set(rest.map((e) => e.date)).size;
+  const ci2 = restDays >= MIN_DAYS ? dayBlockedBootstrapCI(rest, seed + ':lobd') : null; // needs MIN_DAYS days left after dropping the best one, so a NEW type needs >= MIN_DAYS+1 days (a type at exactly the floor can't be promoted: no more 'exactly 20 can never pass' event-count quirk)
   return { n: events.length, days, mean: mean(events.map((e) => e.pnl)), lo: ci.lo, hi: ci.hi, h1, h2, thin: false, pass,
     passLeaveBestDayOut: !!(pass && ci2 && ci2.lo > 0), bestDay, lobdLo: ci2 ? ci2.lo : null };
 }
