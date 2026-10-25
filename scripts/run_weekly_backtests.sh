@@ -193,6 +193,8 @@ run /usr/bin/node scripts/calibrate_wider_target_pressure_gate.mjs
 # the shadow logger silently keeps using an old fraction instead of the current best one, same
 # risk this codebase has already been burned by with other calibrated gates.
 run /usr/bin/node scripts/calibrate_step_trail_fraction.mjs
+# Realistic-fill replay of the post-target runner shadows (2026-10-25 exit audit): refreshes RESEARCH_CLAIM steptrail_realistic_fill_audit_20261026 (and the retired T1-floor one). Step-trail promotion is judged on THIS verdict, not on the walker's own booked numbers.
+run /usr/bin/node scripts/audit_runner_fills_20261026.mjs
 
 # Pitch and Catch filter calibration -- REMOVED 2026-09-29 (0/213 real qualifying rate after
 # 3+ weeks live, plus a structurally degenerate calibration loop -- see

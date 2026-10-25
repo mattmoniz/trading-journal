@@ -44,7 +44,7 @@ import { completeStepTrailShadows, completeT1FloorRunnerShadows } from '../servi
 import { completeBreakevenStopShadows } from '../services/breakevenStopShadow.js';
 import { completeBreakevenStopCounterfactuals } from '../services/breakevenStopWalker.js';
 export { completeStepTrailShadows, completeT1FloorRunnerShadows, completeBreakevenStopShadows, completeBreakevenStopCounterfactuals };
-import { resolveSetupsByPrice } from '../services/resolveSetups.js';
+import { resolveSetupsByPrice, T1_FLOOR_SHADOW } from '../services/resolveSetups.js';
 export { resolveSetupsByPrice };
 import { getDayTypeAtFire, getVolBucketAtFire, minutesFromSessionOpen, computeFireTags, FIRE_TAG_COLS, fireTagValues } from '../services/fireTags.js';
 export { getDayTypeAtFire, getVolBucketAtFire, minutesFromSessionOpen, computeFireTags, FIRE_TAG_COLS, fireTagValues };
@@ -3302,7 +3302,7 @@ export default function createACDRouter(io) {
       // (PRICE_CLEAN) resolution already happened but whose floor-runner walk didn't get enough
       // bars to finish in that same poll. Same observation-only guarantee as the two shadows
       // above; scoped to the PLAIN path those two never see (no wider_target_mult required).
-      await completeT1FloorRunnerShadows().catch(() => {});
+      if (T1_FLOOR_SHADOW.enabled) await completeT1FloorRunnerShadows().catch(() => {}); // disabled 2026-10-25, see T1_FLOOR_SHADOW in resolveSetups.js
       // Breakeven-stop-on-order-flow-rejection shadow follow-up (2026-09-16, RESEARCH_CLAIM
       // orderflow_rewarded_breakeven_stop_positive_20260916) -- runs ONCE per real trade,
       // right after it resolves (see breakevenStopShadow.js's header for why this needs no

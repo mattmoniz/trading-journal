@@ -35,6 +35,13 @@ import { getCached, setCached, getGlobalCalib, DAY_CACHE_TTL, getTouchQualityCal
 // Do not re-enable without a walker that arms for the NEXT bar and books the real exit price, and a fresh pre-registered test.
 export const BREAKEVEN_STOP_LIVE = { enabled: false, disabledDate: '2026-10-25' };
 
+// Kill switch for the T1-floor runner SHADOW tracking (t1_floor_runner_shadow, completeT1FloorRunnerShadows). DISABLED 2026-10-25 (Claude's call on
+// runner_walkers_book_unrealistic_fills_20261026, user deferred to judgement): with realistic fills (stop effective from the bar after the T1 touch,
+// market exit when the touch bar already closed below T1, gap fills at the open) the runner is -5.88/trade vs banking T1 (CI -9.5..-0.9, HURTS), versus the
+// +5.19 the walker's booking implied (RESEARCH_CLAIM t1floor_runner_realistic_fill_audit_20261026). Existing rows and their display are left alone; the
+// dead wiring (this block, shadowCompletion.js, the acd.js call, the summary endpoint, the quick-check tag) is queued for removal.
+export const T1_FLOOR_SHADOW = { enabled: false, disabledDate: '2026-10-25' };
+
 // User-picked (2026-10-13, asked directly: 10/15/30min) -- how long a resting LIMIT entry
 // beyond MAX_CHASE_DISTANCE_POINTS gets to come back on its own before the chase-abandon
 // check below gives up on it. See that check's own comment for the full mechanism.
@@ -710,7 +717,7 @@ export async function resolveSetupsByPrice(io) {
     // Same independence/observational guarantees: a fully separate JSONB column, never
     // influences the REAL resolution/method/priceAtRes this loop computes.
     let t1FloorShadowResolution = null;
-    let t1FloorShadowDisabled = false;
+    let t1FloorShadowDisabled = !T1_FLOOR_SHADOW.enabled;
     // Breakeven-stop live state — same re-derive-from-scratch-every-poll convention as every
     // other mechanism above. `baseline` (volume z-score baseline) is fetched once per row,
     // lazily, only if this row is actually eligible -- a DB call inside the per-bar loop would
