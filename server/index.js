@@ -1239,6 +1239,22 @@ httpServer.listen(PORT, () => {
     } catch (err) { console.error('[compute_levels_post_ib] Cron error:', err.message); }
   }, { timezone: 'America/New_York' });
 
+  // 9:31 AM ET Mon-Fri: re-run ONLY the OVERNIGHT category (ONH/ONL) once the overnight window (18:00 prior calendar day .. 09:29) is complete.
+  // Added 2026-10-25 (OPEN_DECISION onh_onl_levels_monday_sunday_and_0800_snapshot_20261026): the 8:00 AM run above freezes ONH/ONL from the bars that exist at
+  // 8:00, so the last 90 minutes of the overnight were missing (8 of 51 Tue-Fri rows since 2026-07-27 were narrower than the true range, by up to 170 pts), and
+  // nothing recomputed OVERNIGHT afterwards (the 11:00 run only does CURRENT and OPENS). Live readers of ONH/ONL (the RTH_FLUSH overnight-break trigger from
+  // 9:35, the ONH/ONL fade levels) therefore saw an incomplete range. --category=OVERNIGHT touches only ONH/ONL, never the partial RTH_VWAP.
+  cron.schedule('31 9 * * 1-5', async () => {
+    try {
+      const { execSync } = await import('child_process');
+      await logProcess('COMPUTE_LEVELS_OVERNIGHT_FINAL', async () => {
+        const today = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+        execSync(`node scripts/compute_levels.js ${today} --category=OVERNIGHT`, { cwd: process.cwd(), timeout: 60000 });
+        return { count: 1 };
+      });
+    } catch (err) { console.error('[compute_levels_overnight_final] Cron error:', err.message); }
+  }, { timezone: 'America/New_York' });
+
   // Value-area regime measurement layer (2026-07-31) — see docs/OPEN_THREADS.md's
   // 2026-07-31 entry. Pure tagging, no gating: computes today's true volume-weighted
   // value area at 7 lookbacks (into value_area_regime_snapshots) so every setup fired

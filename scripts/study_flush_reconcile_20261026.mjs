@@ -39,11 +39,16 @@ function simulateExit(setup, targetPts) {   // ARM A/B: the backtest's own exit 
   for (let i = entryIdx + 1; i < sessBars.length; i++) { const b = sessBars[i]; const stopHit = up ? b.low <= stopPrice : b.high >= stopPrice, hit = up ? b.high >= targetPrice : b.low <= targetPrice; if (stopHit) { exitPrice = stopPrice; break; } if (hit) { exitPrice = targetPrice; break; } }
   return { pnl: (up ? exitPrice - entryPrice : entryPrice - exitPrice) * PPT - COMM, win: up ? exitPrice > entryPrice : exitPrice < entryPrice };
 }
-function realistic(setup, targetPts, mirror) {   // ARM C/D: entry at the NEXT bar's open; gap-aware fills; stop first; session close exit. mirror = placebo (direction flipped, same distances)
+function realistic(setup, targetPts, mirror) {   // ARM C/D: entry at the NEXT bar's open; gap-aware fills; stop first; session close exit.
+  // ARM C keeps the STRUCTURAL stop PRICE (the opposite balance edge), as the live detector does (stop = res.stopPrice), with a gap-aware fill (if the open is already beyond it, fill at the open).
+  // ARM D (mirror = placebo) flips direction: same stop DISTANCE from the real entry and same target distance, opposite side, so the geometry is identical and only direction differs.
   const { entryIdx, sessBars } = setup; if (entryIdx + 1 >= sessBars.length) return null;
-  const entry = sessBars[entryIdx + 1].open, stopDist = Math.abs(setup.entryPrice - setup.stopPrice);
-  const long = (setup.resolutionDir === 'UP') !== !!mirror, stop = long ? entry - stopDist : entry + stopDist, tgt = long ? entry + targetPts : entry - targetPts; let exit = sessBars[sessBars.length - 1].close;
-  for (let i = entryIdx + 1; i < sessBars.length; i++) {
+  const entry = sessBars[entryIdx + 1].open, up = setup.resolutionDir === 'UP', long = up !== !!mirror;
+  const stopDist = Math.abs(entry - setup.stopPrice);
+  const stop = mirror ? (long ? entry - stopDist : entry + stopDist) : setup.stopPrice, tgt = long ? entry + targetPts : entry - targetPts; let exit = sessBars[sessBars.length - 1].close;
+  const beyond = long ? entry <= stop : entry >= stop;   // already through the structural stop at the open: filled at the open
+  if (beyond && !mirror) exit = entry;
+  else for (let i = entryIdx + 1; i < sessBars.length; i++) {
     const b = sessBars[i], stopHit = long ? b.low <= stop : b.high >= stop, hit = long ? b.high >= tgt : b.low <= tgt;
     if (stopHit) { exit = long ? Math.min(stop, b.open) : Math.max(stop, b.open); break; }
     if (hit) { exit = long ? Math.max(tgt, b.open) : Math.min(tgt, b.open); break; }
@@ -95,7 +100,7 @@ async function main() {
     const base = percentile(prior.map((p) => p.mfe), 0.5), pv = prior.filter((p) => p.avgVolZ !== null && p.volZTrend !== null);
     let tgt = base; if (pv.length >= 20) { const am = percentile(pv.map((p) => p.avgVolZ).sort((a, b) => a - b), 0.5), tm = percentile(pv.map((p) => p.volZTrend).sort((a, b) => a - b), 0.5), pb = pv.filter((p) => p.avgVolZ > am && p.volZTrend > tm);
       if (pb.length >= 10 && s.avgVolZ !== null && s.volZTrend !== null && s.avgVolZ > am && s.volZTrend > tm) tgt = percentile(pb.map((p) => p.mfe), 0.75); }
-    const b = simulateExit(s, tgt), c = realistic(s, tgt, false), d = realistic(s, tgt, true); if (!c || !d) continue;
+    const b0 = simulateExit(s, tgt), b = { ...b0, win: b0.pnl > 0 }, c = realistic(s, tgt, false), d = realistic(s, tgt, true); if (!c || !d) continue;   // B win is net of commission like C/D (A keeps the backtest's gross definition)
     B.push({ date: s.date, dir: s.resolutionDir, ...b }); C.push({ date: s.date, dir: s.resolutionDir, ...c, tgt }); Dp.push({ date: s.date, dir: s.resolutionDir, ...d });
   }
   console.log(`walk-forward events scored ${C.length} (first ${dropped} dropped for the 30-prior-events minimum)`);
@@ -104,6 +109,7 @@ async function main() {
   console.log('\n--- ARM B (walk-forward target, ideal fills) / ARM C (walk-forward, realistic fills) / ARM D (mirrored placebo of C) ---');
   const res = {};
   for (const [lab, arr] of [['B', B], ['C', C], ['D placebo', Dp]]) { res[lab] = rep(`${lab} pooled`, arr); for (const dir of ['UP', 'DOWN']) rep(`${lab} ${dir === 'UP' ? 'LONG' : 'SHORT'}`, arr.filter((r) => r.dir === dir)); }
+  C.forEach((r, i) => { if (r.date !== Dp[i].date) throw new Error('C/D out of lockstep at ' + i); });
   const diff = C.map((r, i) => ({ date: r.date, pnl: r.pnl - Dp[i].pnl })), dci = ci(diff, 'flush|CminusD');
   const sorted = [...C].sort((a, b) => (a.date < b.date ? -1 : 1)), mid = sorted.length >> 1, h1 = mean(sorted.slice(0, mid).map((r) => r.pnl)), h2 = mean(sorted.slice(mid).map((r) => r.pnl));
   console.log(`C minus D (real edge over the mirrored placebo): ${money(mean(diff.map((r) => r.pnl)))} CI [${money(dci.lo)}, ${money(dci.hi)}]; C halves ${money(h1)} / ${money(h2)}`);
@@ -116,7 +122,7 @@ async function main() {
   // ---- LIVE RECONCILIATION over the common window ----
   console.log(`\n--- LIVE RECONCILIATION ${LIVE_FROM}..`);
   const live = (await query(`SELECT id, setup_type, trade_date::text d, fired_at::text fa, entry_zone_low::float entry, stop_level::float stop, t1_level::float t1, origin_status, resolution, actual_pnl::float pnl FROM active_setups
-    WHERE setup_type IN ('RTH_FLUSH_LONG','RTH_FLUSH_SHORT') AND trade_date >= $1 ORDER BY trade_date, fired_at`, [LIVE_FROM])).rows;
+    WHERE setup_type IN ('RTH_FLUSH_LONG','RTH_FLUSH_SHORT') AND origin_status IN ('ACTIVE','SHADOW') AND trade_date >= $1 ORDER BY trade_date, fired_at`, [LIVE_FROM])).rows;
   const liveByDate = new Map(); for (const r of live) (liveByDate.get(r.d) || liveByDate.set(r.d, []).get(r.d)).push(r);
   const win = setups.filter((s) => s.date >= LIVE_FROM), cats = { match: 0, directionDiffers: 0, priceDiffers: 0, missingLive: 0, extraLive: 0 }, rows = [];
   const evDates = new Set(win.map((s) => s.date));
@@ -128,6 +134,8 @@ async function main() {
     cats.match++;
   }
   for (const d of liveByDate.keys()) if (!evDates.has(d)) { cats.extraLive++; rows.push(`${d} LIVE ROW with no backtest event: ${liveByDate.get(d).map((r) => `${r.setup_type} ${r.entry}`).join(',')}`); }
+  const firstLive = live.length ? live[0].d : null, postWin = firstLive ? win.filter((x) => x.date >= firstLive) : [], postMatch = postWin.filter((x) => { const l = liveByDate.get(x.date)?.[0]; return l && l.setup_type === (x.resolutionDir === 'UP' ? 'RTH_FLUSH_LONG' : 'RTH_FLUSH_SHORT') && Math.abs(l.entry - x.entryPrice) <= 1 && Math.abs(l.stop - x.stopPrice) <= 1; }).length;
+  console.log(`POST-LAUNCH MATCH RATE (from the first live row ${firstLive}): ${postMatch} of ${postWin.length} = ${postWin.length ? (100 * postMatch / postWin.length).toFixed(0) : 'n/a'}%  (the frozen-window rate below includes pre-launch days)`);
   const matchRate = win.length ? cats.match / win.length : null;
   console.log(`LIVE-WINDOW MATCH RATE ${matchRate == null ? 'n/a' : (100 * matchRate).toFixed(0) + '%'} (${cats.match} of ${win.length} backtest event days have a same-direction live row within 1 pt of entry and stop) -> ${matchRate != null && matchRate >= 0.8 ? 'procedure matches live' : 'BELOW 80%: live and backtest are NOT the same strategy; read C/D as the backtest strategy only'}`);
   console.log(`backtest events in window ${win.length}, live rows ${live.length} on ${liveByDate.size} days:`, cats); rows.slice(0, 40).forEach((r) => console.log('  ' + r));
@@ -139,7 +147,7 @@ async function main() {
   console.log(`same-date comparison (n=${pairs.length}): live realized mean ${money(mean(pairs.map((r) => r.pnl)))} vs arm C simulated mean ${money(mean(pairs.map((r) => cByDate.get(r.d).pnl)))}`);
   if (!noRecord) {
     await recordClaim({ slug: 'rth_flush_reconcile_walkforward_20261026', sourceFile: 'scripts/study_flush_reconcile_20261026.mjs', sourceDate: '2026-10-26', sampleSize: C.length, evPerTrade: res['C'].ev, rigorStatus: 'preregistered_walkforward_realistic_fills_mirrored_placebo_live_reconciliation', status: 'PROVISIONAL',
-      claimText: `RTH_FLUSH reconciliation (prereg docs/FLUSH_RECONCILE_PREREG_20261026.md). The stored backtest target is the median MFE of the same population (self-referential) with ideal fills. Arm A reproduces it. Walk-forward (target from prior events only) realistic fills (entry next-bar open, gap fills): pooled N=${C.length}, WR ${(100 * res['C'].wr).toFixed(1)}%, EV ${money(res['C'].ev)} CI [${money(res['C'].lo)}, ${money(res['C'].hi)}]; ideal-fill walk-forward EV ${money(res['B'].ev)}; mirrored placebo EV ${money(res['D placebo'].ev)}; C minus D ${money(mean(diff.map((r) => r.pnl)))} CI [${money(dci.lo)}, ${money(dci.hi)}]; halves ${money(h1)} / ${money(h2)}. VERDICT under the frozen rule: ${verdict}. Live reconciliation ${LIVE_FROM}..: ${JSON.stringify(cats)}; live-window match rate ${matchRate == null ? 'n/a' : (100 * matchRate).toFixed(0) + '%'}; same-date live mean ${money(mean(pairs.map((r) => r.pnl)))} vs arm C ${money(mean(pairs.map((r) => cByDate.get(r.d).pnl)))} (n=${pairs.length}).` });
+      claimText: `RTH_FLUSH reconciliation (prereg docs/FLUSH_RECONCILE_PREREG_20261026.md). The stored backtest target is the median MFE of the same population (self-referential) with ideal fills. Arm A reproduces it. Walk-forward (target from prior events only) realistic fills (entry next-bar open, gap fills): pooled N=${C.length}, WR ${(100 * res['C'].wr).toFixed(1)}%, EV ${money(res['C'].ev)} CI [${money(res['C'].lo)}, ${money(res['C'].hi)}]; ideal-fill walk-forward EV ${money(res['B'].ev)}; mirrored placebo EV ${money(res['D placebo'].ev)}; C minus D ${money(mean(diff.map((r) => r.pnl)))} CI [${money(dci.lo)}, ${money(dci.hi)}]; halves ${money(h1)} / ${money(h2)}. VERDICT under the frozen rule: ${verdict}. Live reconciliation ${LIVE_FROM}..: ${JSON.stringify(cats)}; live-window match rate ${matchRate == null ? 'n/a' : (100 * matchRate).toFixed(0) + '%'} (pre-registered window incl. pre-launch days), post-launch ${postMatch} of ${postWin.length}; same-date live mean ${money(mean(pairs.map((r) => r.pnl)))} vs arm C ${money(mean(pairs.map((r) => cByDate.get(r.d).pnl)))} (n=${pairs.length}).` });
     console.log('claim recorded');
   }
   process.exit(0);

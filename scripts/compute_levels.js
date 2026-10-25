@@ -217,19 +217,23 @@ async function computeLevelsForDate(date) {
   }
 
   // ── 3. Overnight high/low (ONH/ONL) ─────────────────────────────────────
-  // Globex: 18:00 ET prior day through 09:29 ET current day
+  // Globex: 18:00 ET prior CALENDAR day through 09:29 ET current day.
+  // FIXED 2026-10-25 (OPEN_DECISION onh_onl_levels_monday_sunday_and_0800_snapshot_20261026): the prior evening used to be the prior BUSINESS day's
+  // (Friday for a Monday), which left the whole Sunday-evening Globex session out of every Monday's ONH/ONL (up to 440 pts too narrow; verified
+  // against the bars). The Globex session that feeds a trade date always opens at 18:00 the previous CALENDAR day (Sunday for Monday, also correct
+  // after a holiday). The window is only complete after 09:29, so server/index.js re-runs this with --category=OVERNIGHT at 09:31 ET.
   const onR = await q(`
     SELECT MAX(high)::float AS onh, MIN(low)::float AS onl
     FROM price_bars_primary
     WHERE symbol = 'NQ'
       AND (
-        -- prior evening: 18:00-23:59
-        (ts::date = $2 AND EXTRACT(hour FROM ts) >= 18)
+        -- prior calendar evening: 18:00-23:59
+        (ts::date = ($1::date - 1) AND EXTRACT(hour FROM ts) >= 18)
         OR
         -- overnight into current morning: 00:00-09:29
-        (ts::date = $1 AND EXTRACT(hour FROM ts) * 60 + EXTRACT(minute FROM ts) < 570)
+        (ts::date = $1::date AND EXTRACT(hour FROM ts) * 60 + EXTRACT(minute FROM ts) < 570)
       )
-  `, [date, priorDay || date]);
+  `, [date]);
   const on = onR.rows[0];
   add('ONH', on?.onh, 'OVERNIGHT');
   add('ONL', on?.onl, 'OVERNIGHT');
