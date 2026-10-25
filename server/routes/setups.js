@@ -47,6 +47,17 @@ router.get('/setups/gate-forward-monitor', async (req, res) => {
   catch (err) { console.error('[setups/gate-forward-monitor]', err.message); res.status(500).json({ error: err.message }); }
 });
 
+// GET /api/setups/roster-scoreboard -- read-only: the newest ROSTER_SCOREBOARD row (live LIVE_ROSTER gate vs trading everything, from 2026-10-25),
+// written daily by scripts/roster_scoreboard.mjs. Prereg: docs/ROSTER_SCOREBOARD_PREREG_20261025.md. Needs its own ~/.cloudflared/config.yml line.
+router.get('/setups/roster-scoreboard', async (req, res) => {
+  try {
+    const r = await query(`SELECT run_date::text d, notes FROM performance_audit WHERE signal_type='ROSTER_SCOREBOARD' AND signal_name='CURRENT' ORDER BY run_date DESC, id DESC LIMIT 1`);
+    if (!r.rows[0]) return res.json({ state: 'NO_DATA' });
+    const n = typeof r.rows[0].notes === 'string' ? JSON.parse(r.rows[0].notes) : r.rows[0].notes;
+    res.json({ state: 'OK', savedOn: r.rows[0].d, ...n });
+  } catch (err) { console.error('[setups/roster-scoreboard]', err.message); res.status(500).json({ error: err.message }); }
+});
+
 router.get('/setups/live-flags', async (req, res) => {
   const liveRoster = await getLiveRoster();
   let priceBarsStale = false;

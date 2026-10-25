@@ -77,6 +77,12 @@
 
 <div class="wrap">
 
+  <div class="card" id="roster-card">
+    <h2>Roster Scoreboard (live gate vs trading everything)</h2>
+    <div id="roster-body" class="loading">Loading…</div>
+    <div class="note">Pre-registered test (docs/ROSTER_SCOREBOARD_PREREG_20261025.md) starting with the 2026-10-25 Globex open. One look at a day count fixed in advance, then one per 10 more days; there is no verdict between looks. Primary trades only, POC rotation join shown separately. Model P&amp;L, not broker P&amp;L. Nothing here changes live trading.</div>
+  </div>
+
   <div class="card">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
       <h2 style="margin:0;">Cumulative P&amp;L by Setup</h2>
@@ -392,7 +398,34 @@ async function loadFlushSignalsLedger() {
   }
 }
 
+function rsMoney(v) { return v == null ? 'n/a' : (v < 0 ? '-' : '+') + '$' + Math.abs(v).toFixed(2); }
+function rsCol(v) { return v == null ? 'var(--muted)' : v > 0 ? 'var(--green-soft)' : v < 0 ? 'var(--red-soft)' : 'var(--muted)'; }
+function rsEsc(t) { return String(t == null ? '' : t).replace(/[&<>"]/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[c])); }
+async function loadRosterScoreboard() {
+  const el = $('roster-body');
+  try {
+    const r = await fetch('/api/setups/roster-scoreboard', { cache: 'no-store' });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const d = await r.json();
+    if (d.state !== 'OK') { el.className = 'note'; el.textContent = 'Starts with the 2026-10-25 Globex open; the first nightly run fills this in.'; return; }
+    el.className = '';
+    const a = d.arms.ALL, c = d.comparison, lk = d.look || {};
+    const arm = (label, s) => '<tr><td>' + label + '</td><td class="mono">' + s.n + '</td><td class="mono">' + s.days + '</td><td class="mono" style="color:' + rsCol(s.sum) + '">' + rsMoney(s.sum) + '</td><td class="mono">' + rsMoney(s.perTrade) + '</td><td class="mono">' + rsMoney(s.maxDrawdown == null ? null : -s.maxDrawdown) + '</td><td class="mono">' + rsMoney(s.worstDay) + '</td></tr>';
+    const verdictCol = c.verdict === 'PASS' ? 'var(--green-soft)' : c.verdict === 'FAIL' ? 'var(--red-soft)' : 'var(--amber-soft)';
+    const look = lk.due ? 'look #' + lk.lookNumber + ' is due (scheduled at ' + lk.thisLookAt + ' days)' : 'first look at ' + (d.first_look_days == null ? 'a day count not yet frozen' : d.first_look_days + ' trading days');
+    el.innerHTML = '<div style="margin-bottom:8px;font-size:13px">' + d.window.days + ' trading days so far · ' + rsEsc(look) + ' · saved ' + rsEsc(d.savedOn) + '</div>' +
+      '<div style="margin-bottom:8px">Verdict under the pre-registered rule: <b style="color:' + verdictCol + '">' + rsEsc(c.verdict.replace(/_/g, ' ')) + '</b></div>' +
+      '<div class="table-scroll"><table><thead><tr><th>Arm</th><th>N</th><th>Days</th><th>Sum</th><th>Per trade</th><th>Max drawdown</th><th>Worst day</th></tr></thead><tbody>' +
+      arm('Fired live under the gate', a.ROSTER_LIVE) + arm('Roster types only (would-be)', a.ROSTER_WOULD_BE) + arm('Everything (old regime)', a.TAKE_ALL) + arm('Everything except roster', a.TAKE_ALL_EX_ROSTER) + arm('POC rotation join (separate)', d.separate.POC_ROTATION_JOIN) +
+      '</tbody></table></div>' +
+      '<div class="note" style="margin-top:8px">Per day, roster-only minus everything: <b style="color:' + rsCol(c.dailyDiff.mean) + '">' + rsMoney(c.dailyDiff.mean) + '</b> (95% interval ' + rsMoney(c.dailyDiff.ci.lo) + ' to ' + rsMoney(c.dailyDiff.ci.hi) + '; first half ' + rsMoney(c.dailyDiff.half1) + ', second half ' + rsMoney(c.dailyDiff.half2) + '). Per trade, roster minus the rest: <b style="color:' + rsCol(c.perTrade.diff) + '">' + rsMoney(c.perTrade.diff) + '</b> (' + rsMoney(c.perTrade.ci.lo) + ' to ' + rsMoney(c.perTrade.ci.hi) + '; roster N=' + c.perTrade.nRoster + ', rest N=' + c.perTrade.nRest + '). Roster now: ' + rsEsc((d.roster_now || []).join(', ') || 'none') + '.</div>';
+  } catch (e) {
+    el.className = 'note'; el.style.color = 'var(--red-soft)'; el.textContent = 'Roster scoreboard unavailable (could not load) — ' + (e.message || 'error');
+  }
+}
+
 window.addEventListener('resize', () => renderChart($('setup-select').value));
+loadRosterScoreboard();
 loadPerformanceSummary();
 loadFlushSignalsLedger();
 </script>
