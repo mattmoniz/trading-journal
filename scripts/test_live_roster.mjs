@@ -8,9 +8,13 @@ ok(oppositeOf('PW_VAL_FADE_LONG_OVERNIGHT') === 'PW_VAL_FADE_SHORT_OVERNIGHT', '
 ok(oppositeOf('MOMENTUM_CHASE_MEDIUM') === null, 'oppositeOf no direction => null');
 const ev = (pass, lobd) => ({ pass, passLeaveBestDayOut: lobd });
 const known = new Set(['A_FADE_LONG', 'A_FADE_SHORT', 'B_FADE_LONG', 'B_FADE_SHORT']);
-let r = buildRoster(new Map([['A_FADE_LONG', ev(true, false)]]), null, known);
-ok(r.has('A_FADE_LONG') && r.has('A_FADE_SHORT') && r.get('A_FADE_SHORT').role === 'sibling', 'first run seeds without hysteresis; sibling added');
-r = buildRoster(new Map([['A_FADE_LONG', ev(true, false)], ['B_FADE_LONG', ev(true, true)]]), new Set(['A_FADE_LONG']), known);
+let r = buildRoster(new Map([['A_FADE_LONG', ev(true, false)]]), null, known, true);
+ok(r.has('A_FADE_LONG') && r.has('A_FADE_SHORT') && r.get('A_FADE_SHORT').role === 'sibling', 'first run seeds without hysteresis; sibling added when siblings are on');
+r = buildRoster(new Map([['A_FADE_LONG', ev(true, false)]]), null, known, false);
+ok(r.has('A_FADE_LONG') && !r.has('A_FADE_SHORT'), 'siblings off: passing type only');
+r = buildRoster(new Map([['A_FADE_LONG', ev(true, false)]]), null, known);
+ok(!r.has('A_FADE_SHORT'), 'default is siblings off (3-setup start)');
+r = buildRoster(new Map([['A_FADE_LONG', ev(true, false)], ['B_FADE_LONG', ev(true, true)]]), new Set(['A_FADE_LONG']), known, true);
 ok(r.has('A_FADE_LONG') && r.has('B_FADE_LONG'), 'previous member stays on base rule; new member passing leave-best-day-out is promoted');
 r = buildRoster(new Map([['B_FADE_LONG', ev(true, false)]]), new Set(['A_FADE_LONG']), known);
 ok(r.size === 0, 'new promotion failing leave-best-day-out is held back; previous member that no longer passes is demoted instantly');

@@ -414,7 +414,8 @@ export const SUPPRESS_ALL_DISABLED = {
 // even eligible to ask this question (see acd.js's own auditCanPromote comment for the current
 // call site's reasoning on that point).
 export function suppressAllDisabledOverrides(setupType) {
-  return SUPPRESS_ALL_DISABLED.enabled && !CAPITAL_EXPOSURE_OVERRIDE.has(setupType);
+  // DeepSeek code review 2026-10-21: the roster must also survive this override (acd.js's near-level-audit and early-touch-backfill promote through here, not isLiveEligible).
+  return SUPPRESS_ALL_DISABLED.enabled && !CAPITAL_EXPOSURE_OVERRIDE.has(setupType) && !rosterBlockReason(setupType);
 }
 
 export function isLiveTimeWindowBlocked(setupType, etMin) {
