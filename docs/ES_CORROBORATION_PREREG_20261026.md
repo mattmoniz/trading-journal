@@ -55,3 +55,14 @@ The user's clarification: ES should act as an early warning, i.e. ES turns FIRST
 **Tests (4, a separate BH family at q = 0.10 over its own four explore p-values; Family A keeps its own six):** `k` in {1, 3} x `f` in {short, long}; the same statistic, strata, weights, split, SHOWN rule, 0.02 ATR60 practical bar, permutation sanity and reference rows as Family A (the reference row here is NQ's own recent turn `nN_k`).
 
 **Reporting duties added:** the two families are reported separately and never pooled; the total is 10 hypothesis tests (6 + 4); a SHOWN cell in Family C must also be checked against the unconditional baseline above (a canary that merely re-states NQ's own turn would show up in the `nN_k` reference row).
+
+---
+
+## Amendment 2 (2026-10-25, committed BEFORE any outcome) — Family D: ES at its OWN extreme ("finding support")
+
+The user's wording "if NQ is slipping, is ES slipping? Or vice versa finding support" also reads as: when NQ is at a level, is ES ALSO at its own day extreme (both at support), or is ES holding away from it? Families A and C test how ES MOVED; this tests where ES SITS.
+
+**Feature (closed bars strictly before `t`):** the position of the last closed ES close inside the range of ES closes from 09:30 through `t-1` (needs at least 5 bars), in the fade direction: short fade `xE = (C_ES[t-1] - minC_ES) / (maxC_ES - minC_ES)`, long fade `xE = (maxC_ES - C_ES[t-1]) / (maxC_ES - minC_ES)`; `xN` is the same on NQ closes (close-based for both so they are comparable). `xE` near 1 = ES is also at its own day extreme in the direction of the touch.
+**Hypothesis (the user's):** high `xE` (ES confirming from its own extreme) makes the NQ fade better.
+**Tests (2, a separate BH family of its own):** `f` in {short, long}; top vs bottom tercile of `xE` (explore cuts) within strata of NQ's own `xN` tercile x time bucket x level family (so what ES adds beyond NQ's own extremity is isolated); same weights, split, SHOWN rule, practical bar, permutation sanity (ES `xE` re-paired within the same minute of day and `f`) and NQ-only reference row (`xN` alone). Total hypothesis tests: 12 (A 6, C 4, D 2), reported as three families, never pooled.
+**A note on direction, fixed here so it cannot be flipped afterwards:** every test is screened two-sided and the label says whether the sign matches the stated hypothesis. If ES CONFIRMING (moving with NQ into the level, or sitting at its own extreme) turns out to be the better fade, that is reported as the result, not discarded as "opposite".
