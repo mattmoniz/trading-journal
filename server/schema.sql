@@ -5067,6 +5067,21 @@ ALTER SEQUENCE public.engine_reads_id_seq OWNED BY public.engine_reads.id;
 
 
 --
+-- Name: es_front_calendar; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.es_front_calendar (
+    trade_date date NOT NULL,
+    contract text NOT NULL,
+    is_roll_day boolean DEFAULT false NOT NULL,
+    basis text NOT NULL,
+    rth_volume_front bigint,
+    rth_volume_leader bigint,
+    leader_contract text
+);
+
+
+--
 -- Name: gated_candidates; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -5255,6 +5270,19 @@ CREATE TABLE public.level_prices_ib_backup_20260714 (
 --
 
 CREATE TABLE public.level_prices_nqbad_backup_20261005 (
+    trade_date date,
+    level_name text,
+    price numeric(12,4),
+    category text,
+    computed_at timestamp with time zone
+);
+
+
+--
+-- Name: level_prices_onh_onl_calendar_window_backup_20261026; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.level_prices_onh_onl_calendar_window_backup_20261026 (
     trade_date date,
     level_name text,
     price numeric(12,4),
@@ -8063,6 +8091,44 @@ CREATE MATERIALIZED VIEW public.price_bars_dedup_hist_v2 AS
 
 
 --
+-- Name: price_bars_es; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.price_bars_es (
+    contract text NOT NULL,
+    ts timestamp without time zone NOT NULL,
+    open numeric(12,4) NOT NULL,
+    high numeric(12,4) NOT NULL,
+    low numeric(12,4) NOT NULL,
+    close numeric(12,4) NOT NULL,
+    volume integer DEFAULT 0 NOT NULL,
+    num_trades integer DEFAULT 0 NOT NULL,
+    bid_volume integer DEFAULT 0 NOT NULL,
+    ask_volume integer DEFAULT 0 NOT NULL
+);
+
+
+--
+-- Name: price_bars_es_front; Type: VIEW; Schema: public; Owner: -
+--
+
+CREATE VIEW public.price_bars_es_front AS
+ SELECT c.trade_date,
+    b.contract,
+    b.ts,
+    b.open,
+    b.high,
+    b.low,
+    b.close,
+    b.volume,
+    b.num_trades,
+    b.bid_volume,
+    b.ask_volume
+   FROM (public.price_bars_es b
+     JOIN public.es_front_calendar c ON (((c.trade_date = ((b.ts + '06:00:00'::interval))::date) AND (c.contract = b.contract))));
+
+
+--
 -- Name: price_bars_nq_history_rebuild_backup_20261019; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -10706,6 +10772,14 @@ ALTER TABLE ONLY public.engine_reads
 
 
 --
+-- Name: es_front_calendar es_front_calendar_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.es_front_calendar
+    ADD CONSTRAINT es_front_calendar_pkey PRIMARY KEY (trade_date);
+
+
+--
 -- Name: gated_candidates gated_candidates_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -11490,6 +11564,14 @@ ALTER TABLE ONLY public.price_bars_contract_calendar
 
 
 --
+-- Name: price_bars_es price_bars_es_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.price_bars_es
+    ADD CONSTRAINT price_bars_es_pkey PRIMARY KEY (contract, ts);
+
+
+--
 -- Name: process_log process_log_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -12216,6 +12298,13 @@ CREATE INDEX idx_pl_started_at ON public.process_log USING btree (started_at DES
 --
 
 CREATE INDEX idx_ple_date ON public.profit_lock_events USING btree (event_date);
+
+
+--
+-- Name: idx_price_bars_es_ts; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_price_bars_es_ts ON public.price_bars_es USING btree (ts);
 
 
 --
