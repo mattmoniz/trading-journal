@@ -83,6 +83,8 @@ import sierraChartRouter from './routes/sierraChart.js';
 import { startConnectionManager } from './services/sierraChart/connectionManager.js';
 import { startMlScoringService } from './services/mlScoringServiceManager.js';
 import volatilityRegimeRouter from './routes/volatilityRegime.js';
+import { runTripwireCheck } from './services/overnightTripwire.js';
+import { sendAlert } from './services/alertNotifier.js';
 import pulseReadingRouter from './routes/pulseReading.js';
 import dayTypeRouter from './routes/dayType.js';
 import globexRotationBadgeRouter from './routes/globexRotationBadge.js';
@@ -1157,6 +1159,15 @@ httpServer.listen(PORT, () => {
       });
     } catch (err) { console.error('[compute_levels] Cron error:', err.message); }
   }, { timezone: 'America/New_York' });
+
+  // Overnight tripwire poll (2026-10-26): every 5 minutes, rank tonight's Globex volume and swing count against the prior 60 nights at the same checkpoint and, the first time both are in the
+  // top decile, record it and send ONE alert through the user's own Home Assistant webhook (alertNotifier.js; logged only if HA_ALERT_WEBHOOK_URL is unset). Informational: gates nothing.
+  setInterval(async () => {
+    try {
+      const nowEtRow = await query(`SELECT (NOW() AT TIME ZONE 'America/New_York')::text AS n`);
+      await runTripwireCheck(new Date(nowEtRow.rows[0].n.replace(' ', 'T') + 'Z'), sendAlert);
+    } catch (e) { console.error('[tripwire]', e.message); }
+  }, 5 * 60 * 1000);
 
   // 5:55 PM ET Sun-Fri (2026-10-26, user: "do the fixes ... it should also apply to Monday if it's a holiday and Globex starts Monday night"): make sure a level_prices row with
   // trade_date >= today exists BEFORE the 6PM Globex open. The Sunday 9:30 PM cron above is the only thing that writes the coming Monday's row, so every Sunday 6-9:30 PM the

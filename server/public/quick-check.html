@@ -4111,6 +4111,11 @@ async function checkFlagsBanner() {
     } else {
       lines.push('Sierra Chart ARMED');
     }
+    // Overnight tripwire (2026-10-26): information only, never a gate. HEAVY = tonight's volume AND swing count are both in the top decile of the last 60 nights at this hour.
+    if (d.tripwire && (d.tripwire.level === 'HEAVY' || d.tripwire.level === 'BUSY')) {
+      color = color === '#f87171' ? color : '#facc15';
+      lines.push(`${d.tripwire.level === 'HEAVY' ? 'WATCHING — heavy Globex night' : 'Busy Globex night'}: volume ${d.tripwire.vol_ratio}x typical at this hour, ${d.tripwire.legs} swings of 65+ points (flagged ${String(d.tripwire.fired_at).slice(11, 16)} ET${d.tripwire.level === 'HEAVY' ? (d.tripwire.notified ? ', phone alert sent' : ', phone alert NOT sent') : ''})`);
+    }
     if (d.suppressAllDisabled) {
       color = color === '#f87171' ? color : '#facc15';
       lines.push(`SUPPRESS_ALL_DISABLED ON since ${d.suppressAllDisabledSince || 'unknown'} — every setup fires live`);

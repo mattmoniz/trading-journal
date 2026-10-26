@@ -24,6 +24,10 @@ timed_step daily /usr/bin/node scripts/build_daily_rth_stats.mjs
 # fails loudly in this log if no ES file was written in 3 days (Sierra not running / no ES feed).
 timed_step daily /bin/bash scripts/refresh_es_bars.sh
 
+# Overnight tripwire baseline (2026-10-26): per-night cumulative volume and 65-point swing counts at every 30-minute checkpoint, so tonight can be ranked against the prior 60 nights
+# (server/services/overnightTripwire.js). Incremental, ~seconds.
+timed_step daily /usr/bin/node scripts/build_overnight_checkpoint_stats.mjs --days 10
+
 # NQ contract-roll health check (2026-09-15, T3-c per OPUS_AUDIT_PROMPT_13's strategic review
 # of the contract-calendar fix, scratch/opus_audit_13_results.md) -- runs right after the
 # reconcile above so it's checking the calendar's post-reconcile state. Daily, not weekly

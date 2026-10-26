@@ -112,7 +112,17 @@ router.get('/setups/live-flags', async (req, res) => {
   let brokerAttentionError = false;
   try { brokerAttention = await getBrokerAttention(); } catch (_) { brokerAttentionError = true; }
 
+  // Overnight tripwire (2026-10-26): the highest level recorded for the current session's trade date (written by server/services/overnightTripwire.js). null = nothing unusual yet.
+  let tripwire = null;
+  try {
+    const t = await query(`SELECT level, elapsed_min, vol_ratio::float vol_ratio, legs, notified, fired_at::text fired_at FROM tripwire_events
+      WHERE trade_date = (CASE WHEN EXTRACT(hour FROM NOW() AT TIME ZONE 'America/New_York') >= 18 THEN (CURRENT_DATE + 1) ELSE CURRENT_DATE END)
+        AND (EXTRACT(hour FROM NOW() AT TIME ZONE 'America/New_York') >= 18 OR EXTRACT(hour FROM NOW() AT TIME ZONE 'America/New_York') < 10) ORDER BY (level='HEAVY') DESC LIMIT 1`);   // shown only while the night is live (18:00 to 10:00 ET)
+    tripwire = t.rows[0] || null;
+  } catch (_) { tripwire = null; }
+
   res.json({
+    tripwire,
     brokerAttention,
     brokerAttentionError,
     // Persistent performance regression vs the app's own rolling history (perfTelemetry.js); null = none.
