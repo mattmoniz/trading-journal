@@ -56,7 +56,7 @@ export function k1Events(NQ, bars, h4, d20, bandMult = 0.25, limit = NQ.n) {
   const out = [];
   for (const side of ['floor', 'top']) {
     const S = side === 'floor' ? bars : negBars(bars), dir = side === 'floor' ? 1 : -1, { ev } = runLevels(S, h4, bandMult);
-    for (const e of ev) { if (e.kind !== 'K1') continue; const b4 = S[e.t], i0 = b4.i1 + 1; if (i0 >= limit - 3000) continue; const td = NQ.TD[i0]; if (!d20[td] || !h4[b4.td]) continue; out.push({ side, dir, i0, day: td, clk: clock(NQ.T[i0]), level: dir * e.level }); }
+    for (const e of ev) { if (e.kind !== 'K1') continue; const b4 = S[e.t], i0 = b4.i1 + 1; if (i0 >= limit - 3000) continue; const td = NQ.TD[i0]; if (!d20[td] || !h4[b4.td]) continue; out.push({ side, dir, i0, day: td, clk: clock(NQ.T[i0]), level: dir * e.level, band: 0.25 * h4[b4.td] }); }
   }
   return out;
 }
