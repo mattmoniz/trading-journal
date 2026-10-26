@@ -8,33 +8,21 @@ import { hashSeed, mulberry32 } from '../server/services/rigorDiagnostics.js';
 import { loadBars, prep, indexBars, clock, mean, walk, addDay } from './lib/floorEngine.mjs';
 import { f3 } from './lib/floorStats.mjs';
 import { build4h, firstK3Events, k1Events, d20Of, pinnedLimit } from './lib/fourHourLevels.mjs';
-
-const COST = 1.5, PTV = 2, NDRAW = 30; // points per trade, MNQ dollars per point
-const ARMS = { M: { stop: 0.5, hold: 1440 }, S25: { stop: 0.25, hold: 1440 }, S100: { stop: 1.0, hold: 1440 }, H240: { stop: 0.5, hold: 240 }, H2880: { stop: 0.5, hold: 2880 }, T100: { stop: 0.5, hold: 2880, tgt: 1.0 }, STRUCT: { struct: true, hold: 1440 }, FREE: { stop: null, hold: 1440 }, M_LEN: { stop: 0.5, hold: 1440, lenient: true }, FREE_LEN: { stop: null, hold: 1440, lenient: true } };
-const median = (a) => { const s = [...a].sort((x, y) => x - y); return s.length ? (s.length % 2 ? s[(s.length - 1) / 2] : (s[s.length / 2 - 1] + s[s.length / 2]) / 2) : NaN; };
-const dc = (z) => new Set(z.map((e) => e.day)).size;
-function boot(items, lo, seed) { const g = new Map(); for (const x of items) (g.get(x.day) || g.set(x.day, []).get(x.day)).push(x.v); const keys = [...g.keys()], r = mulberry32(hashSeed(seed)), d = []; for (let it = 0; it < 4000; it++) { let s = 0, n = 0; for (let k = 0; k < keys.length; k++) for (const v of g.get(keys[Math.floor(r() * keys.length)])) { s += v; n++; } d.push(s / n); } d.sort((a, b) => a - b); return { lo: d[Math.floor(lo * d.length)], hi: d[Math.floor((1 - lo) * d.length) - 1] }; }
-const ci = (items, lo, seed) => (items.length >= 5 ? boot(items, lo, seed) : { lo: NaN, hi: NaN });
-const fmt = (m, c) => `${f3(m)} [${f3(c.lo)},${f3(c.hi)}]`;
-const dropTopDate = (items) => { const g = new Map(); for (const x of items) g.set(x.day, (g.get(x.day) || 0) + x.v); let bd = null, bv = -Infinity; for (const [d, v] of g) if (v > bv) { bv = v; bd = d; } return mean(items.filter((x) => x.day !== bd).map((x) => x.v)); };
+import { COST, PTV, ARMS, makeSim, blindDraws, poolDraws, median, dc, boot, ci, fmt, dropTopDate } from './lib/exitSim.mjs';
 
 async function main() {
   const endRow = (await query(`SELECT (MAX(ts)::date - 3)::text d FROM price_bars_primary WHERE symbol='NQ' AND ts >= CURRENT_DATE - 7 AND ts < CURRENT_DATE + 1`)).rows[0].d;
   const NQ = indexBars(prep(await loadBars('price_bars_primary', `symbol='NQ'`, '2023-03-06', endRow))), d20 = d20Of(NQ), { bars, h4 } = build4h(NQ), LIM = pinnedLimit(NQ, endRow);
-  const all3 = firstK3Events(NQ, bars, h4, d20, 0.25, LIM), k1 = k1Events(NQ, bars, h4, d20, 0.25, LIM);
-  const events = all3, strictOK = (e) => NQ.byEm.get(NQ.EM[e.i0] + 1439) !== undefined, dropped = all3.filter((e) => !strictOK(e)).length;
+  const { capOf, run, stopOf, strictOK } = makeSim(NQ), all3 = firstK3Events(NQ, bars, h4, d20, 0.25, LIM), k1 = k1Events(NQ, bars, h4, d20, 0.25, LIM);
+  const events = all3, dropped = all3.filter((e) => !strictOK(e)).length;
   console.log(`NQ bars to ${endRow} (pinned limit ${LIM}); 4-hour bars ${bars.length}; first-K3 events ${all3.length} (floors ${all3.filter((e) => e.side === 'floor').length}, tops ${all3.filter((e) => e.side === 'top').length}); without a +1,439-minute exit bar ${dropped}; K=1 birth events ${k1.length}`);
-  const capOf = (i0, hold, lenient) => { let cap = NQ.byEm.get(NQ.EM[i0] + hold - 1); if (cap === undefined && lenient) for (let m = NQ.EM[i0] + hold - 2; m > NQ.EM[i0] + 60 && cap === undefined; m--) cap = NQ.byEm.get(m); return cap; }; // lenient = exit at the last bar at or before the target minute (maintenance gap, weekend)
   const allDays = [...new Set(events.filter(strictOK).map((e) => e.day))].sort(), cut = allDays[Math.floor(allDays.length * 0.6) - 1], cutSafe = addDay(cut, -4), partOf = (day) => (day <= cut ? 'A' : 'H');
   for (const e of events) { const cap = capOf(e.i0, 1440, true); e.exitTD = NQ.TD[cap]; e.part = partOf(e.day); e.straddle = e.part === 'A' && e.exitTD > cut; }
   const okDay = (p, day) => (p === 'A' ? day <= cutSafe : day > cut);
   const rng = mulberry32(hashSeed('moonshot')), samp = []; for (let i = 3100; i < LIM - 3000; i += 15) if (d20[NQ.TD[i]]) samp.push(i);
-  const run = (i0, dir, stopPts, tgtPts, arm) => { const cap = capOf(i0, arm.hold, arm.lenient); if (cap === undefined) return null; const r = walk(NQ, i0, dir, NQ.O[i0], stopPts, tgtPts, cap); return { pnl: r.pts - COST, res: r.res }; };
-  const stopOf = (e, arm) => (arm.struct ? Math.max(1, e.dir > 0 ? NQ.O[e.i0] - (e.level - e.band) : e.level + e.band - NQ.O[e.i0]) : arm.stop == null ? Infinity : arm.stop * e.d20);
   const k1By = new Map(); for (const k of k1) { const key = k.side + '|' + k.clk; (k1By.get(key) || k1By.set(key, []).get(key)).push(k); }
   for (const e of events) {
-    const ec = clock(NQ.T[e.i0]), draws = []; for (let t = 0; t < 3000 && draws.length < NDRAW; t++) { const b = samp[Math.floor(rng() * samp.length)]; if (NQ.TD[b] === e.day || !okDay(e.part, NQ.TD[b]) || Math.abs(clock(NQ.T[b]) - ec) > 30) continue; draws.push(b + 1); }
-    const pool = (k1By.get(e.side + '|' + ec) || []).filter((k) => k.day !== e.day && okDay(e.part, k.day)), k1d = []; for (let t = 0; t < 3 * NDRAW && pool.length && k1d.length < Math.min(NDRAW, pool.length); t++) { const k = pool[Math.floor(rng() * pool.length)]; if (!k1d.includes(k)) k1d.push(k); }
+    const draws = blindDraws(NQ, samp, rng, e, okDay), pool = (k1By.get(e.side + '|' + clock(NQ.T[e.i0])) || []).filter((k) => k.day !== e.day && okDay(e.part, k.day)), k1d = poolDraws(rng, pool);
     e.res = {};
     for (const [nm, arm] of Object.entries(ARMS)) {
       const sp = stopOf(e, arm), tp = arm.tgt != null ? arm.tgt * e.d20 : Infinity, real = run(e.i0, e.dir, sp, tp, arm); if (!real) { e.res[nm] = null; continue; }

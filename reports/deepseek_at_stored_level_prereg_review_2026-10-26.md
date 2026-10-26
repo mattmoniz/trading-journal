@@ -1,0 +1,15 @@
+# Design review — FOUR_HOUR_AT_STORED_LEVEL_PREREG
+
+1. **The AT-LEVEL vs ELSEWHERE contrast is confounded.** Being within 0.25×H4 of a stored level selects dates when price sits near period references — month/week/year opens and extremes cluster at period boundaries and after large moves — so the two groups differ in price-range location, volatility regime, and calendar dates, not just level proximity. The blind-entry subtraction removes drift/geometry but not this selection. *Fix:* match each AT-LEVEL event to ELSEWHERE events on the same clock and comparable D20-normalized volatility/date, or at minimum report date/volatility overlap between groups to establish exchangeability before interpreting the contrast.
+
+2. **The K=1-at-stored-level control does not isolate what defense adds.** It subtracts fresh K=1 births that also lie within a band of a stored level — a doubly-selected, likely tiny population, unmatched on how far price has already run to the level or whether the birth is a genuine fresh extreme. The mean of "up to 30" such events is noisy when few exist. *Fix:* match controls on distance-traveled-to-level (D20 units) and report how many K=1 controls were actually found per event; if the median is small (<10), treat EXCESS-K1AT as uninformative.
+
+3. **Power is too low for the claimed resolution.** ~87–150 AT-LEVEL floors/tops total; the 60/40 split leaves ~30–60 per half, several cells under the 30-event/20-date floor. Detecting the hunted 0.05–0.07 D20 at a ~35-point (70-dollar) half-width is essentially hopeless. *Fix:* pre-commit a minimal detectable effect, print achieved power per cell, and do not split further by family (3M VAL=8, VAH=40, PW_HIGH=63 are unreportable).
+
+4. **Family-wise error is undercounted.** Bonferroni over 4 covers only the four primary cells; the orientation and family splits and sensitivity exits are "printed, never a verdict," but nothing stops a later reader from cherry-picking them, and this is the fifth study on the same history. *Fix:* pre-register a fixed family count including every descriptive/sensitivity output you might cite and adjust, or declare all splits non-citable with a written rule.
+
+5. **The AT-LEVEL net is nearly vacuous.** 14 line names × 0.25×H4 (~34 points) covers a large fraction of the chart, and "any orientation" weakens the label further. *Fix:* pre-register one primary definition (orientation-matched POC/VAH/VAL) and report the share of all time/price the broad net covers so readers can judge its selectivity.
+
+6. **Strict-exit 30% drop may correlate with the label.** Maintenance gaps/weekends cluster on specific dates, which can tilt the AT-LEVEL/ELSEWHERE mix. *Fix:* report AT-LEVEL vs ELSEWHERE among dropped vs kept events to show the drop is orthogonal.
+
+7. **Forward single-look is fine, but the event-count trigger is a data-dependent stopping time.** "20 events per side" with no fixed calendar endpoint lets the look drift indefinitely. *Fix:* also fix a hard end date and the exact forward test, so the single look cannot be deferred.

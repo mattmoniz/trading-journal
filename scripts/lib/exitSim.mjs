@@ -13,3 +13,14 @@ export function makeSim(NQ) {
 // blind clock-matched entry draws inside the event's own partition (A = explore dates at least 4 days before the cut, H = after the cut)
 export function blindDraws(NQ, samp, rng, e, okDay) { const ec = clock(NQ.T[e.i0]), out = []; for (let t = 0; t < 3000 && out.length < NDRAW; t++) { const b = samp[Math.floor(rng() * samp.length)]; if (NQ.TD[b] === e.day || !okDay(e.part, NQ.TD[b]) || Math.abs(clock(NQ.T[b]) - ec) > 30) continue; out.push(b + 1); } return out; }
 export function poolDraws(rng, pool, n = NDRAW) { const out = []; for (let t = 0; t < 3 * n && pool.length && out.length < Math.min(n, pool.length); t++) { const k = pool[Math.floor(rng() * pool.length)]; if (!out.includes(k)) out.push(k); } return out; }
+// ---- shared date-blocked statistics helpers (same code as the moonshot study had inline)
+import { hashSeed, mulberry32 } from '../../server/services/rigorDiagnostics.js';
+import { f3 } from './floorStats.mjs';
+export const median = (a) => { const s = [...a].sort((x, y) => x - y); return s.length ? (s.length % 2 ? s[(s.length - 1) / 2] : (s[s.length / 2 - 1] + s[s.length / 2]) / 2) : NaN; };
+export const dc = (z) => new Set(z.map((e) => e.day)).size;
+export function boot(items, lo, seed) { const g = new Map(); for (const x of items) (g.get(x.day) || g.set(x.day, []).get(x.day)).push(x.v); const keys = [...g.keys()], r = mulberry32(hashSeed(seed)), d = []; for (let it = 0; it < 4000; it++) { let s = 0, n = 0; for (let k = 0; k < keys.length; k++) for (const v of g.get(keys[Math.floor(r() * keys.length)])) { s += v; n++; } d.push(s / n); } d.sort((a, b) => a - b); return { lo: d[Math.floor(lo * d.length)], hi: d[Math.floor((1 - lo) * d.length) - 1] }; }
+export const ci = (items, lo, seed) => (items.length >= 5 ? boot(items, lo, seed) : { lo: NaN, hi: NaN });
+export const fmt = (m, c) => `${f3(m)} [${f3(c.lo)},${f3(c.hi)}]`;
+export const dropTopDate = (items) => { const g = new Map(); for (const x of items) g.set(x.day, (g.get(x.day) || 0) + x.v); let bd = null, bv = -Infinity; for (const [d, v] of g) if (v > bv) { bv = v; bd = d; } return mean(items.filter((x) => x.day !== bd).map((x) => x.v)); };
+// two-sample date-blocked bootstrap of mean(A) - mean(B): dates resampled within each arm
+export function diffCI(A, B, seed, iters = 4000) { const grp = (X) => { const g = new Map(); for (const x of X) (g.get(x.day) || g.set(x.day, []).get(x.day)).push(x.v); return g; }, ga = grp(A), gb = grp(B), ka = [...ga.keys()], kb = [...gb.keys()], r = mulberry32(hashSeed(seed)), d = []; const m = (g, ks) => { let s = 0, n = 0; for (let k = 0; k < ks.length; k++) for (const v of g.get(ks[Math.floor(r() * ks.length)])) { s += v; n++; } return s / n; }; for (let i = 0; i < iters; i++) d.push(m(ga, ka) - m(gb, kb)); d.sort((p, q) => p - q); return { lo: d[Math.floor(0.025 * d.length)], hi: d[Math.floor(0.975 * d.length) - 1] }; }
