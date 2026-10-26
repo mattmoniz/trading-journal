@@ -1,0 +1,33 @@
+# Pre-registration: is the ENTRY at a tested value-area floor worthwhile, and does ES agreeing with NQ's turn add to it? — 2026-10-26
+
+Written BEFORE running anything. Origin: user, 2026-10-26, redirecting the floor-hold-to-POC study (`docs/FLOOR_HOLD_TO_POC_PREREG_20261026.md`, which scores reaching the POC): "I don't wanna just test the target. I'm concerned more about getting the good entries — is the entry worthwhile — and then the target is known from our own studies and backtesting. I want the system to acknowledge ES and NQ are both behaving similarly and taking off, so maybe I should arm and queue." Same event engine as the floor study (value-area-low edges of the PW/3M/PM/PD/PY periods, episodes, sequences, k=1/2/3+), different question and different outcome. The target and stop are NOT tested here: they come from the system's own calibrations, and any survivor gets the usual real stop/target replay afterwards.
+
+## Question
+At a floor test, after NQ starts turning up, is the forward move from that entry better than the unconditional forward move at the same clock time, and is it better when ES has ALREADY turned too than when ES has not? "Arm at the floor, fire when NQ turns, with ES agreeing" is the proposed system behaviour; nothing is wired.
+
+## Events (no lookahead; engine reused from `scripts/study_floor_hold_to_poc_20261026.mjs`)
+Same data (NQ 1-minute `price_bars_primary` 2023-03-06 to the last complete date, printed and reused; roll weeks and 2025-09-28..2025-11-19 excluded and stated), same levels (`level_prices` `F_VAL/F_POC/F_VAH`, `>=`/ASC date mapping), same scale `A15` (mean 15-minute bar range of the 20 prior trade days), same episode/sequence definitions at p=1.0*A15, k arms K1/K2/K3P. ES = front contract `price_bars_es_front`, its own `A15_ES`.
+**Arming** = an episode start (the floor is being tested). **Fire (the NQ turn)** = the first 1-minute bar, within the episode and within W minutes of its start, whose close is at least `m*A15` above the lowest low since the episode start. W = the longer of 30 minutes and the median duration of the episodes in the explore period; m = 0.25 as primary (sensitivity 0.15 and 0.5; no other values). Entry = open of the bar after the fire bar (realistic). One event per episode; episodes with no NQ turn inside W are counted as "never turned" and reported.
+**ES state at the fire bar:** `AGREE` if ES's close at the fire bar is at least `m*A15_ES` above ES's lowest low since the same episode start (ES already turned by the time NQ fires); otherwise `DISAGREE`. No hindsight: ES is read at the fire bar only. ES episodes missing more than 20 percent of minutes are dropped and counted.
+
+## Outcomes (exit-free first, per the new-setup checklist 4a)
+From the entry price, at horizons 15 / 30 / 60 / 120 / 240 minutes: forward return in `A15` units, and MFE and MAE over the first 60 and 240 minutes. Every statistic is the conditional mean MINUS the UNCONDITIONAL mean over the same horizon and the same clock minute of day (all bars, same trade-date set), never against zero. Per-trade mean = sum/N; day-weighted means are not used for the arm comparison.
+
+## Tests (a short, fixed list)
+- **E1 (is the entry worthwhile):** all K arms pooled over the five families, forward return at 60 minutes, fire entries minus unconditional. One primary number. Reported for K1, K2, K3P separately as descriptive.
+- **E2 (does ES add anything; primary contrast of the study):** AGREE minus DISAGREE, forward return at 60 minutes, both entering at the same NQ fire bar, so the entry mechanics are identical and ES is the only difference. Also reported: AGREE minus unconditional.
+- **E3 (the structural/placebo controls, required by the confound checklist):** (a) a same-selection control: entries at the SAME delay after episode start taken from a random other episode's fire delay, with no NQ-turn condition (isolates the entry-price/delay advantage); (b) a within-day shuffle of the AGREE label among that day's events (E2 must exceed its 97.5th percentile, 1000 shuffles); (c) the VAH-ceiling mirror (shorts) run through the same code and reported separately; (d) RTH vs Globex entries reported separately.
+- Horizons 15/30/120/240, MFE/MAE, the K-arm split, sensitivity m in {0.15, 0.5}, per-family and session splits are descriptive/robustness, not gates, with no multiplicity claim.
+
+## Statistics and pass bar
+Day-blocked bootstrap (2000 draws) AND sequence-blocked bootstrap (floors are autocorrelated for weeks): a result counts only if both lower bounds agree. Chronological 60/40 explore/hold-out by event date (m=0.25 and W fixed in advance, so nothing is fitted on explore except W's median duration); halves must have the same sign. State counts and distinct days per cell are printed BEFORE any outcome; a cell with fewer than 20 distinct days is UNDERPOWERED, not tested; the CI half-width is printed so a null is read as resolution, not as "no effect" (the earlier ES study's day-clustered resolution was about 0.04-0.07 ATR60).
+**E1 SHOWN** = excess forward return at 60 minutes with both CI lower bounds > 0 and both halves positive. **E2 SHOWN** = AGREE minus DISAGREE with both CI lower bounds > 0, above the shuffle's 97.5th percentile, both halves positive. Otherwise NOT SHOWN, with what could not be shown. A SHOWN here only licenses the next step (real stop/target replay with realistic fills and the placebo for asymmetric geometry), never wiring.
+
+## Honest priors and limits
+- The earlier pre-registered ES corroboration study (approach divergence and ES-turns-first at level touches) showed nothing; its exploratory dollar audit leaned the same direction as this idea (ES-confirming fades did better) and is tracked as `es_confirming_fade_lead_needs_forward_test_20261026`. This is a different event definition (the turn after a floor test, with ES read at the fire bar) and a fresh pre-registration, not a rescue of that result; the nightly ES refresh added today means the forward days can later be scored out of sample.
+- Floors that get tested several times are a small, correlated set (the 3M and PY levels change slowly); few distinct days for those families is likely.
+- The user's live floor is the developing-WEEK profile VAL (29063), which has no stored level; this tests the stored prior-week/3-month/prior-month/day/year levels.
+- A turn threshold of m*A15 above the low is a scale-free choice with two sensitivity points, not a validated optimum.
+
+## Records
+`recordClaim()` for E1 and E2, positive or negative; `flagDecision()` for any real fork (e.g. building a developing-week level). Nothing here changes live behaviour.
