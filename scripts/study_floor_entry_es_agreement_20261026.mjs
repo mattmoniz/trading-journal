@@ -3,7 +3,8 @@
 import fs from 'fs';
 import { query } from '../server/db.js';
 import { hashSeed, mulberry32 } from '../server/services/rigorDiagnostics.js';
-import { FAMS, START, mean, pct, clock, loadBars, prep, neg, findEvents, loadLevels } from './lib/floorEngine.mjs';
+import { isInsideNqRollWeek } from '../server/services/acdShared.js';
+import { FAMS, START, SPARSE, mean, pct, clock, loadBars, prep, neg, findEvents, loadLevels } from './lib/floorEngine.mjs';
 
 const ITERS = 2000, PERM = 5000, HS = [15, 30, 60, 120, 240], M = Number(process.env.FE_M || 0.25);
 const lo = 0.0125, hi = 0.9875;   // Bonferroni two-primary intervals (Amendment 1 item 4)
@@ -19,22 +20,23 @@ function mfeMae(B, i0, h, a) { let hi2 = -Infinity, lo2 = Infinity, got = 0; for
 // unconditional: mean forward return at the same clock minute over all bars of all sample days, A15 units (one pass)
 function baselines(B) {
   const acc = HS.map(() => new Map());
-  for (let i = 0; i < B.n - 1; i++) { const a = B.A15[B.TD[i]]; if (!a) continue; const c = clock(B.T[i]); HS.forEach((h, k) => { const v = fwd(B, i, h, a); if (v === null) return; const o = acc[k].get(c) || { s: 0, n: 0 }; o.s += v; o.n++; acc[k].set(c, o); }); }
+  for (let i = 0; i < B.n - 1; i++) { const a = B.A15[B.TD[i]]; if (!a || isInsideNqRollWeek(B.TD[i]) || SPARSE(B.TD[i])) continue; const c = clock(B.T[i]); HS.forEach((h, k) => { const v = fwd(B, i, h, a); if (v === null) return; const o = acc[k].get(c) || { s: 0, n: 0 }; o.s += v; o.n++; acc[k].set(c, o); }); }
   return (k, c) => { const o = acc[k].get(c); return o ? o.s / o.n : NaN; };
 }
 
-function episodeEnd(B, e, pm, limit = 720) { for (let j = e.i; j < Math.min(B.n, e.i + limit); j++) if (B.L[j] > e.val + 2 * pm * e.a) return j - e.i; return limit; }
+function episodeEnd(B, e, pm, limit = 720) { for (let j = e.i; j < B.n && B.EM[j] - B.EM[e.i] <= limit; j++) if (B.L[j] > e.val + 2 * pm * e.a) return B.EM[j] - B.EM[e.i]; return limit; }
 
 // fire search for one side (B bars, X = the other instrument's bars with its own maps); returns null if never turned inside W
 function fire(B, X, e, W, m) {
-  let minL = Infinity, xMin = Infinity, xTurnBar = null; const stopLvl = e.val - 1 * e.a;
+  let minL = Infinity, xMin = Infinity, xTurnBar = null, xGot = 0, tot = 0; const stopLvl = e.val - 1 * e.a;
   for (let j = e.i; j < B.n - 1 && B.EM[j] - B.EM[e.i] <= W; j++) {
     if (B.L[j] > e.val + 2 * e.a) return null;      // episode ended without a turn
-    if (B.C[j] <= stopLvl) return null;               // decisive break: sequence reset
+    if (B.C[j] <= stopLvl || B.H[j] >= e.poc) return null;   // decisive break or POC reached: sequence reset (same rules as findEvents)
+    tot++;
     minL = Math.min(minL, B.L[j]);
-    const xi = X.byEm.get(B.EM[j]); if (xi !== undefined) { xMin = Math.min(xMin, X.L[xi]); if (xTurnBar === null && (X.C[xi] - xMin) >= m * X.A15[X.TD[xi]]) xTurnBar = j; }
+    const xi = X.byEm.get(B.EM[j]); if (xi !== undefined) { xGot++; xMin = Math.min(xMin, X.L[xi]); if (xTurnBar === null && (X.C[xi] - xMin) >= m * X.A15[X.TD[xi]]) xTurnBar = j; }
     if (B.C[j] - minL >= m * e.a) {
-      const xi2 = X.byEm.get(B.EM[j]); if (xi2 === undefined || !X.A15[X.TD[xi2]]) return { miss: true };
+      const xi2 = X.byEm.get(B.EM[j]); if (xi2 === undefined || !X.A15[X.TD[xi2]] || xGot / tot < 0.8) return { miss: true };   // prereg: drop when ES is missing more than 20 percent of the episode minutes
       const agree = (X.C[xi2] - xMin) >= m * X.A15[X.TD[xi2]], lead = xTurnBar !== null && xTurnBar < j;
       return { j, i0: j + 1, turnSize: (B.C[j] - minL) / e.a, bars: B.EM[j] - B.EM[e.i], agree, lead };
     }
@@ -68,7 +70,8 @@ function buildEvents(B, X, base, lv, W, rng) {
       // delay-matched control (E3a): same family/arm/year delay, episode still active then, clock within 30 min, up to 10 tries
       const cand = pool.get(`${f}|${e.arm}|${B.TD[e.i].slice(0, 4)}`) || []; let got = false;
       for (let t = 0; t < 10 && cand.length > 1 && !got; t++) {
-        const d = cand[Math.floor(rng() * cand.length)], jm = B.byEm.get(B.EM[e.i] + d); if (jm === undefined || jm + 1 >= B.n) continue;
+        const d = cand[Math.floor(rng() * cand.length)]; if (d === B.EM[r.j] - B.EM[e.i]) continue;   // never reuse the focal event's own delay
+        const jm = B.byEm.get(B.EM[e.i] + d); if (jm === undefined || jm + 1 >= B.n) continue;
         let ok = true; for (let j = e.i; j <= jm; j++) if (B.L[j] > e.val + 2 * e.a || B.C[j] <= e.val - e.a) { ok = false; break; }
         if (!ok || Math.abs(clock(B.T[jm + 1]) - clock(B.T[r.i0])) > 30) continue;
         HS.forEach((h) => { ctl[h] = fwd(B, jm + 1, h, a); }); got = true;
@@ -76,7 +79,8 @@ function buildEvents(B, X, base, lv, W, rng) {
       rows.push({ fam: f, arm: e.arm, seq: `${f}|${e.seq}`, day: td, i: e.i, turn: r.turnSize, bars: r.bars, agree: r.agree, lead: r.lead, sess: B.T[r.i0].slice(0, 10) === td && clock(B.T[r.i0]) >= 570 && clock(B.T[r.i0]) < 960 ? 'RTH' : 'GLOBEX', ret, bs, ctl: got ? ctl : null, mfe60: mm && mm.mfe, mae60: mm && mm.mae, mfe240: mm4 && mm4.mfe, mae240: mm4 && mm4.mae });
     }
   }
-  const t1 = rows.map((x) => x.turn), t2 = rows.map((x) => x.bars), q = (a) => [qnt(a, 1 / 3), qnt(a, 2 / 3)], b = (v, c) => (v <= c[0] ? 0 : v <= c[1] ? 1 : 2), c1 = q(t1), c2 = q(t2);
+  const rd = [...new Set(rows.map((x) => x.day))].sort(), xc = rd[Math.floor(rd.length * 0.6) - 1], ex0 = rows.filter((x) => x.day <= xc && x.ret[60] != null);   // tercile cutpoints from explore-period events only
+  const t1 = ex0.map((x) => x.turn), t2 = ex0.map((x) => x.bars), q = (a) => [qnt(a, 1 / 3), qnt(a, 2 / 3)], b = (v, c) => (v <= c[0] ? 0 : v <= c[1] ? 1 : 2), c1 = q(t1), c2 = q(t2);
   for (const x of rows) x.stratum = `${x.fam}|${b(x.turn, c1)}|${b(x.bars, c2)}`;
   return { rows, counts };
 }
@@ -95,7 +99,7 @@ function summarizeSide(label, rows, counts) {
   // E1 gated: within-sequence paired K3P excess minus K1 excess
   const k1 = new Map(), k3 = new Map(); for (const e of fired) { if (ex(e) === null) continue; if (e.arm === 'K1') k1.set(e.seq, e); if (e.arm === 'K3P') k3.set(e.seq, e); }
   const pairs = [...k3].filter(([k]) => k1.has(k)).map(([k, e3]) => ({ seq: k, day: e3.day, d: ex(e3) - ex(k1.get(k)) })), pst = (z) => mean(z.map((p) => p.d));
-  if (pairs.length >= 20 && dcount(pairs) >= 20) { out.E1 = { n: pairs.length, days: dcount(pairs), mean: pst(pairs), seq: blockBoot(pairs, pst, (p) => p.seq, label + 'E1seq'), day: blockBoot(pairs, pst, (p) => p.day, label + 'E1day') }; console.log(`  E1 GATED paired K3P-minus-K1 excess (same sequence): n=${out.E1.n}/${out.E1.days}d ${f3(out.E1.mean)} seqCI [${f3(out.E1.seq.lo)},${f3(out.E1.seq.hi)}] dayCI [${f3(out.E1.day.lo)},${f3(out.E1.day.hi)}]`); } else { out.E1 = { n: pairs.length, underpowered: true }; console.log(`  E1 GATED paired: n=${pairs.length} UNDERPOWERED`); }
+  if (pairs.length >= 20 && dcount(pairs) >= 20) { const pdays = [...new Set(pairs.map((p) => p.day))].sort(), pmid = pdays[Math.floor(pdays.length / 2)], phalves = [pst(pairs.filter((p) => p.day < pmid)), pst(pairs.filter((p) => p.day >= pmid))]; out.E1 = { n: pairs.length, days: dcount(pairs), mean: pst(pairs), halves: phalves, seq: blockBoot(pairs, pst, (p) => p.seq, label + 'E1seq'), day: blockBoot(pairs, pst, (p) => p.day, label + 'E1day') }; console.log(`  E1 GATED paired K3P-minus-K1 excess (same sequence): n=${out.E1.n}/${out.E1.days}d ${f3(out.E1.mean)} seqCI [${f3(out.E1.seq.lo)},${f3(out.E1.seq.hi)}] dayCI [${f3(out.E1.day.lo)},${f3(out.E1.day.hi)}] halves ${phalves.map(f3)}`); } else { out.E1 = { n: pairs.length, underpowered: true }; console.log(`  E1 GATED paired: n=${pairs.length} UNDERPOWERED`); }
   // E2 / strict lead
   const e2 = fired.filter((e) => e.ret[60] != null); out.E2 = {};
   for (const [name, flag] of [['AGREE', (e) => e.agree], ['LEAD', (e) => e.lead]]) {
@@ -131,7 +135,7 @@ async function main() {
   const rng = mulberry32(hashSeed('ctl' + M));
   const A = buildEvents(NQ, ES, base, (f) => lv(f, false), W, rng), Bm = buildEvents(NQn, ESn, baseN, (f) => lv(f, true), W, rng);
   const outA = summarizeSide('LONG floors (VAL)', A.rows, A.counts), outB = summarizeSide('MIRROR short ceilings (VAH)', Bm.rows, Bm.counts);
-  const g = outA, v = { E1: g.E1 && !g.E1.underpowered && g.E1.seq.lo > 0 && g.E1.day.lo > 0, E2: g.E2.AGREE && !g.E2.AGREE.underpowered && g.E2.AGREE.seq.lo > 0 && g.E2.AGREE.day.lo > 0 && g.E2.AGREE.obs > g.E2.AGREE.perm975 && g.E2.AGREE.halves.every((x) => x > 0) };
+  const g = outA, v = { E1: g.E1 && !g.E1.underpowered && g.E1.seq.lo > 0 && g.E1.day.lo > 0 && g.E1.halves.every((x) => x > 0), E2: g.E2.AGREE && !g.E2.AGREE.underpowered && g.E2.AGREE.seq.lo > 0 && g.E2.AGREE.day.lo > 0 && g.E2.AGREE.obs > g.E2.AGREE.perm975 && g.E2.AGREE.halves.every((x) => x > 0) };
   console.log('\nVERDICT (Amendment 1 gates; rule constants fixed in advance):', JSON.stringify(v), '=> E1', v.E1 ? 'SHOWN' : 'NOT SHOWN', '| E2', v.E2 ? 'SHOWN' : 'NOT SHOWN / UNDERPOWERED (read the counts above)');
   fs.writeFileSync(`scratch/floor_entry_es_agreement_20261026_m${M}.json`, JSON.stringify({ endRow, M, W, long: outA, mirror: outB, verdict: v }, null, 1));
 }
