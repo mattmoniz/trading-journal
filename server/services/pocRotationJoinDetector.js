@@ -55,7 +55,11 @@ import { checkLiveRoster } from './setupEligibility.js';
 
 const THETA_CACHE_KEY = 'pocRotationJoin_theta';
 const THETA_CACHE_TTL = 12 * 60 * 60 * 1000; // 12hr -- full-history median bar range moves negligibly intraday
-const MIN_SESSION_BARS = 40; // matches rthFlushDetector's floor -- not enough bars yet to trust leg detection
+// Was 40 ("matches rthFlushDetector's floor -- not enough bars yet to trust leg detection"). Removed 2026-10-26 (user: the late POC rows): detectSignalEvents() is causal -- on 130 recent
+// sessions, all 77 events whose entry bar fell inside the first 40 session bars came out IDENTICAL (direction, entry index, entry price) when recomputed from only the bars available at that
+// moment (scripts/verify_poc_join_prefix_causality_20261026.mjs; re-run it if the detector changes). The warm-up therefore protected nothing: it only held every early-session event back
+// until the 40th bar (6:12 PM and 6:33 PM Sunday rows were inserted 28 and 7 minutes late, both at 18:40:13). A session with no bars is the only case left to skip.
+const MIN_SESSION_BARS = 1;
 // REVERTED 2026-10-21 (user: "change the stop on the poc join") to the original Time60_Stop20
 // exit: 20pt stop, 60-minute time limit with mark-to-market (resolveSetups.js). Replaces the
 // 2026-10-11 breakeven-hold exit (100pt stop, breakeven snap at 60min, 24h hold) -- live it
