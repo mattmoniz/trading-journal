@@ -1,0 +1,43 @@
+# Mechanism decomposition of the two surviving setups (pre-registration, 2026-10-25)
+
+Scope: user request 2026-10-25 ("lets start with 2"): find WHY `IB_HIGH_FADE_SHORT` and `WS1_FADE_LONG` pass the LIVE_ROSTER gate, and whether the reason generalises to siblings. Companion docs: Part A `docs/BAR_CONTEXT_STUDIES_PREREG_A_20261026.md`, Part B `docs/BAR_CONTEXT_STUDIES_PREREG_B_20261026.md` (their lessons apply and are not repeated: print state counts before any outcome, conditional-minus-unconditional excess, per-trade means not day-weighted, one touch counted once, opposite-signed subgroups reported). Committed BEFORE any outcome is computed. Nothing here changes live behaviour.
+
+## Why a replication comes before any "mechanism"
+The two survivors were picked from about 247 tested setup types on live-detected ACTIVE+SHADOW rows since 2026-07-09 (`scripts/calibrate_live_roster.mjs`). With 247 tests, about 6 false passes are expected and 3 passed. A mechanism story built on a fluke is worthless, so Test 0 asks whether each survivor's fade shows an edge in the 3.5-year bar replay on dates BEFORE its selection window (2023-03..2026-07-08, almost entirely unseen by the selection). If it does not, the right conclusion is "no demonstrated edge, explanation unnecessary", and Tests 1-2 still run to see whether anything else is there.
+
+## Population
+New builder `scripts/build_level_touch_events_20261026.mjs` (keeps level identity; the Part B file drops it). Same touch rule as the replay and Part B: level within 15 pt of the close, first bar at or after max(09:35, the level's formation gate: OR5 09:35, OR10 09:40, OR15 09:45, OR30 10:00, IB 10:30), bar index >= 5 into the session, once per level per day, fade direction `f = long if C[t-5] >= C[t] else short`. Levels = those with an `OPTIMAL_STOP` row for the fade type in that direction (the live roster's universe). Window 2023-03-06..2026-10-23; excluded days: 2025-09-28..2025-11-19 sparse window, NQ roll weeks (`isInsideNqRollWeek`, the day and the day after), PD_CLOSE roll-mismatch days, days without ATR20 or levels. RTH only. One row per (level, day); `nLevels` = number of such rows sharing the same bar; each row in pooled tests carries weight `1/nLevels` so one real touch counts once.
+
+## Features (bars up to and including the event bar `t`; entry is `open[t+1]`, so no lookahead)
+- `e` (extremity of the day so far, in the fade direction): short fade `e = (C[t] - dayLow) / (dayHigh - dayLow)`, long fade `e = (dayHigh - C[t]) / (dayHigh - dayLow)`, using RTH bars from the open through `t`. `e` near 1 = the touch happens at the day's own extreme (a stop-run / exhaustion shape), near 0 = the level is touched in the interior of the day's range. Defined when the range so far is > 0.
+- `b` (beyond yesterday's range): short fade `b = C[t] > prior-session RTH high`, long fade `b = C[t] < prior-session RTH low`. (Fading an expansion beyond yesterday's range vs fading inside it.)
+- Choice of axes: both are scale-free, defined at the touch, and none was tested in the existing record (checked: grep of ARCHITECTURE.md, OPEN_THREADS.md, docs/ and scripts/ for level-age / day-extreme / prior-range-position found nothing relevant; `VALUE_FADE` (distance to prior value) is a different variable and was demoted at -1.26 per trade, `OPEN_TEST_DRIVE` and defended-level work are different questions). Level age and touch count were considered and dropped (age is confounded with family; touch count is already a closed negative).
+
+## Outcome (primary, exit-free)
+`ret60 = f * (C[t+60] - O[t+1]) / ATR20` (needs `t+60 <= last RTH bar`; later touches are dropped from outcome tests and counted). **Excess** = `ret60 - mean(ret60 of 20 control draws)`. Control draw `k` for a touch: a random RTH bar of the SAME session, same time bucket (first hour < 10:30, mid 10:30-14:30, last 90), index >= 5, horizon available, SAME `f` (this removes NQ drift and time-of-day), seed `hash(date|level|k)`. Secondary, informational only: the simulated symmetric +/-0.5 ATR20 stop/target trade from `open[t+1]` with market fills and stop-first, in dollars ($2/pt, $2 round trip), per-trade mean = sum/N. No P&L claim rests on it.
+
+## Test 0 — do the survivors replicate out of their selection window?
+Cells: (`IB_HIGH`, short) and (`WS1`, long). Dates strictly before 2026-07-09 only. Statistic: per-trade mean excess ret60, day-blocked bootstrap 95% CI (resample dates, pool their trades, 2,000 seeded draws), chronological halves by date, plus N, distinct days and the CI half-width (the smallest effect this sample can resolve). Frozen verdict per cell:
+- **REPLICATES**: CI lower bound > 0 and both halves have positive point estimates.
+- **DIRECTIONAL**: both halves positive and the pooled point estimate positive but the CI includes 0 (reported as "could not be shown", not as support).
+- **NOT REPLICATED**: otherwise.
+- **REVERSES**: CI upper bound < 0.
+Reported next to them, untested and descriptive: the mirror cells (`IB_LOW` long, `WR1` short) and the same cells inside the selection window (2026-07-09 onward) for overlap. The mirror cells show whether "fade the extreme" is a general shape here or whether the survivors are individually special.
+
+## Test 1 — pooled mechanism axes (explore / hold-out)
+All rows, all levels, weights `1/nLevels`. Chronological split by DATE: explore = earliest 60% of valid days, hold-out = the rest; all cut points come from explore only. Four tests, long and short fades separately (a pooled verdict hides opposite-signed subgroups): `E_short`, `E_long` (top tercile of `e` vs bottom tercile; the tercile cuts are explore quantiles) and `B_short`, `B_long` (`b` true vs false). Statistic: difference of weighted per-trade mean excess between the two arms, day-blocked bootstrap CI computed by resampling days and pooling trades per arm in each draw (never the day-weighted point estimate; the 2026-10-12 split-comparison lesson). Screening: explore two-sided bootstrap p; BH at q = 0.10 over the 4 explore p-values (arms with fewer than 100 touches on 40 days in explore are listed as underpowered and excluded). **SHOWN** only if all of: BH survivor on explore; hold-out difference has the same sign with one-sided p < 0.05; stratified difference (recomputed inside strata of level family x time bucket, strata-weighted by arm size) keeps the sign and at least half the magnitude.
+
+## Test 2 — where does the fade edge live (family x direction)
+Families as in Part B (`SAME_DAY_OR_IB`, `PD`, `WEEKLY`, `MONTHLY`, `CAM`, `FLOOR`, `OTHER`) x long/short, up to 14 cells; statistic = weighted mean excess ret60 (cell vs 0, since excess already nets the matched control). Same screening and SHOWN rule (explore BH q = 0.10, hold-out same sign one-sided p < 0.05; underpowered cells listed). Purpose: show whether anything beyond the two survivors has an edge, and which families are cleanly null.
+
+## Reporting duties
+State counts (touches, days, by f, by family, outcomes available) are printed before any outcome and quoted first. Every verdict states exactly what could not be shown and the smallest resolvable difference. The pooled result is accompanied by long/short and era (pre/post 2025-06) subgroups for anything marked SHOWN.
+
+## What happens next (frozen)
+- Survivors REPLICATE or are DIRECTIONAL: the explanation work (Tests 1-2) is meaningful; no live change; any wiring needs the standing fill-realistic replay, a Globex test (see below) and a shadow-tag-first rollout.
+- Survivors NOT REPLICATED or REVERSE: flag an OPEN_DECISION that the two roster types have no out-of-window support (no automatic roster change; the data-derived gate was the user's decision, 2026-10-25).
+- Any axis or family SHOWN: observation-only shadow tag first (house pattern), logic in `server/services/`, not `acd.js`.
+- **Globex is not evaluated here** (the replay is RTH-only; the Globex level-fade engine is structurally different and Globex reverses RTH pressure signals on this roster). Per the hard rule, no finding is wired to anything until the Globex window is tested or an OPEN_DECISION explicitly records why not.
+
+## Honest expectations
+A null is the likely result for Tests 1-2 given the record (Parts A and B, defended levels, value fades). Test 0 can come out either way; the +14 per trade was measured on live-detected rows from a best-of-247 pick, which is exactly the situation that overstates. Controls are random same-bucket bars, not "near a level but not touched", so excess answers "is touching this level at this moment better than a random moment" and not "is this level special".
