@@ -3,17 +3,9 @@
 // picking on the earlier 60 percent of dates and confirming on the later 40 percent.
 import fs from 'fs';
 import { query } from '../server/db.js';
-import { hashSeed, mulberry32 } from '../server/services/rigorDiagnostics.js';
 import { mean, clock, loadBars, prep } from './lib/floorEngine.mjs';
 
-const ITERS = 2000, MIN_DAYS = 20, MIN_DIS = 30;
-const f3 = (x) => (x == null || Number.isNaN(x) ? '  n/a ' : (x >= 0 ? '+' : '') + x.toFixed(3));
-const qnt = (a, q) => { const s = [...a].sort((x, y) => x - y); return s.length ? s[Math.min(s.length - 1, Math.max(0, Math.floor(q * s.length)))] : NaN; };
-// copied verbatim from study_floor_entry_es_agreement_20261026.mjs (checked below: the ALL cell reproduces the parent's printed E2/E1a)
-function strat(items, flag, val) { const S = new Map(); for (const x of items) { (S.get(x.stratum) || S.set(x.stratum, { a: [], d: [] }).get(x.stratum))[flag(x) ? 'a' : 'd'].push(val(x)); } let num = 0, den = 0; for (const s of S.values()) if (s.a.length >= 2 && s.d.length >= 2) { num += s.d.length * (mean(s.a) - mean(s.d)); den += s.d.length; } return den ? num / den : NaN; }
-function blockBoot(items, stat, keyFn, seed) { const grp = new Map(); for (const x of items) { const k = keyFn(x); (grp.get(k) || grp.set(k, []).get(k)).push(x); } const keys = [...grp.keys()], rng = mulberry32(hashSeed(seed)), d = []; for (let it = 0; it < ITERS; it++) { const pool = []; for (let k = 0; k < keys.length; k++) pool.push(...grp.get(keys[Math.floor(rng() * keys.length)])); const v = stat(pool); if (Number.isFinite(v)) d.push(v); } return { lo: qnt(d, 0.025), hi: qnt(d, 0.975) }; }
-const dcount = (x) => new Set(x.map((e) => e.day)).size;
-const ex = (e) => (e.ret[60] != null && e.ctl && e.ctl[60] != null ? e.ret[60] - e.ctl[60] : null);
+import { ITERS, MIN_DAYS, MIN_DIS, f3, qnt, strat, blockBoot, dcount, ex } from './lib/floorStats.mjs';
 
 // ---- volume features (strictly before the entry bar) ----
 function volumeIndex(B) {
