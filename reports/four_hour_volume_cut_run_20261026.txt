@@ -1,0 +1,63 @@
+✅ Connected to PostgreSQL database
+NQ bars to 2026-10-23 (pinned limit 1280026); first-K3 events with exit bar and relVol 429 (floors 154, tops 275); dropped for missing relVol 0
+  floor cut (explore median of relVol, n=97): +1.053
+  top cut (explore median of relVol, n=162): +0.904
+partition cut 2025-03-26; explore events dropped for straddling: 1
+
+FLOOR X: all dates HEAVY-LIGHT -0.019 [-0.243,+0.206] (heavy n 77/71d mean +0.012 median -0.005; light n 77/71d mean +0.030 median -0.004)
+  explore -0.147 [-0.443,+0.150] (heavy -0.063, light +0.084) heavy n=48/43d light n=49/45d
+  hold-out heavy n=29/28d light n=28/26d
+  => no
+  all-dates smallest detectable effect (CI half-width) +0.225 | raw n 154, effective independent (non-overlapping 1,440-min) 130 | RTH share heavy 32% vs light 32%
+  adjusted for session x D20 tercile: -0.025 [-0.243,+0.194]
+
+FLOOR M: all dates HEAVY-LIGHT +9.456 [-63.798,+84.788] (heavy n 77/71d mean -24.236 median -112.848; light n 77/71d mean -33.692 median -36.810)
+  explore -24.326 [-88.317,+39.524] (heavy -20.157, light +4.169) heavy n=48/43d light n=49/45d
+  hold-out heavy n=29/28d light n=28/26d
+  => no
+  all-dates smallest detectable effect (CI half-width) +74.293 | raw n 154, effective independent (non-overlapping 1,440-min) 130 | RTH share heavy 32% vs light 32%
+  adjusted for session x D20 tercile: +6.574 [-62.038,+75.042]
+
+TOP X: all dates HEAVY-LIGHT +0.095 [-0.074,+0.265] (heavy n 144/133d mean +0.109 median +0.101; light n 131/120d mean +0.014 median +0.040)
+  explore +0.183 [-0.095,+0.458] (heavy +0.153, light -0.030) heavy n=81/75d light n=81/72d
+  hold-out heavy n=63/58d light n=49/47d
+  => no
+  all-dates smallest detectable effect (CI half-width) +0.170 | raw n 275, effective independent (non-overlapping 1,440-min) 228 | RTH share heavy 35% vs light 21%
+  adjusted for session x D20 tercile: +0.101 [-0.071,+0.288]
+
+TOP M: all dates HEAVY-LIGHT +14.697 [-38.185,+70.332] (heavy n 144/133d mean +25.554 median -22.226; light n 131/120d mean +10.857 median -15.810)
+  explore +39.136 [-21.672,+104.107] (heavy +35.431, light -3.706) heavy n=81/75d light n=81/72d
+  hold-out heavy n=63/58d light n=49/47d
+  => no
+  all-dates smallest detectable effect (CI half-width) +54.258 | raw n 275, effective independent (non-overlapping 1,440-min) 228 | RTH share heavy 35% vs light 21%
+  adjusted for session x D20 tercile: +18.541 [-38.316,+76.859]
+
+CELLS TESTED 4 (of 4), CANDIDATES 0, expected by chance about 0.05, SCREEN-SURVIVORS 0
+
+CUT SENSITIVITY (descriptive, all dates): top third minus bottom third of explore relVol, excess
+  floor X: +0.094 [-0.141,+0.332] (top n 55, bottom n 52)
+  floor M: +9.153 [-77.865,+101.204] (top n 55, bottom n 52)
+  top X: +0.162 [-0.046,+0.360] (top n 94, bottom n 90)
+  top M: +48.077 [-22.932,+119.167] (top n 94, bottom n 90)
+
+ARM MIX (descriptive): side | arm | n | share RTH | mean relVol
+  floor HEAVY n  77 | RTH 32% | mean relVol +1.292
+  floor LIGHT n  77 | RTH 32% | mean relVol +0.910
+  top   HEAVY n 144 | RTH 35% | mean relVol +1.111
+  top   LIGHT n 131 | RTH 21% | mean relVol +0.742
+
+DESCRIPTIVE: slope / rank correlation of excess on relVol, all dates, by side and session
+  floor ALL X: n 154 Spearman +0.089 slope +0.309 per 1.0x
+  floor ALL M: n 154 Spearman -0.014 slope +63.532 per 1.0x
+  floor RTH X: n 50 Spearman -0.032 slope +0.314 per 1.0x
+  floor RTH M: n 50 Spearman -0.097 slope +150.806 per 1.0x
+  floor GLOBEX X: n 104 Spearman +0.151 slope +0.309 per 1.0x
+  floor GLOBEX M: n 104 Spearman +0.020 slope +28.257 per 1.0x
+  top ALL X: n 275 Spearman +0.076 slope +0.375 per 1.0x
+  top ALL M: n 275 Spearman -0.002 slope +73.505 per 1.0x
+  top RTH X: n 78 Spearman +0.061 slope +0.205 per 1.0x
+  top RTH M: n 78 Spearman -0.054 slope -38.866 per 1.0x
+  top GLOBEX X: n 197 Spearman +0.086 slope +0.416 per 1.0x
+  top GLOBEX M: n 197 Spearman +0.012 slope +104.745 per 1.0x
+
+overlap: events starting within 1,440 minutes of the previous same-side event: floors 16%, tops 18%
