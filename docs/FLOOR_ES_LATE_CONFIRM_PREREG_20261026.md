@@ -15,3 +15,11 @@ LATE needs ES to move after NQ already did, so the entry is later and higher; th
 
 ## Records
 `recordClaim()` for L1 and L2, positive or negative; a real fork goes to `flagDecision()`.
+
+---
+## Amendment 1 (2026-10-26, before the run) — DeepSeek design review (`reports/deepseek_floor_es_late_confirm_prereg_review_2026-10-26.md`)
+1. **L2 was algebraically L1** (the NQ-fire baseline cancels in the difference-in-differences). There is now ONE primary, L1. The raw paired "ES-confirm entry minus NQ-fire entry" of the same event is descriptive only.
+2. **L1's control is now NQ-conditioned, so ES is the only difference.** For a LATE event A (NQ fired at bar j, ES confirmed `dl` minutes later), the control entries are made at the same elapsed time `dl` after the NQ fire, on OTHER NQ-fired events of the same family, arm, year and chronological half whose ES had NOT yet confirmed by then (causal: they may still confirm later), whose episode is still active at that time (no escape above the zone, no decisive break, no POC reached) and whose entry clock is within 30 minutes of A's. Up to 10 draws, mean taken; A's own sequence excluded; events with no eligible control are dropped and counted. **L1 = A's ret60 from the ES-confirmation entry minus the mean control ret60 from the matched elapsed-time entry**, A15 units. The earlier blind delay-matched control is also printed as a secondary line.
+3. **Controls and delay pool are half-local** (explore events use only explore delays and explore controls, hold-out only hold-out), removing the full-sample leakage.
+4. **Wait time is reported as a censored distribution** (LATE delays, plus the share SAME-OR-EARLIER and NEVER within W), with the caption that the class comparisons are survivorship-confounded and not a result.
+5. **One primary at 95 percent coverage** (sequence-blocked; day-blocked alongside), both chronological halves positive, >= 20 distinct days, else UNDERPOWERED with the smallest detectable effect printed; a NOT SHOWN is worded "unresolved below the resolution bar", never "ES adds nothing". A long-floor SHOWN that the VAH mirror contradicts is flagged and not treated as forward-worthy.
