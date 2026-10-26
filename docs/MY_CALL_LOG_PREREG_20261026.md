@@ -18,3 +18,6 @@ No look at outcomes before it. The single look happens on the first date on or a
 
 ## Limits stated in advance
 40 calls resolve only large effects (expect an interval of roughly +-0.1 D20, about 35 points); the user's calls are not independent of the day's regime; 'defended level' is whatever the user means at the time, and the reason text is the only label; a user who sees recent results may change behaviour, so outcomes stay hidden until the look; an eye that wins would still need rules a machine can copy, and the reason text and levels logged here are the labelled examples for that.
+
+## Update 2026-10-26 (before any call): the picture
+Each call can also carry "the picture": taps for eight elements the user named (level defended before for days or weeks; support or resistance on the 4-hour chart; held the overnight high or low; at a 3-month/month/week value area line; POC or MGI nearby on the volume chart; big orders stuffed at the level; volume above normal; day and multi-day context agree) and an optional count of how many times the level has been approached. These are stored with the call (`picture`, `approaches`) and are used only descriptively later (which elements co-occur with outcomes, whether the count matters); they change nothing about the pre-registered single look or its one counted cell.
