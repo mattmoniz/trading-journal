@@ -19,6 +19,11 @@ timed_step daily /usr/bin/node scripts/refresh_price_bars_dedup_hist.mjs
 # Completed-session high/low/range table (2026-10-19, docs/PRICE_BARS_AND_STARTUP_SPEED_SPEC.md Part B1): refresh right after the bar store so tomorrow's ATR / gap lookups read 20 indexed rows.
 timed_step daily /usr/bin/node scripts/build_daily_rth_stats.mjs
 
+# ES (E-mini S&P) 1-minute bar refresh (2026-10-26, user request): keeps price_bars_es / es_front_calendar current from the live Sierra DTC-folder ES tick files so the frozen
+# ES-confirmation lead (OPEN_DECISION es_confirming_fade_lead_needs_forward_test_20261026) can be scored on new days. Idempotent, research data only (nothing live reads it);
+# fails loudly in this log if no ES file was written in 3 days (Sierra not running / no ES feed).
+timed_step daily /bin/bash scripts/refresh_es_bars.sh
+
 # NQ contract-roll health check (2026-09-15, T3-c per OPUS_AUDIT_PROMPT_13's strategic review
 # of the contract-calendar fix, scratch/opus_audit_13_results.md) -- runs right after the
 # reconcile above so it's checking the calendar's post-reconcile state. Daily, not weekly
