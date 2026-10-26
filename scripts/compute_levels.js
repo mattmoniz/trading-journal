@@ -567,6 +567,12 @@ const fromDate = fromIdx >= 0 ? args[fromIdx + 1] : null;
 // unchanged behavior.
 const categoryArg = args.find(a => a.startsWith('--category='));
 const categoryFilter = categoryArg ? categoryArg.split('=')[1] : null;
+// --categories=A,B,C (2026-10-26): a LIST version of --category, used by the pre-open "ensure the next session's level row exists" cron in server/index.js (the
+// categories that depend only on already-completed sessions: PRIOR_DAY, CAMARILLA, PIVOT, WEEKLY*, MONTHLY*, QUARTERLY, YEARLY, PRIOR). --dry prints what would be
+// written without touching level_prices (used to verify the early set equals what the full run writes).
+const categoriesArg = args.find(a => a.startsWith('--categories='));
+const categoriesFilter = categoriesArg ? new Set(categoriesArg.split('=')[1].split(',').filter(Boolean)) : null;
+const isDry = args.includes('--dry');
 
 if (isBackfill) {
   // Get all trading dates from developing_value_log
@@ -596,9 +602,9 @@ if (isBackfill) {
   const date = args.find(a => !a.startsWith('--')) || new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
   console.log(`Computing levels for ${date}${categoryFilter ? ` (category=${categoryFilter} only)` : ''}...`);
   const allLevels = await computeLevelsForDate(date);
-  const levels = categoryFilter ? allLevels.filter(l => l.category === categoryFilter) : allLevels;
-  await writeLevels(date, levels);
-  console.log(`Wrote ${levels.length} levels:`);
+  const levels = categoriesFilter ? allLevels.filter(l => categoriesFilter.has(l.category)) : categoryFilter ? allLevels.filter(l => l.category === categoryFilter) : allLevels;
+  if (!isDry) await writeLevels(date, levels);
+  console.log(`${isDry ? 'DRY RUN, wrote nothing; would write' : 'Wrote'} ${levels.length} levels:`);
   levels.forEach(l => console.log(`  ${l.name.padEnd(16)} ${l.price}  [${l.category}]`));
 }
 

@@ -1158,6 +1158,31 @@ httpServer.listen(PORT, () => {
     } catch (err) { console.error('[compute_levels] Cron error:', err.message); }
   }, { timezone: 'America/New_York' });
 
+  // 5:55 PM ET Sun-Fri (2026-10-26, user: "do the fixes ... it should also apply to Monday if it's a holiday and Globex starts Monday night"): make sure a level_prices row with
+  // trade_date >= today exists BEFORE the 6PM Globex open. The Sunday 9:30 PM cron above is the only thing that writes the coming Monday's row, so every Sunday 6-9:30 PM the
+  // Globex flush detector (findDeparture(): `trade_date >= <departure day>` for PD_VAL/PD_VAH) had no row to read and was blind -- GLOBEX_FLUSH_REVERSAL_SHORT fired 7:26 PM and
+  // was only inserted 9:30:20 PM (2.1h late, id 143873). Any evening where a row for today or later is missing (a weekend, a holiday-extended weekend, or a missed 8:00 AM run)
+  // gets one: a weekday -> the normal full compute for today (same as the 8:00 AM cron); Sunday -> the coming session's row from the categories that depend only on completed
+  // sessions (PRIOR_DAY, CAMARILLA, PIVOT, WEEKLY*, MONTHLY*, QUARTERLY, YEARLY, PRIOR; verified 53 of 53 levels identical to a full run). OPENS/OVERNIGHT/VWAP/CURRENT are left to the
+  // existing 9:30 PM full run, since they need bars that do not exist yet. A holiday Monday needs nothing extra here: its row already exists (Sunday 9:30 PM run + 8:00 AM Mon-Fri
+  // run, neither is holiday-aware) so this is a no-op, which is the point of keying on "does a row >= today exist" instead of on the day of week.
+  const PREOPEN_LEVEL_CATEGORIES = 'PRIOR_DAY,CAMARILLA,PIVOT,WEEKLY,WEEKLY_PIVOT,MONTHLY_PIVOT,MONTHLY,YEARLY,QUARTERLY,PRIOR';
+  cron.schedule('55 17 * * 0-5', async () => {
+    try {
+      const { execSync } = await import('child_process');
+      await logProcess('COMPUTE_LEVELS_PREOPEN', async () => {
+        const today = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+        const nowET = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
+        const have = await query(`SELECT 1 FROM level_prices WHERE level_name = 'PD_VAL' AND trade_date >= $1::date LIMIT 1`, [today]);
+        if (have.rows.length) return { count: 0 };
+        const dow = nowET.getDay();
+        if (dow >= 1 && dow <= 5) execSync(`node scripts/compute_levels.js ${today}`, { cwd: process.cwd(), timeout: 60000 });
+        else execSync(`node scripts/compute_levels.js ${nextTradingDay(nowET)} --categories=${PREOPEN_LEVEL_CATEGORIES}`, { cwd: process.cwd(), timeout: 60000 });
+        return { count: 1 };
+      });
+    } catch (err) { console.error('[compute_levels_preopen] Cron error:', err.message); }
+  }, { timezone: 'America/New_York' });
+
   // 8:00 AM ET Mon-Fri: compute today's level_prices row. Found 2026-07-27: this cron
   // block above was the ONLY automated writer of level_prices anywhere in this codebase
   // (confirmed via grep -- no other cron, no other INSERT/UPDATE against the table), and
