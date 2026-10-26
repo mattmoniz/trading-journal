@@ -24,13 +24,15 @@ const mkCum = (d, get) => { const lo = new Array(390).fill(null), hi = new Array
 const extremity = (cum, d, ts, f, cClose) => { const m = +ts.slice(11, 13) * 60 + +ts.slice(14, 16) - 1 - 570; if (m < 4 || m >= 390) return null; const c = cum.get(d), lo = c.lo[m], hi = c.hi[m]; if (lo == null || hi == null || !(hi > lo)) return null; return f < 0 ? (cClose - lo) / (hi - lo) : (hi - cClose) / (hi - lo); };
 for (const d of new Set(ET.map((r) => r.d))) { cumE.set(d, mkCum(d, (ts) => ES.get(ts) ?? null)); cumN.set(d, mkCum(d, nq)); }
 const rows = [], drop = { notClean: 0, rollDay: 0, noAtrE: 0, missing: 0 };
+const missL = Object.fromEntries([...LS.map((L) => ['L' + L, 0]), ...KS.map((k) => ['k' + k, 0])]); let overnightReach = 0, overnightMissing = 0;   // Amendment 3 item 4
 for (const r of ET) {
   const c = cal.get(r.d); if (!c || c.m < 371) { drop.notClean++; continue; } if (c.r) { drop.rollDay++; continue; }
   const aE = atrE(r.d); if (!aE) { drop.noAtrE++; continue; }
   const t0 = toMs(r.ts), at = (back) => fmt(t0 - back * 60000), o = { d: r.d, gi: r.gi };
+  if (r.mod - 1 - 60 < 570) overnightReach++;
   const cN1 = nq(at(1)), cE1 = ES.get(at(1)); let ok = cN1 != null && cE1 != null;
-  for (const L of LS) { const n0 = nq(at(1 + L)), e0 = ES.get(at(1 + L)); if (n0 == null || e0 == null) { o['aN' + L] = o['aE' + L] = null; continue; } o['aN' + L] = -r.f * (cN1 - n0) / r.atr; o['aE' + L] = -r.f * (cE1 - e0) / aE; }
-  for (const k of KS) { const n0 = nq(at(1 + k)), e0 = ES.get(at(1 + k)); if (n0 == null || e0 == null) { o['nN' + k] = o['nE' + k] = null; continue; } o['nN' + k] = r.f * (cN1 - n0) / r.atr; o['nE' + k] = r.f * (cE1 - e0) / aE; }
+  for (const L of LS) { const n0 = nq(at(1 + L)), e0 = ES.get(at(1 + L)); if (n0 == null || e0 == null) { o['aN' + L] = o['aE' + L] = null; missL['L' + L]++; if (L === 60 && r.mod - 1 - 60 < 570) overnightMissing++; continue; } o['aN' + L] = -r.f * (cN1 - n0) / r.atr; o['aE' + L] = -r.f * (cE1 - e0) / aE; }
+  for (const k of KS) { const n0 = nq(at(1 + k)), e0 = ES.get(at(1 + k)); if (n0 == null || e0 == null) { o['nN' + k] = o['nE' + k] = null; missL['k' + k]++; continue; } o['nN' + k] = r.f * (cN1 - n0) / r.atr; o['nE' + k] = r.f * (cE1 - e0) / aE; }
   o.xE = extremity(cumE, r.d, r.ts, r.f, cE1); o.xN = extremity(cumN, r.d, r.ts, r.f, cN1);
   if (!ok) { drop.missing++; continue; } rows.push(o);
 }
@@ -38,5 +40,6 @@ fs.writeFileSync(new URL('../scratch/es_features_20261026.json', import.meta.url
 const days = new Set(rows.map((r) => r.d)), avail = (k) => rows.filter((r) => r[k] != null).length;
 console.log(`touches ${ET.length}; with ES features ${rows.length} on ${days.size} days; dropped`, drop);
 console.log('feature availability', Object.fromEntries([...LS.flatMap((L) => ['aN' + L, 'aE' + L]), ...KS.flatMap((k) => ['nN' + k, 'nE' + k]), 'xE', 'xN'].map((k) => [k, avail(k)])));
+console.log('dropped per lookback (missing ES or NQ minute):', missL, '| first-hour touches whose 60-minute lookback reaches before 09:30:', overnightReach, 'of which aE60/aN60 missing:', overnightMissing);
 console.log('by year', Object.fromEntries([...new Set(rows.map((r) => r.d.slice(0, 4)))].sort().map((y) => [y, rows.filter((r) => r.d.startsWith(y)).length])));
 process.exit(0);

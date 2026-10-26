@@ -11,9 +11,10 @@ const es = new Map((await q(`SELECT ts::date::text d, COUNT(*)::int n FROM price
 const nqDays = [...nq.keys()].filter((d) => nq.get(d) >= 371), missing = nqDays.filter((d) => (es.get(d) || 0) < 371);
 console.log(`== coverage: NQ full RTH days ${nqDays.length}; ES front RTH days ${[...es.keys()].filter((d) => es.get(d) >= 371).length}; NQ-full but ES-short days ${missing.length}: ${missing.slice(0, 25).join(' ')}${missing.length > 25 ? ' ...' : ''}`);
 // lead/lag correlation of 1-minute RTH returns NQ vs ES on a seeded sample of days
-const days = nqDays.filter((d) => es.get(d) >= 371).filter((_, i) => i % 6 === 0); const sums = {}; for (const L of [-2, -1, 0, 1, 2]) sums[L] = { sx: 0, sy: 0, sxx: 0, syy: 0, sxy: 0, n: 0 };
+const STEP = +(process.env.STEP || 6), W0 = process.env.W0 || '09:30', W1 = process.env.W1 || '16:00';   // STEP=1 = all days; W0/W1 = window (e.g. 04:00-09:30)
+const days = nqDays.filter((d) => es.get(d) >= 371).filter((_, i) => i % STEP === 0); const sums = {}; for (const L of [-2, -1, 0, 1, 2]) sums[L] = { sx: 0, sy: 0, sxx: 0, syy: 0, sxy: 0, n: 0 };
 for (const d of days) {
-  const a = await q(`SELECT n.ts::text t, n.close::float nc, e.close::float ec FROM price_bars_primary n JOIN price_bars_es_front e ON e.ts = n.ts WHERE n.symbol='NQ' AND n.ts >= $1::date + time '09:30' AND n.ts < $1::date + time '16:00' ORDER BY n.ts`, [d]);
+  const a = await q(`SELECT n.ts::text t, n.close::float nc, e.close::float ec FROM price_bars_primary n JOIN price_bars_es_front e ON e.ts = n.ts WHERE n.symbol='NQ' AND n.ts >= $1::date + $2::time AND n.ts < $1::date + $3::time ORDER BY n.ts`, [d, W0, W1]);
   const rn = [], re = []; for (let i = 1; i < a.length; i++) { rn.push(Math.log(a[i].nc / a[i - 1].nc)); re.push(Math.log(a[i].ec / a[i - 1].ec)); }
   for (const L of [-2, -1, 0, 1, 2]) for (let i = 0; i < rn.length; i++) { const j = i + L; if (j < 0 || j >= re.length) continue; const s = sums[L]; s.sx += rn[i]; s.sy += re[j]; s.sxx += rn[i] ** 2; s.syy += re[j] ** 2; s.sxy += rn[i] * re[j]; s.n++; }
 }
