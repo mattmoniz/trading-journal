@@ -1,0 +1,151 @@
+<title>Defended Level Review</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>
+/* Layout: a sticky progress bar over a single column of event cards; each card = header facts, detail chart, context chart, rating row. */
+:root {
+  --bg: #f3f5f8; --panel: #ffffff; --panel2: #e9edf3; --fg: #141b26; --muted: #556072; --line: #cfd6e0;
+  --up: #1c8f7d; --down: #c4453f; --accent: #2d5bd0; --take: #1c8f7d; --skip: #8a94a3; --unsure: #b57a12;
+  --l3m: #2d5bd0; --lp3m: #7a4fd0; --lpm: #b57a12; --lpw: #1c8f7d; --lpd: #8a94a3; --ev: #d0382f; --bandfill: rgba(208,56,47,.12); --mark: #141b26;
+  --font: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif; --mono: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #0f141c; --panel: #171e29; --panel2: #1f2836; --fg: #e6ebf3; --muted: #9aa6b8; --line: #2c3748;
+  --up: #3cc2ad; --down: #ef6b64; --accent: #6f95f2; --take: #3cc2ad; --skip: #7d8899; --unsure: #e0a63a;
+  --l3m: #6f95f2; --lp3m: #a98af0; --lpm: #e0a63a; --lpw: #3cc2ad; --lpd: #7d8899; --ev: #ff7a70; --bandfill: rgba(255,122,112,.14); --mark: #e6ebf3; color-scheme: dark; } }
+:root[data-theme="dark"] {
+  --bg: #0f141c; --panel: #171e29; --panel2: #1f2836; --fg: #e6ebf3; --muted: #9aa6b8; --line: #2c3748;
+  --up: #3cc2ad; --down: #ef6b64; --accent: #6f95f2; --take: #3cc2ad; --skip: #7d8899; --unsure: #e0a63a;
+  --l3m: #6f95f2; --lp3m: #a98af0; --lpm: #e0a63a; --lpw: #3cc2ad; --lpd: #7d8899; --ev: #ff7a70; --bandfill: rgba(255,122,112,.14); --mark: #e6ebf3; color-scheme: dark; }
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--fg); font-family: var(--font); font-size: 14px; line-height: 1.5; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); padding-block: 0 48px; }
+.wrap { max-width: 1180px; margin: 0 auto; }
+body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); background: var(--bg); z-index: 20; }
+header.bar { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 10; background: var(--bg); border-bottom: 1px solid var(--line); padding: 10px 0; display: flex; gap: 16px; align-items: center; flex-wrap: wrap; }
+h1 { font-size: 18px; margin: 0; letter-spacing: .01em; }
+.prog { font-family: var(--mono); font-size: 13px; color: var(--muted); }
+.prog b { color: var(--fg); }
+.meter { flex: 1 1 160px; height: 6px; background: var(--panel2); border-radius: 3px; overflow: hidden; min-width: 120px; }
+.meter i { display: block; height: 100%; background: var(--accent); width: 0; }
+.intro { margin: 16px 0; max-width: 78ch; color: var(--muted); }
+.intro strong { color: var(--fg); font-weight: 600; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 12px; color: var(--muted); margin: 10px 0 18px; }
+.legend span::before { content: ""; display: inline-block; width: 18px; height: 0; border-top: 2px solid var(--c); vertical-align: middle; margin-right: 6px; }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; margin-bottom: 18px; }
+.panel h2 { font-size: 15px; margin: 0 0 8px; }
+.qgrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; }
+label.q { display: flex; flex-direction: column; gap: 4px; font-size: 13px; }
+label.q span { color: var(--muted); }
+textarea, input[type=text] { font: inherit; background: var(--bg); color: var(--fg); border: 1px solid var(--line); border-radius: 6px; padding: 7px 9px; width: 100%; }
+textarea { min-height: 60px; resize: vertical; }
+textarea:focus-visible, input:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px 12px; margin-bottom: 20px; }
+.card.done { border-color: color-mix(in srgb, var(--take) 40%, var(--line)); }
+.head { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: baseline; margin-bottom: 8px; }
+.id { font-family: var(--mono); font-weight: 600; font-size: 15px; }
+.side { font-size: 11px; letter-spacing: .08em; font-weight: 700; padding: 2px 8px; border-radius: 4px; border: 1px solid currentColor; }
+.side.floor { color: var(--up); } .side.top { color: var(--down); }
+.facts { display: flex; flex-wrap: wrap; gap: 4px 16px; font-family: var(--mono); font-size: 12.5px; color: var(--muted); }
+.facts b { color: var(--fg); font-weight: 600; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 8px; }
+.chip { font-family: var(--mono); font-size: 12px; border: 1px solid var(--line); border-radius: 4px; padding: 1px 7px; }
+svg.chart { width: 100%; height: auto; display: block; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; }
+svg text { font-family: var(--mono); font-size: 10.5px; fill: var(--muted); }
+.cap { font-size: 12px; color: var(--muted); margin: 4px 0 8px; }
+.rate { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 10px; }
+.rate button { font: inherit; font-weight: 600; background: var(--panel2); color: var(--fg); border: 1px solid var(--line); border-radius: 6px; padding: 8px 16px; cursor: pointer; min-height: 40px; }
+.rate button[data-v=take].on { background: var(--take); color: #fff; border-color: var(--take); }
+.rate button[data-v=skip].on { background: var(--skip); color: #fff; border-color: var(--skip); }
+.rate button[data-v=unsure].on { background: var(--unsure); color: #fff; border-color: var(--unsure); }
+.rate input[type=text] { flex: 1 1 260px; width: auto; }
+.saved { font-size: 12px; color: var(--muted); min-width: 60px; }
+.banner { background: var(--panel2); border: 1px solid var(--line); border-radius: 6px; padding: 8px 12px; margin: 12px 0; color: var(--muted); }
+.row { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; align-items: end; }
+button.act { font: inherit; font-weight: 600; background: var(--accent); color: #fff; border: 0; border-radius: 6px; padding: 9px 16px; cursor: pointer; min-height: 40px; }
+@media (prefers-reduced-motion: no-preference) { .meter i { transition: width .25s; } }
+</style>
+<div class="wrap">
+<header class="bar"><h1>Defended Level Review</h1><div class="prog"><b id="nDone">0</b> of <b id="nTot">0</b> rated</div><div class="meter"><i id="meter"></i></div></header>
+<p class="intro">Each card is a spot where the finder says a period line was <strong>defended</strong> and then <strong>held</strong>. Charts are four-hour candles and stop at the confirming bar, so you see nothing that happened afterwards. Tap <strong>Take</strong> if it looks like a trade you would have wanted, <strong>Not mine</strong> if it does not, <strong>Unsure</strong> if you cannot tell, and say why in a few words. Your notes matter more than the taps: they tell me what the finder is getting wrong.</p>
+<div class="legend" id="legend"></div>
+<div id="dbBanner" class="banner" hidden>Ratings cannot be saved in this view (not signed in, or the page store is unavailable). You can still look at the charts.</div>
+<section class="panel"><h2>Questions for you (optional, answer whenever)</h2>
+ <div class="qgrid">
+  <label class="q"><span>1. How close is "the same price level"? Points or ticks, and does a bar count if its wick touches or only its close?</span><textarea id="a_tol" data-k="tolerance"></textarea></label>
+  <label class="q"><span>2. What is a hold? Staying above the level, a bounce of some size, holding above the overnight high all day?</span><textarea id="a_hold" data-k="hold"></textarea></label>
+  <label class="q"><span>3. Should the overnight high/low and your MGI lines count as levels? Are your prior-week and prior-month lines all-session or day-session?</span><textarea id="a_lvl" data-k="levels"></textarea></label>
+  <label class="q"><span>4. Does the count restart when the level breaks? How far back should it look?</span><textarea id="a_look" data-k="lookback"></textarea></label>
+  <label class="q"><span>5. Must ES confirm before you would take it, or is it only a clue?</span><textarea id="a_es" data-k="es"></textarea></label>
+ </div></section>
+<div id="cards"></div>
+<p id="moreP"><button class="act" id="more" type="button">Show 30 more (optional)</button> <span class="saved">Thirty is enough to start. Stop anywhere.</span></p>
+<section class="panel"><h2>A setup you would have taken that I did not show</h2>
+ <div class="row"><label class="q"><span>Date</span><input type="text" id="m_date" placeholder="2026-08-14"></label>
+ <label class="q"><span>Floor or top</span><input type="text" id="m_side" placeholder="floor"></label>
+ <label class="q"><span>Level (price or line name)</span><input type="text" id="m_lvl" placeholder="3M VAL 28,995"></label></div>
+ <label class="q" style="margin-top:10px"><span>What you saw</span><textarea id="m_note"></textarea></label>
+ <p><button class="act" id="m_add" type="button">Save this one</button> <span class="saved" id="m_saved"></span></p></section>
+<section class="panel"><h2>Anything else</h2><textarea id="g_note" aria-label="General notes"></textarea><span class="saved" id="g_saved"></span></section>
+</div>
+<script>
+/*DATA*/
+const DATA = __DATA__;
+const FAM = { '3M': 'var(--l3m)', 'P3M': 'var(--lp3m)', 'PM': 'var(--lpm)', 'PW': 'var(--lpw)', 'PD': 'var(--lpd)' };
+const famOf = (n) => (n.startsWith('P3M') ? 'P3M' : n.startsWith('3M') ? '3M' : n.slice(0, 2));
+const NS = 'http://www.w3.org/2000/svg';
+const el = (tag, attrs, parent) => { const e = document.createElementNS(NS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); if (parent) parent.appendChild(e); return e; };
+const fmt = (x) => x.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+let showAll = false; const visible = () => DATA.filter((e) => showAll || e.batch === 'A');
+document.getElementById('nTot').textContent = visible().length;
+const lg = document.getElementById('legend');
+[['3M', 'current 3-month block'], ['P3M', 'previous block'], ['PM', 'prior month'], ['PW', 'prior week'], ['PD', 'prior day']].forEach(([k, t]) => { const s = document.createElement('span'); s.style.setProperty('--c', FAM[k]); s.textContent = t; lg.appendChild(s); });
+const sEv = document.createElement('span'); sEv.style.setProperty('--c', 'var(--ev)'); sEv.textContent = 'the level the finder flagged (shaded band)'; lg.appendChild(sEv);
+function chart(ev, from, w, h, detail) {
+  const bars = ev.bars.slice(-from), W = 1100, H = h, padR = 120, padL = 8, padT = 10, padB = detail ? 22 : 14;
+  const svg = el('svg', { viewBox: `0 0 ${W} ${H}`, class: 'chart', role: 'img', 'aria-label': `Four-hour candles for ${ev.id}` });
+  let lo = Math.min(...bars.map((b) => b[4])), hi = Math.max(...bars.map((b) => b[3]));
+  lo = Math.min(lo, ev.level - ev.band); hi = Math.max(hi, ev.level + ev.band); const pad = (hi - lo) * 0.04; lo -= pad; hi += pad;
+  const y = (p) => padT + (hi - p) / (hi - lo) * (H - padT - padB), n = bars.length, bw = (W - padL - padR) / n, x = (i) => padL + (i + 0.5) * bw;
+  // price gridlines
+  const step = [5, 10, 20, 25, 50, 100, 200, 250, 500].find((s) => (hi - lo) / s <= 7) || 500; for (let p = Math.ceil(lo / step) * step; p <= hi; p += step) { el('line', { x1: padL, x2: W - padR, y1: y(p), y2: y(p), stroke: 'var(--line)', 'stroke-width': .5 }, svg); const t = el('text', { x: W - padR + 6, y: y(p) + 3 }, svg); t.textContent = fmt(p).replace('.00', ''); }
+  // period lines (context) and the flagged level
+  (ev.ctx || []).forEach(([nm, p]) => { if (p < lo || p > hi) return; const f = famOf(nm); el('line', { x1: padL, x2: W - padR, y1: y(p), y2: y(p), stroke: FAM[f] || 'var(--lpd)', 'stroke-width': nm.endsWith('_POC') ? 1.6 : 1, 'stroke-dasharray': nm.endsWith('_HI') || nm.endsWith('_LO') ? '2 3' : '', opacity: .85 }, svg); if (detail) { const t = el('text', { x: W - padR + 6, y: y(p) - 2 }, svg); t.setAttribute('style', 'fill:' + (FAM[f] || 'var(--lpd)')); t.textContent = nm.replace('_', ' '); } });
+  el('rect', { x: padL, y: y(ev.level + ev.band), width: W - padL - padR, height: Math.max(1.5, y(ev.level - ev.band) - y(ev.level + ev.band)), fill: 'var(--bandfill)' }, svg);
+  el('line', { x1: padL, x2: W - padR, y1: y(ev.level), y2: y(ev.level), stroke: 'var(--ev)', 'stroke-width': 1.8 }, svg);
+  const lt = el('text', { x: W - padR + 6, y: y(ev.level) + 3 }, svg); lt.setAttribute('style', 'fill:var(--ev);font-weight:600'); lt.textContent = fmt(ev.level);
+  // candles
+  const def = new Set(ev.defBars);
+  bars.forEach((b, i) => { const idx = b[0], o = b[2], hh = b[3], ll = b[4], c = b[5], up = c >= o, col = up ? 'var(--up)' : 'var(--down)', cx = x(i); el('line', { x1: cx, x2: cx, y1: y(hh), y2: y(ll), stroke: col, 'stroke-width': detail ? 1.2 : .8 }, svg);
+    const top = y(Math.max(o, c)), bot = y(Math.min(o, c)); el('rect', { x: cx - bw * 0.35, y: top, width: Math.max(1, bw * 0.7), height: Math.max(1, bot - top), fill: col }, svg);
+    if (def.has(idx)) { const my = ev.side === 'floor' ? y(ll) + 9 : y(hh) - 9; el('path', { d: ev.side === 'floor' ? `M${cx - 4},${my + 4} L${cx + 4},${my + 4} L${cx},${my - 3} Z` : `M${cx - 4},${my - 4} L${cx + 4},${my - 4} L${cx},${my + 3} Z`, fill: 'var(--mark)' }, svg); }
+    if (idx === ev.tIdx) { el('rect', { x: cx - bw / 2, y: padT, width: bw, height: H - padT - padB, fill: 'none', stroke: 'var(--accent)', 'stroke-width': 1 }, svg); } });
+  if (detail) { let last = ''; bars.forEach((b, i) => { const d = b[1].slice(0, 5); if (d !== last && b[1].slice(6, 8) === '18') { last = d; const t = el('text', { x: x(i), y: H - 6, 'text-anchor': 'start' }, svg); t.textContent = d; } }); }
+  return svg;
+}
+const cards = document.getElementById('cards'), state = {}; let db = null;
+DATA.forEach((ev) => {
+  const c = document.createElement('article'); c.className = 'card'; c.id = ev.id; if (ev.batch !== 'A') c.hidden = true;
+  const lines = ev.ctx ? ev.ctx.filter(([n]) => ev.lines.includes(n)) : [];
+  c.innerHTML = `<div class="head"><span class="id">${ev.id}</span><span class="side ${ev.side}">${ev.side.toUpperCase()}</span><span class="facts"><span>level <b>${fmt(ev.level)}</b></span><span>bar close <b>${ev.date}</b></span><span>defense bars <b>${ev.K}</b></span><span>separate approaches <b>${ev.A}</b></span><span>volume vs normal <b>${ev.relVol == null ? 'n/a' : ev.relVol.toFixed(2) + 'x'}</b></span></span></div>
+  <div class="chips">${lines.map(([n, p]) => `<span class="chip" style="border-color:${FAM[famOf(n)]};color:${FAM[famOf(n)]}">${n.replace('_', ' ')} ${fmt(p)}</span>`).join('')}</div>
+  <div class="cap">Last 12 days, four-hour candles. Black markers = bars that defended the level. Outlined bar = the confirming bar (the chart ends here).</div><div class="d"></div>
+  <div class="cap">Last 120 days for context.</div><div class="x"></div>
+  <div class="rate"><button type="button" data-v="take">Take</button><button type="button" data-v="skip">Not mine</button><button type="button" data-v="unsure">Unsure</button><input type="text" placeholder="Why, in a few words" aria-label="Note for ${ev.id}"><span class="saved"></span></div>`;
+  c.querySelector('.d').appendChild(chart(ev, 72, 1100, 330, true)); c.querySelector('.x').appendChild(chart(ev, ev.bars.length, 1100, 170, false)); cards.appendChild(c);
+  const note = c.querySelector('input'), saved = c.querySelector('.saved');
+  let timer = null; const save = async (v) => { if (!db) return; const cur = state[ev.id] || {}; const verdict = v || cur.verdict || null; saved.textContent = 'saving'; try { await db.doc('ratings/' + ev.id).set({ id: ev.id, key: ev.key, side: ev.side, date: ev.date, level: ev.level, K: ev.K, A: ev.A, relVol: ev.relVol, stratum: ev.stratum, verdict, note: note.value, at: new Date().toISOString() }); saved.textContent = 'saved'; } catch (e) { saved.textContent = 'not saved'; } };
+  c.querySelectorAll('button').forEach((b) => b.addEventListener('click', () => { state[ev.id] = Object.assign({}, state[ev.id], { verdict: b.dataset.v }); paint(); save(b.dataset.v); }));
+  note.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(() => save(null), 700); });
+});
+function paint() { let n = 0; visible().forEach((ev) => { const s = state[ev.id] || {}, c = document.getElementById(ev.id); c.querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.v === s.verdict)); const inp = c.querySelector('input'); if (s.note != null && document.activeElement !== inp) inp.value = s.note; c.classList.toggle('done', !!s.verdict); if (s.verdict) n++; }); document.getElementById('nDone').textContent = n; document.getElementById('meter').style.width = (100 * n / visible().length) + '%'; document.getElementById('nTot').textContent = visible().length; }
+document.getElementById('more').addEventListener('click', () => { showAll = true; document.querySelectorAll('.card[hidden]').forEach((c) => { c.hidden = false; }); document.getElementById('moreP').hidden = true; paint(); });
+(async () => {
+  const claude = window.claude; if (!claude || !claude.use) { document.getElementById('dbBanner').hidden = false; return; }
+  db = await claude.use('db'); if (!db) { document.getElementById('dbBanner').hidden = false; return; }
+  db.collection('ratings').onSnapshot((snap) => { snap.docs.forEach((d) => { if (!d.exists) return; const v = d.data(); state[d.id] = { verdict: v.verdict, note: v.note }; }); paint(); }, () => { document.getElementById('dbBanner').hidden = false; });
+  const ans = {}; const ansRef = db.doc('notes/answers'); ansRef.onSnapshot((s) => { if (!s.exists) return; const v = s.data(); document.querySelectorAll('textarea[data-k]').forEach((t) => { if (document.activeElement !== t && v[t.dataset.k] != null) t.value = v[t.dataset.k]; }); });
+  let at = null; document.querySelectorAll('textarea[data-k]').forEach((t) => t.addEventListener('input', () => { clearTimeout(at); at = setTimeout(async () => { const o = {}; document.querySelectorAll('textarea[data-k]').forEach((x) => { o[x.dataset.k] = x.value; }); o.at = new Date().toISOString(); try { await ansRef.set(o); } catch (e) {} }, 800); }));
+  const gRef = db.doc('notes/general'), g = document.getElementById('g_note'); gRef.onSnapshot((s) => { if (s.exists && document.activeElement !== g && s.data().text != null) g.value = s.data().text; }); let gt = null; g.addEventListener('input', () => { clearTimeout(gt); gt = setTimeout(async () => { try { await gRef.set({ text: g.value, at: new Date().toISOString() }); document.getElementById('g_saved').textContent = 'saved'; } catch (e) { document.getElementById('g_saved').textContent = 'not saved'; } }, 800); });
+  document.getElementById('m_add').addEventListener('click', async () => { const o = { date: document.getElementById('m_date').value, side: document.getElementById('m_side').value, level: document.getElementById('m_lvl').value, note: document.getElementById('m_note').value, at: new Date().toISOString() }; if (!o.date && !o.note) return; try { await db.collection('missed').add(o); ['m_date', 'm_side', 'm_lvl', 'm_note'].forEach((i) => { document.getElementById(i).value = ''; }); document.getElementById('m_saved').textContent = 'saved'; } catch (e) { document.getElementById('m_saved').textContent = 'not saved'; } });
+})();
+paint();
+</script>

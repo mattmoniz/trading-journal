@@ -1,0 +1,941 @@
+[
+ {
+  "id": "E01",
+  "key": "floor|2516|20400",
+  "side": "floor",
+  "date": "2024-10-21",
+  "level": 20400,
+  "lines": [
+   "3M_POC"
+  ],
+  "K": 4,
+  "A": 1,
+  "relVol": 0.97,
+  "stratum": "A=1",
+  "batch": "A"
+ },
+ {
+  "id": "E02",
+  "key": "top|3284|19156",
+  "side": "top",
+  "date": "2025-04-23",
+  "level": 19156.25,
+  "lines": [
+   "3M_VAH"
+  ],
+  "K": 9,
+  "A": 3,
+  "relVol": 0.97,
+  "stratum": "A>=3",
+  "batch": "A"
+ },
+ {
+  "id": "E03",
+  "key": "top|2442|20070",
+  "side": "top",
+  "date": "2024-10-03",
+  "level": 20059.96,
+  "lines": [
+   "PW_VAL",
+   "PD_POC",
+   "3M_VAH",
+   "PM_POC",
+   "PD_VAH",
+   "PW_POC"
+  ],
+  "K": 5,
+  "A": 1,
+  "relVol": 1.07,
+  "stratum": "A=1",
+  "batch": "A"
+ },
+ {
+  "id": "E04",
+  "key": "floor|2656|20490",
+  "side": "floor",
+  "date": "2024-11-21",
+  "level": 20490,
+  "lines": [
+   "PM_POC"
+  ],
+  "K": 5,
+  "A": 3,
+  "relVol": 1.47,
+  "stratum": "A>=3",
+  "batch": "A"
+ },
+ {
+  "id": "E05",
+  "key": "top|4638|25218",
+  "side": "top",
+  "date": "2026-03-18",
+  "level": 25217.5,
+  "lines": [
+   "PW_HI"
+  ],
+  "K": 13,
+  "A": 4,
+  "relVol": 1.02,
+  "stratum": "A>=3",
+  "batch": "A"
+ },
+ {
+  "id": "E06",
+  "key": "top|4603|25174",
+  "side": "top",
+  "date": "2026-03-10",
+  "level": 25174,
+  "lines": [
+   "PW_VAH"
+  ],
+  "K": 10,
+  "A": 3,
+  "relVol": 1.08,
+  "stratum": "A>=3",
+  "batch": "A"
+ },
+ {
+  "id": "E07",
+  "key": "floor|3952|24978",
+  "side": "floor",
+  "date": "2025-10-06",
+  "level": 24976.63,
+  "lines": [
+   "PM_HI",
+   "3M_VAL"
+  ],
+  "K": 4,
+  "A": 2,
+  "relVol": 1.16,
+  "stratum": "A=2",
+  "batch": "A"
+ },
+ {
+  "id": "E08",
+  "key": "floor|1676|18032",
+  "side": "floor",
+  "date": "2024-04-05",
+  "level": 18036,
+  "lines": [
+   "PM_VAL",
+   "P3M_POC"
+  ],
+  "K": 7,
+  "A": 4,
+  "relVol": 1.49,
+  "stratum": "A>=3",
+  "batch": "A"
+ },
+ {
+  "id": "E09",
+  "key": "floor|5547|29269",
+  "side": "floor",
+  "date": "2026-10-19",
+  "level": 29269.13,
+  "lines": [
+   "PW_LO",
+   "PD_VAL"
+  ],
+  "K": 8,
+  "A": 2,
+  "relVol": 1.1,
+  "stratum": "A=2",
+  "batch": "A"
+ },
+ {
+  "id": "E10",
+  "key": "top|4679|23971",
+  "side": "top",
+  "date": "2026-03-27",
+  "level": 23971.25,
+  "lines": [
+   "PW_LO"
+  ],
+  "K": 3,
+  "A": 1,
+  "relVol": 1.06,
+  "stratum": "A=1",
+  "batch": "A"
+ },
+ {
+  "id": "E11",
+  "key": "top|4452|26007",
+  "side": "top",
+  "date": "2026-02-03",
+  "level": 26006.75,
+  "lines": [
+   "PM_VAH",
+   "3M_VAH"
+  ],
+  "K": 4,
+  "A": 2,
+  "relVol": 1.08,
+  "stratum": "A=2",
+  "batch": "A"
+ },
+ {
+  "id": "E12",
+  "key": "top|5128|30050",
+  "side": "top",
+  "date": "2026-07-13",
+  "level": 30073.88,
+  "lines": [
+   "PD_POC",
+   "PD_VAH",
+   "PW_VAH",
+   "PW_HI"
+  ],
+  "K": 9,
+  "A": 2,
+  "relVol": 0.87,
+  "stratum": "A=2",
+  "batch": "A"
+ },
+ {
+  "id": "E13",
+  "key": "top|2541|20680",
+  "side": "top",
+  "date": "2024-10-25",
+  "level": 20680,
+  "lines": [
+   "PW_HI"
+  ],
+  "K": 8,
+  "A": 3,
+  "relVol": 0.96,
+  "stratum": "A>=3",
+  "batch": "A"
+ },
+ {
+  "id": "E14",
+  "key": "top|1586|18402",
+  "side": "top",
+  "date": "2024-03-14",
+  "level": 18402.25,
+  "lines": [
+   "3M_VAH"
+  ],
+  "K": 5,
+  "A": 1,
+  "relVol": 0.91,
+  "stratum": "A=1",
+  "batch": "A"
+ },
+ {
+  "id": "E15",
+  "key": "top|4603|25250",
+  "side": "top",
+  "date": "2026-03-10",
+  "level": 25250,
+  "lines": [
+   "PW_HI"
+  ],
+  "K": 7,
+  "A": 3,
+  "relVol": 1.14,
+  "stratum": "A>=3",
+  "batch": "A"
+ },
+ {
+  "id": "E16",
+  "key": "floor|2076|20625",
+  "side": "floor",
+  "date": "2024-07-10",
+  "level": 20625,
+  "lines": [
+   "3M_POC"
+  ],
+  "K": 3,
+  "A": 1,
+  "relVol": 0.91,
+  "stratum": "A=1",
+  "batch": "A"
+ },
+ {
+  "id": "E17",
+  "key": "floor|2450|19950",
+  "side": "floor",
+  "date": "2024-10-04",
+  "level": 19950,
+  "lines": [
+   "PD_POC",
+   "3M_POC"
+  ],
+  "K": 4,
+  "A": 1,
+  "relVol": 0.87,
+  "stratum": "A=1",
+  "batch": "A"
+ },
+ {
+  "id": "E18",
+  "key": "floor|751|15063",
+  "side": "floor",
+  "date": "2023-08-29",
+  "level": 15062.75,
+  "lines": [
+   "PW_VAH",
+   "PM_LO"
+  ],
+  "K": 4,
+  "A": 1,
+  "relVol": 0.75,
+  "stratum": "A=1",
+  "batch": "A"
+ },
+ {
+  "id": "E19",
+  "key": "floor|2375|19577",
+  "side": "floor",
+  "date": "2024-09-18",
+  "level": 19577.25,
+  "lines": [
+   "PW_HI"
+  ],
+  "K": 3,
+  "A": 2,
+  "relVol": 0.72,
+  "stratum": "A=2",
+  "batch": "A"
+ },
+ {
+  "id": "E20",
+  "key": "floor|4645|24345",
+  "side": "floor",
+  "date": "2026-03-19",
+  "level": 24345,
+  "lines": [
+   "PW_VAL"
+  ],
+  "K": 6,
+  "A": 3,
+  "relVol": 0.96,
+  "stratum": "A>=3",
+  "batch": "A"
+ },
+ {
+  "id": "E21",
+  "key": "floor|4949|30284",
+  "side": "floor",
+  "date": "2026-06-01",
+  "level": 30284,
+  "lines": [
+   "PW_VAH"
+  ],
+  "K": 5,
+  "A": 1,
+  "relVol": 0.91,
+  "stratum": "A=1",
+  "batch": "A"
+ },
+ {
+  "id": "E22",
+  "key": "top|769|15580",
+  "side": "top",
+  "date": "2023-09-01",
+  "level": 15582.13,
+  "lines": [
+   "PM_VAH",
+   "PD_VAH"
+  ],
+  "K": 7,
+  "A": 2,
+  "relVol": 0.98,
+  "stratum": "A=2",
+  "batch": "A"
+ },
+ {
+  "id": "E23",
+  "key": "top|3067|21061",
+  "side": "top",
+  "date": "2025-03-03",
+  "level": 21060.75,
+  "lines": [
+   "3M_VAL"
+  ],
+  "K": 2,
+  "A": 2,
+  "relVol": 1.81,
+  "stratum": "A=2",
+  "batch": "A"
+ },
+ {
+  "id": "E24",
+  "key": "top|2177|19692",
+  "side": "top",
+  "date": "2024-08-01",
+  "level": 19692,
+  "lines": [
+   "PM_VAL",
+   "3M_VAL"
+  ],
+  "K": 5,
+  "A": 1,
+  "relVol": 1.42,
+  "stratum": "A=1",
+  "batch": "A"
+ },
+ {
+  "id": "E25",
+  "key": "floor|1720|17833",
+  "side": "floor",
+  "date": "2024-04-17",
+  "level": 17832.5,
+  "lines": [
+   "PM_LO"
+  ],
+  "K": 9,
+  "A": 4,
+  "relVol": 1.24,
+  "stratum": "A>=3",
+  "batch": "A"
+ },
+ {
+  "id": "E26",
+  "key": "top|2983|21846",
+  "side": "top",
+  "date": "2025-02-11",
+  "level": 21855.25,
+  "lines": [
+   "3M_VAH",
+   "PD_POC"
+  ],
+  "K": 3,
+  "A": 1,
+  "relVol": 0.66,
+  "stratum": "A=1",
+  "batch": "A"
+ },
+ {
+  "id": "E27",
+  "key": "top|1295|16573",
+  "side": "top",
+  "date": "2024-01-05",
+  "level": 16573,
+  "lines": [
+   "3M_POC"
+  ],
+  "K": 6,
+  "A": 2,
+  "relVol": 1,
+  "stratum": "A=2",
+  "batch": "A"
+ },
+ {
+  "id": "E28",
+  "key": "floor|3016|22094",
+  "side": "floor",
+  "date": "2025-02-19",
+  "level": 22093.5,
+  "lines": [
+   "PM_HI"
+  ],
+  "K": 6,
+  "A": 2,
+  "relVol": 0.77,
+  "stratum": "A=2",
+  "batch": "A"
+ },
+ {
+  "id": "E29",
+  "key": "floor|3881|23781",
+  "side": "floor",
+  "date": "2025-09-11",
+  "level": 23781.25,
+  "lines": [
+   "PW_VAH"
+  ],
+  "K": 5,
+  "A": 2,
+  "relVol": 0.49,
+  "stratum": "A=2",
+  "batch": "A"
+ },
+ {
+  "id": "E30",
+  "key": "floor|1708|18122",
+  "side": "floor",
+  "date": "2024-04-15",
+  "level": 18131.92,
+  "lines": [
+   "3M_VAL",
+   "PD_VAL",
+   "PW_VAL"
+  ],
+  "K": 7,
+  "A": 3,
+  "relVol": 1.2,
+  "stratum": "A>=3",
+  "batch": "A"
+ },
+ {
+  "id": "E31",
+  "key": "floor|1786|17428",
+  "side": "floor",
+  "date": "2024-05-02",
+  "level": 17420.75,
+  "lines": [
+   "PD_VAL",
+   "P3M_VAL"
+  ],
+  "K": 5,
+  "A": 1,
+  "relVol": 1.07,
+  "stratum": "A=1",
+  "batch": "B"
+ },
+ {
+  "id": "E32",
+  "key": "floor|5464|30343",
+  "side": "floor",
+  "date": "2026-09-29",
+  "level": 30343,
+  "lines": [
+   "PM_HI"
+  ],
+  "K": 3,
+  "A": 2,
+  "relVol": 1.62,
+  "stratum": "A=2",
+  "batch": "B"
+ },
+ {
+  "id": "E33",
+  "key": "top|843|15420",
+  "side": "top",
+  "date": "2023-09-20",
+  "level": 15420,
+  "lines": [
+   "PM_POC"
+  ],
+  "K": 8,
+  "A": 1,
+  "relVol": 0.89,
+  "stratum": "A=1",
+  "batch": "B"
+ },
+ {
+  "id": "E34",
+  "key": "top|1671|18571",
+  "side": "top",
+  "date": "2024-04-04",
+  "level": 18570.5,
+  "lines": [
+   "PW_VAH"
+  ],
+  "K": 5,
+  "A": 3,
+  "relVol": 0.9,
+  "stratum": "A>=3",
+  "batch": "B"
+ },
+ {
+  "id": "E35",
+  "key": "top|4507|24899",
+  "side": "top",
+  "date": "2026-02-16",
+  "level": 24898.5,
+  "lines": [
+   "PW_VAL"
+  ],
+  "K": 5,
+  "A": 2,
+  "relVol": 0.79,
+  "stratum": "A=2",
+  "batch": "B"
+ },
+ {
+  "id": "E36",
+  "key": "top|2931|21677",
+  "side": "top",
+  "date": "2025-01-29",
+  "level": 21677,
+  "lines": [
+   "3M_VAH"
+  ],
+  "K": 3,
+  "A": 1,
+  "relVol": 0.96,
+  "stratum": "A=1",
+  "batch": "B"
+ },
+ {
+  "id": "E37",
+  "key": "top|3948|25180",
+  "side": "top",
+  "date": "2025-10-03",
+  "level": 25179.75,
+  "lines": [
+   "3M_VAH"
+  ],
+  "K": 4,
+  "A": 1,
+  "relVol": 0.98,
+  "stratum": "A=1",
+  "batch": "B"
+ },
+ {
+  "id": "E38",
+  "key": "floor|4980|28781",
+  "side": "floor",
+  "date": "2026-06-08",
+  "level": 28781.25,
+  "lines": [
+   "PW_LO"
+  ],
+  "K": 8,
+  "A": 4,
+  "relVol": 1.48,
+  "stratum": "A>=3",
+  "batch": "B"
+ },
+ {
+  "id": "E39",
+  "key": "top|2528|20550",
+  "side": "top",
+  "date": "2024-10-23",
+  "level": 20532.45,
+  "lines": [
+   "PW_VAH",
+   "PM_VAH",
+   "3M_VAH",
+   "PM_HI",
+   "PD_VAH"
+  ],
+  "K": 10,
+  "A": 2,
+  "relVol": 0.86,
+  "stratum": "A=2",
+  "batch": "B"
+ },
+ {
+  "id": "E40",
+  "key": "floor|2876|21350",
+  "side": "floor",
+  "date": "2025-01-16",
+  "level": 21350,
+  "lines": [
+   "PW_POC",
+   "3M_POC"
+  ],
+  "K": 3,
+  "A": 1,
+  "relVol": 1.11,
+  "stratum": "A=1",
+  "batch": "B"
+ },
+ {
+  "id": "E41",
+  "key": "floor|5092|29261",
+  "side": "floor",
+  "date": "2026-07-03",
+  "level": 29260.5,
+  "lines": [
+   "PW_VAL"
+  ],
+  "K": 11,
+  "A": 3,
+  "relVol": 1.05,
+  "stratum": "A>=3",
+  "batch": "B"
+ },
+ {
+  "id": "E42",
+  "key": "floor|1353|17165",
+  "side": "floor",
+  "date": "2024-01-19",
+  "level": 17165.25,
+  "lines": [
+   "PM_VAH",
+   "P3M_VAH",
+   "PM_HI"
+  ],
+  "K": 3,
+  "A": 1,
+  "relVol": 1.28,
+  "stratum": "A=1",
+  "batch": "B"
+ },
+ {
+  "id": "E43",
+  "key": "top|4382|25900",
+  "side": "top",
+  "date": "2026-01-16",
+  "level": 25890,
+  "lines": [
+   "PD_POC",
+   "3M_POC"
+  ],
+  "K": 6,
+  "A": 2,
+  "relVol": 1.17,
+  "stratum": "A=2",
+  "batch": "B"
+ },
+ {
+  "id": "E44",
+  "key": "top|4726|25250",
+  "side": "top",
+  "date": "2026-04-08",
+  "level": 25250,
+  "lines": [
+   "PM_HI"
+  ],
+  "K": 10,
+  "A": 5,
+  "relVol": 1.09,
+  "stratum": "A>=3",
+  "batch": "B"
+ },
+ {
+  "id": "E45",
+  "key": "floor|3346|19702",
+  "side": "floor",
+  "date": "2025-05-08",
+  "level": 19705.5,
+  "lines": [
+   "PM_VAH",
+   "3M_VAH"
+  ],
+  "K": 5,
+  "A": 3,
+  "relVol": 0.94,
+  "stratum": "A>=3",
+  "batch": "B"
+ },
+ {
+  "id": "E46",
+  "key": "floor|3196|19358",
+  "side": "floor",
+  "date": "2025-04-02",
+  "level": 19357.5,
+  "lines": [
+   "PW_LO"
+  ],
+  "K": 3,
+  "A": 1,
+  "relVol": 1.07,
+  "stratum": "A=1",
+  "batch": "B"
+ },
+ {
+  "id": "E47",
+  "key": "top|1896|18960",
+  "side": "top",
+  "date": "2024-05-28",
+  "level": 18960,
+  "lines": [
+   "3M_VAH"
+  ],
+  "K": 4,
+  "A": 2,
+  "relVol": 1.19,
+  "stratum": "A=2",
+  "batch": "B"
+ },
+ {
+  "id": "E48",
+  "key": "floor|5144|29428",
+  "side": "floor",
+  "date": "2026-07-15",
+  "level": 29428,
+  "lines": [
+   "PW_VAL"
+  ],
+  "K": 5,
+  "A": 3,
+  "relVol": 1.03,
+  "stratum": "A>=3",
+  "batch": "B"
+ },
+ {
+  "id": "E49",
+  "key": "floor|5002|28523",
+  "side": "floor",
+  "date": "2026-06-11",
+  "level": 28523,
+  "lines": [
+   "PM_VAL"
+  ],
+  "K": 5,
+  "A": 2,
+  "relVol": 1.11,
+  "stratum": "A=2",
+  "batch": "B"
+ },
+ {
+  "id": "E50",
+  "key": "top|3096|20180",
+  "side": "top",
+  "date": "2025-03-10",
+  "level": 20190,
+  "lines": [
+   "PD_POC",
+   "PW_POC"
+  ],
+  "K": 5,
+  "A": 1,
+  "relVol": 1.36,
+  "stratum": "A=1",
+  "batch": "B"
+ },
+ {
+  "id": "E51",
+  "key": "top|827|15708",
+  "side": "top",
+  "date": "2023-09-15",
+  "level": 15709.88,
+  "lines": [
+   "3M_VAH",
+   "PD_VAH"
+  ],
+  "K": 8,
+  "A": 3,
+  "relVol": 1.11,
+  "stratum": "A>=3",
+  "batch": "B"
+ },
+ {
+  "id": "E52",
+  "key": "top|3351|20353",
+  "side": "top",
+  "date": "2025-05-08",
+  "level": 20353,
+  "lines": [
+   "P3M_VAL"
+  ],
+  "K": 2,
+  "A": 2,
+  "relVol": 0.98,
+  "stratum": "A=2",
+  "batch": "B"
+ },
+ {
+  "id": "E53",
+  "key": "top|995|14812",
+  "side": "top",
+  "date": "2023-10-25",
+  "level": 14811.75,
+  "lines": [
+   "3M_VAL"
+  ],
+  "K": 4,
+  "A": 1,
+  "relVol": 1.02,
+  "stratum": "A=1",
+  "batch": "B"
+ },
+ {
+  "id": "E54",
+  "key": "floor|5481|30740",
+  "side": "floor",
+  "date": "2026-10-02",
+  "level": 30740,
+  "lines": [
+   "PW_POC"
+  ],
+  "K": 5,
+  "A": 1,
+  "relVol": 1.39,
+  "stratum": "A=1",
+  "batch": "B"
+ },
+ {
+  "id": "E55",
+  "key": "floor|2554|20490",
+  "side": "floor",
+  "date": "2024-10-29",
+  "level": 20508,
+  "lines": [
+   "PW_POC",
+   "PD_VAL",
+   "PM_VAH"
+  ],
+  "K": 6,
+  "A": 2,
+  "relVol": 1,
+  "stratum": "A=2",
+  "batch": "B"
+ },
+ {
+  "id": "E56",
+  "key": "floor|4743|25000",
+  "side": "floor",
+  "date": "2026-04-13",
+  "level": 25021.31,
+  "lines": [
+   "PM_POC",
+   "P3M_POC",
+   "PW_POC",
+   "3M_VAH"
+  ],
+  "K": 6,
+  "A": 2,
+  "relVol": 0.82,
+  "stratum": "A=2",
+  "batch": "B"
+ },
+ {
+  "id": "E57",
+  "key": "floor|4247|25118",
+  "side": "floor",
+  "date": "2025-12-15",
+  "level": 25123,
+  "lines": [
+   "PW_LO",
+   "PD_VAL"
+  ],
+  "K": 6,
+  "A": 2,
+  "relVol": 0.88,
+  "stratum": "A=2",
+  "batch": "B"
+ },
+ {
+  "id": "E58",
+  "key": "floor|3537|21600",
+  "side": "floor",
+  "date": "2025-06-23",
+  "level": 21600,
+  "lines": [
+   "P3M_POC"
+  ],
+  "K": 6,
+  "A": 3,
+  "relVol": 1.6,
+  "stratum": "A>=3",
+  "batch": "B"
+ },
+ {
+  "id": "E59",
+  "key": "top|5142|30076",
+  "side": "top",
+  "date": "2026-07-15",
+  "level": 30085,
+  "lines": [
+   "PW_VAH",
+   "PW_HI"
+  ],
+  "K": 8,
+  "A": 3,
+  "relVol": 0.87,
+  "stratum": "A>=3",
+  "batch": "B"
+ },
+ {
+  "id": "E60",
+  "key": "top|2466|20332",
+  "side": "top",
+  "date": "2024-10-09",
+  "level": 20330.5,
+  "lines": [
+   "PD_VAH",
+   "PW_HI"
+  ],
+  "K": 7,
+  "A": 3,
+  "relVol": 0.99,
+  "stratum": "A>=3",
+  "batch": "B"
+ }
+]
