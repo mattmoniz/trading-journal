@@ -76,7 +76,7 @@ function buildEvents(B, X, base, lv, W, rng) {
         if (!ok || Math.abs(clock(B.T[jm + 1]) - clock(B.T[r.i0])) > 30) continue;
         HS.forEach((h) => { ctl[h] = fwd(B, jm + 1, h, a); }); got = true;
       }
-      rows.push({ fam: f, arm: e.arm, seq: `${f}|${e.seq}`, day: td, i: e.i, turn: r.turnSize, bars: r.bars, agree: r.agree, lead: r.lead, sess: B.T[r.i0].slice(0, 10) === td && clock(B.T[r.i0]) >= 570 && clock(B.T[r.i0]) < 960 ? 'RTH' : 'GLOBEX', ret, bs, ctl: got ? ctl : null, mfe60: mm && mm.mfe, mae60: mm && mm.mae, mfe240: mm4 && mm4.mfe, mae240: mm4 && mm4.mae });
+      rows.push({ ts: B.T[r.i0], fireTs: B.T[r.j], fam: f, arm: e.arm, seq: `${f}|${e.seq}`, day: td, i: e.i, turn: r.turnSize, bars: r.bars, agree: r.agree, lead: r.lead, sess: B.T[r.i0].slice(0, 10) === td && clock(B.T[r.i0]) >= 570 && clock(B.T[r.i0]) < 960 ? 'RTH' : 'GLOBEX', ret, bs, ctl: got ? ctl : null, mfe60: mm && mm.mfe, mae60: mm && mm.mae, mfe240: mm4 && mm4.mfe, mae240: mm4 && mm4.mae });
     }
   }
   const rd = [...new Set(rows.map((x) => x.day))].sort(), xc = rd[Math.floor(rd.length * 0.6) - 1], ex0 = rows.filter((x) => x.day <= xc && x.ret[60] != null);   // tercile cutpoints from explore-period events only
@@ -137,6 +137,7 @@ async function main() {
   const outA = summarizeSide('LONG floors (VAL)', A.rows, A.counts), outB = summarizeSide('MIRROR short ceilings (VAH)', Bm.rows, Bm.counts);
   const g = outA, v = { E1: g.E1 && !g.E1.underpowered && g.E1.seq.lo > 0 && g.E1.day.lo > 0 && g.E1.halves.every((x) => x > 0), E2: g.E2.AGREE && !g.E2.AGREE.underpowered && g.E2.AGREE.seq.lo > 0 && g.E2.AGREE.day.lo > 0 && g.E2.AGREE.obs > g.E2.AGREE.perm975 && g.E2.AGREE.halves.every((x) => x > 0) };
   console.log('\nVERDICT (Amendment 1 gates; rule constants fixed in advance):', JSON.stringify(v), '=> E1', v.E1 ? 'SHOWN' : 'NOT SHOWN', '| E2', v.E2 ? 'SHOWN' : 'NOT SHOWN / UNDERPOWERED (read the counts above)');
+  fs.writeFileSync(`scratch/floor_entry_events_20261026_m${M}.json`, JSON.stringify({ endRow, M, W, long: A.rows, mirror: Bm.rows }));   // event-level dump for the context study (no effect on any statistic above)
   fs.writeFileSync(`scratch/floor_entry_es_agreement_20261026_m${M}.json`, JSON.stringify({ endRow, M, W, long: outA, mirror: outB, verdict: v }, null, 1));
 }
 main().then(() => process.exit(0)).catch((e) => { console.error(e); process.exit(1); });

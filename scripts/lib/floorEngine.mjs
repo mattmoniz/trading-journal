@@ -13,16 +13,16 @@ export const mean = (a) => (a.length ? a.reduce((s, x) => s + x, 0) / a.length :
 export const pct = (a, q) => { const s = [...a].sort((x, y) => x - y); return s.length ? s[Math.min(s.length - 1, Math.floor(q * s.length))] : NaN; };
 
 export async function loadBars(table, where, startDate, endDate, cols) {
-  const T = [], O = [], H = [], L = [], C = [];
+  const T = [], O = [], H = [], L = [], C = [], V = [];
   let m = new Date(startDate + 'T00:00:00Z');
   const end = new Date(endDate + 'T00:00:00Z');
   while (m <= end) {
     const a = m.toISOString().slice(0, 10), nx = new Date(m); nx.setUTCMonth(nx.getUTCMonth() + 1); const b = nx.toISOString().slice(0, 10);
-    const r = await query(`SELECT ts::text t, open::float o, high::float h, low::float l, close::float c FROM ${table} WHERE ${where} AND ts >= $1 AND ts < $2 ORDER BY ts`, [a, b]);
-    for (const x of r.rows) { T.push(x.t.slice(0, 19)); O.push(x.o); H.push(x.h); L.push(x.l); C.push(x.c); }
+    const r = await query(`SELECT ts::text t, open::float o, high::float h, low::float l, close::float c, volume::float v FROM ${table} WHERE ${where} AND ts >= $1 AND ts < $2 ORDER BY ts`, [a, b]);
+    for (const x of r.rows) { T.push(x.t.slice(0, 19)); O.push(x.o); H.push(x.h); L.push(x.l); C.push(x.c); V.push(x.v); }
     m = nx;
   }
-  return { T, O, H, L, C, n: T.length };
+  return { T, O, H, L, C, V, n: T.length };
 }
 export function prep(B) {
   B.TD = B.T.map(tradeDateOf);
