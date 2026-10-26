@@ -6,7 +6,7 @@ import { query } from '../server/db.js';
 import { isInsideNqRollWeek } from '../server/services/acdShared.js';
 import { loadBars, prep, indexBars, clock, mean, SPARSE } from './lib/floorEngine.mjs';
 import { d20Of } from './lib/fourHourLevels.mjs';
-import { dc, ci, fmt, dropTopDate, diffCI } from './lib/exitSim.mjs';
+import { hashSeed, mulberry32 } from '../server/services/rigorDiagnostics.js';
 import { f3 } from './lib/floorStats.mjs';
 
 const CONFIGS = process.env.CONFIG ? [JSON.parse(process.env.CONFIG)] : [{ n: 3, band: 0.15 }, { n: 2, band: 0.15 }, { n: 2, band: 0.25 }];
@@ -37,21 +37,26 @@ async function main() {
   let cfg = CONFIGS[CONFIGS.length - 1]; for (const cf of CONFIGS) if (valid.filter((r) => r.held && r.cnt[`${cf.n}|${cf.band}`] >= cf.n).length >= 30) { cfg = cf; break; }
   const key = `${cfg.n}|${cfg.band}`; console.log(`SELECTED (from counts only, before any outcome): approaches>=${cfg.n}, band ${cfg.band} x D20`);
   if (process.env.COUNT_ONLY) return;
-  const wk = {}; for (const r of valid) (wk[r.wd] ||= []).push(r.r); const wm = (wd) => mean(wk[wd]); for (const r of valid) r.x = r.r - wm(r.wd);
-  const cut = valid[Math.floor(valid.length * 0.6)].td, sets = { ONH: (r) => r.held, ZONE: (r) => r.cnt[key] >= cfg.n, CONJ: (r) => r.held && r.cnt[key] >= cfg.n }, lo = 0.0083;
-  console.log(`\nweekday-matched control; explore <= ${cut}; explore CI 98.33 percent (Bonferroni over 3), hold-out one-sided 95 percent`);
-  let cands = 0, surv = 0; const items = (S) => S.map((r) => ({ day: r.td, v: r.x }));
-  for (const [nm, f] of Object.entries(sets)) {
-    const S = valid.filter(f), A = S.filter((r) => r.td <= cut), H = S.filter((r) => r.td > cut), under = (z) => z.length < 30 || new Set(z.map((r) => r.td)).size < 20; let v = 'UNDERPOWERED', ea = `n=${A.length}`, ha = `n=${H.length}`;
-    const all = items(S); console.log(`\n${nm}: n ${S.length}; mean next-day return ${f3(mean(S.map((r) => r.r)))} D20; weekday control ${f3(mean(S.map((r) => wm(r.wd))))}; EXCESS ${S.length >= 5 ? fmt(mean(all.map((x) => x.v)), ci(all, 0.025, nm + 'all')) : 'n/a'}; mean max favourable move ${f3(mean(S.map((r) => r.mfe)))} D20; share up ${(100 * S.filter((r) => r.r > 0).length / Math.max(1, S.length)).toFixed(0)}%`);
-    if (!under(A)) { const ia = items(A), c = ci(ia, lo, nm + 'a'); ea = `${fmt(mean(ia.map((x) => x.v)), c)} n=${A.length}, without top date ${f3(dropTopDate(ia))}`; if (!(c.lo > 0)) v = 'no'; else { cands++; if (under(H)) v = 'CANDIDATE, hold-out UNDERPOWERED'; else { const ih = items(H), ch = ci(ih, 0.05, nm + 'h'); ha = `${fmt(mean(ih.map((x) => x.v)), ch)} n=${H.length}`; const ok = mean(ih.map((x) => x.v)) > 0 && ch.lo > 0 && dropTopDate(ia) > 0; v = ok ? 'SCREEN-SURVIVOR' : 'candidate, not a survivor'; if (ok) surv++; } } }
-    console.log(`  explore ${ea}\n  hold-out ${ha}\n  => ${v}${under(A) ? ' (explore half has fewer than 30 days or 20 dates)' : ''}`);
+  // shape features at 15:55 (Amendment 1): return from the RTH open to 15:55 and the 15:55 close's place in the day's RTH range, terciles from all valid days
+  for (const r of valid) { const D = day.get(r.td); let lo = Infinity, hi = -Infinity, last = null; for (let i = D.rs; i <= D.re; i++) { if (clock(NQ.T[i]) >= 955) break; lo = Math.min(lo, NQ.L[i]); hi = Math.max(hi, NQ.H[i]); last = NQ.C[i]; } r.ret = (last - NQ.O[D.rs]) / r.sc; r.loc = hi > lo ? (last - lo) / (hi - lo) : 0.5; r.fri = r.wd === 5 ? 1 : 0; const d0 = new Date(r.td + 'T12:00:00Z'); d0.setUTCDate(d0.getUTCDate() - ((d0.getUTCDay() + 6) % 7)); r.wk = d0.toISOString().slice(0, 10); }
+  const tcut = (arr) => { const q = [...arr].sort((x, y) => x - y); return [q[Math.floor(q.length / 3)], q[Math.floor(2 * q.length / 3)]]; }, rc = tcut(valid.map((r) => r.ret)), lc = tcut(valid.map((r) => r.loc)), bin = (x, c) => (x < c[0] ? 0 : x < c[1] ? 1 : 2);
+  for (const r of valid) r.cell = `${bin(r.ret, rc)}|${bin(r.loc, lc)}|${r.fri}`;
+  const cut = valid[Math.floor(valid.length * 0.6)].td, ev = { ONH: (r) => r.held, ZONE: (r) => r.cnt[key] >= cfg.n, CONJ: (r) => r.held && r.cnt[key] >= cfg.n };
+  const spec = { 'ONH-HELD vs shape-matched non-held days': [ev.ONH, (r) => !ev.ONH(r)], 'ZONE-DEFENDED vs shape-matched non-zone days': [ev.ZONE, (r) => !ev.ZONE(r)], 'CONJUNCTION vs ONH-HELD days without the zone': [ev.CONJ, (r) => ev.ONH(r) && !ev.ZONE(r)] };
+  const matched = (T, C) => { const t = new Map(); for (const r of T) { const c = t.get(r.cell) || t.set(r.cell, [0, 0, 0, 0]).get(r.cell); c[0]++; c[1] += r.r; } for (const r of C) { const c = t.get(r.cell) || t.set(r.cell, [0, 0, 0, 0]).get(r.cell); c[2]++; c[3] += r.r; } let w = 0, d = 0; for (const c of t.values()) if (c[0] && c[2] >= 5) { w += c[0]; d += c[0] * (c[1] / c[0] - c[3] / c[2]); } return w ? d / w : NaN; };
+  const rng = mulberry32(hashSeed('onhzone')), bootM = (T, C, lo) => { const g = new Map(); for (const r of [...T.map((x) => ({ x, t: 1 })), ...C.map((x) => ({ x, t: 0 }))]) (g.get(r.x.wk) || g.set(r.x.wk, []).get(r.x.wk)).push(r); const ws = [...g.values()], o = []; for (let b = 0; b < 3000; b++) { const T2 = [], C2 = []; for (let k = 0; k < ws.length; k++) for (const r of ws[Math.floor(rng() * ws.length)]) (r.t ? T2 : C2).push(r.x); const v = matched(T2, C2); if (Number.isFinite(v)) o.push(v); } o.sort((p, q) => p - q); return [o[Math.floor(lo * o.length)], o[Math.floor((1 - lo) * o.length) - 1]]; };
+  console.log(`\nshape-matched control (return-so-far tercile x close-location tercile x Friday); explore <= ${cut}; explore CI 98.33 percent (Bonferroni over 3), hold-out one-sided 95 percent; bootstrap resamples whole weeks (${new Set(valid.map((r) => r.wk)).size} weeks)`);
+  let cands = 0, surv = 0;
+  for (const [nm, [fe, fc]] of Object.entries(spec)) {
+    const T = valid.filter(fe), C = valid.filter(fc), TA = T.filter((r) => r.td <= cut), TH = T.filter((r) => r.td > cut), CA = C.filter((r) => r.td <= cut), CH = C.filter((r) => r.td > cut), under = (z) => z.length < 30 || new Set(z.map((r) => r.wk)).size < 20;
+    const d = matched(T, C), ci0 = bootM(T, C, 0.025); console.log(`\n${nm}: events ${T.length} (${new Set(T.map((r) => r.wk)).size} weeks), controls ${C.length}; mean next-day return events ${f3(mean(T.map((r) => r.r)))} vs controls ${f3(mean(C.map((r) => r.r)))} D20; matched excess ${f3(d)} [${f3(ci0[0])},${f3(ci0[1])}] (95%, all dates); mean max favourable move ${f3(mean(T.map((r) => r.mfe)))}; share up ${(100 * T.filter((r) => r.r > 0).length / Math.max(1, T.length)).toFixed(0)}%`);
+    let v = 'UNDERPOWERED', ea = `n=${TA.length}`, ha = `n=${TH.length}`;
+    if (!under(TA)) { const da = matched(TA, CA), c = bootM(TA, CA, 0.0083); ea = `${f3(da)} [${f3(c[0])},${f3(c[1])}] n=${TA.length}`; if (!(c[0] > 0)) v = 'no'; else { cands++; if (under(TH)) v = 'CANDIDATE, hold-out UNDERPOWERED'; else { const dh = matched(TH, CH), ch = bootM(TH, CH, 0.05); ha = `${f3(dh)} [${f3(ch[0])},${f3(ch[1])}] n=${TH.length}`; const ok = dh > 0 && ch[0] > 0 && da > 0; v = ok ? 'SCREEN-SURVIVOR' : 'candidate, not a survivor'; if (ok) surv++; } } }
+    else if (TH.length) ha = `n=${TH.length}, matched ${f3(matched(TH, CH))}`;
+    console.log(`  explore ${ea}\n  hold-out ${ha}\n  => ${v}${under(TA) ? ' (explore half has fewer than 30 events or 20 weeks)' : ''}`);
   }
   console.log(`CELLS 3, CANDIDATES ${cands}, SCREEN-SURVIVORS ${surv}, expected by chance about ${(3 * 0.0083).toFixed(2)}`);
-  console.log('\nDESCRIPTIVE (not citable): does the combination add to its parts');
-  const only = (a, b) => { const A = valid.filter(a).filter((r) => !b(r)), B = valid.filter(b); return [A, B]; };
-  for (const [nm, a, b] of [['CONJ vs ONH-held days without the zone', sets.CONJ, sets.ONH], ['CONJ vs zone days without the hold', sets.CONJ, sets.ZONE]]) { const C = valid.filter(a), O = valid.filter((r) => b(r) && !a(r)); if (C.length >= 5 && O.length >= 5) { const d = diffCI(items(C), items(O), nm); console.log(`  ${nm}: ${C.length} vs ${O.length}, difference ${f3(mean(C.map((r) => r.x)) - mean(O.map((r) => r.x)))} [95% ${f3(d.lo)}, ${f3(d.hi)}]`); } }
   const pend = rows.filter((r) => r.r == null && r.entry != null && r.k >= dates.length - 3); for (const r of pend) console.log(`  forward / pending day ${r.td}: ONH-HELD ${r.held}, approaches counted ${r.cnt[key]} (zone-defended ${r.cnt[key] >= cfg.n}), entry ${r.entry}, low ${r.rthLow}`);
-  fs.writeFileSync('scratch/onh_hold_zone_20261026.json', JSON.stringify({ cfg, cut, cands, surv, n: valid.length }));
+  fs.writeFileSync('scratch/onh_hold_zone_20261026.json', JSON.stringify({ cfg, cands, surv, n: valid.length }));
 }
 main().then(() => process.exit(0)).catch((e) => { console.error(e); process.exit(1); });
