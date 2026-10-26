@@ -210,10 +210,20 @@ async function main() {
   console.log(`Train: N=${train.length} (${train[0].tDay} to ${train[train.length - 1].tDay})`);
   console.log(`Test:  N=${test.length} (${test[0]?.tDay} to ${test[test.length - 1]?.tDay})`);
 
+  // 2026-10-26 (user: "add a stop to the overnight trade"): print the stop-width table at the chosen exit so a tighter stop's real cost is visible (mean capture in points per trade, share of trades stopped out).
+  { const ex0 = '13:30', rowf = (pool, sd) => { const caps = pool.map((t) => simTrade(t, sd, ex0)); return `${(caps.reduce((a, b) => a + b, 0) / caps.length).toFixed(1)}pt/${(100 * pool.filter((t) => sd !== Infinity && t.maeAtExitIdx[ex0] >= sd).length / pool.length).toFixed(0)}%stopped`; };
+    console.log(`STOP TABLE at exit ${ex0} (mean points per trade / share stopped out): stop | ALL n=${trades.length} | TRAIN n=${train.length} | TEST n=${test.length}`); for (const sd of STOP_CANDIDATES_PTS) console.log(`  ${String(sd).padStart(8)} | ${rowf(trades, sd)} | ${rowf(train, sd)} | ${rowf(test, sd)}`); }
   const trainGrid = evalGrid(train);
   trainGrid.sort((a, b) => b.meanCap - a.meanCap);
   const chosen = trainGrid[0];
   console.log(`Chosen cell (from TRAIN only): stop=${chosen.stopDist === Infinity ? 'NONE' : chosen.stopDist}, exit=${chosen.exitTime}`);
+  // PROTECTIVE STOP (2026-10-26, user: "add a stop to the overnight trade"): when the best TRAIN cell is "no stop", the live detector used to fall back to a hand-set 700 points. Derive it instead:
+  // the tightest finite stop whose TRAIN mean capture is within ONE STANDARD ERROR of the best cell's (the stop costs no more than the noise in the estimate). Persisted next to chosenCell; the live detector
+  // reads it and additionally caps it so one stop-out cannot exceed the daily loss limit.
+  const trainCaps = train.map((t) => simTrade(t, chosen.stopDist, chosen.exitTime)), trainMean = trainCaps.reduce((a, b) => a + b, 0) / trainCaps.length;
+  const trainSe = Math.sqrt(trainCaps.reduce((a, b) => a + (b - trainMean) ** 2, 0) / (trainCaps.length - 1)) / Math.sqrt(trainCaps.length);
+  const protectiveStopPts = chosen.stopDist !== Infinity ? chosen.stopDist : (STOP_CANDIDATES_PTS.filter((sd) => sd !== Infinity).find((sd) => { const c = train.map((t) => simTrade(t, sd, chosen.exitTime)); return c.reduce((a, b) => a + b, 0) / c.length >= trainMean - trainSe; }) ?? null);
+  console.log(`Protective stop (tightest finite stop within 1 SE ${trainSe.toFixed(1)}pt of the best TRAIN mean ${trainMean.toFixed(1)}pt): ${protectiveStopPts ?? 'none qualifies'}`);
 
   const testResult = test.length >= 5 ? reportPool(test, chosen.stopDist, chosen.exitTime) : null;
   const testBaseline4pm = test.length >= 5 ? reportPool(test, Infinity, '16:00') : null;
@@ -230,7 +240,7 @@ async function main() {
     trainN: train.length, testN: test.length,
     trainWindow: { start: train[0].tDay, end: train[train.length - 1].tDay },
     testWindow: test.length ? { start: test[0].tDay, end: test[test.length - 1].tDay } : null,
-    chosenCell: { stopPts: chosen.stopDist === Infinity ? null : chosen.stopDist, exitTime: chosen.exitTime },
+    chosenCell: { stopPts: chosen.stopDist === Infinity ? null : chosen.stopDist, exitTime: chosen.exitTime, protectiveStopPts },
     testResult, testBaseline4pm, allResult, allBaseline4pm,
     minTestNForPromotion: MIN_TEST_N_FOR_PROMOTION,
     method: 'chronological 70/30 split, stop x exit-time grid chosen on TRAIN only, day-blocked bootstrap CI on TEST',
@@ -239,7 +249,7 @@ async function main() {
   await query(`
     INSERT INTO performance_audit (run_date, window_days, signal_type, signal_name, sample_size, win_rate, ev_per_trade, notes)
     VALUES (CURRENT_DATE, 0, 'OVERNIGHT_9PM_ENTRY_CALIB', 'ALL_SESSIONS', $1, $2, $3, $4)
-    ON CONFLICT DO NOTHING
+    ON CONFLICT (run_date, window_days, signal_type, signal_name) DO UPDATE SET notes = EXCLUDED.notes, sample_size = EXCLUDED.sample_size, win_rate = EXCLUDED.win_rate, ev_per_trade = EXCLUDED.ev_per_trade
   `, [trades.length, allResult.hitRate, allResult.meanDollarPerDay, JSON.stringify(notes)]);
 
   const status = testResult && testResult.excludesZero && testResult.n >= MIN_TEST_N_FOR_PROMOTION ? 'CONFIRMED' : 'PROVISIONAL';

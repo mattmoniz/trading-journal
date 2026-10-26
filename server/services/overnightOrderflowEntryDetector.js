@@ -42,13 +42,16 @@ import {
   dropToTimeline, computeFireTags, FIRE_TAG_COLS, fireTagValues,
 } from '../routes/acd.js';
 import { getBetClass } from '../config/setupTypes.js';
+import { LIVE_INSTRUMENT } from '../config/instruments.js';
 
 const SETUP_TYPE_LONG = 'OVERNIGHT_ORDERFLOW_LONG';
 const SETUP_TYPE_SHORT = 'OVERNIGHT_ORDERFLOW_SHORT';
 const ENTRY_WINDOW_START_MIN = 360; // 12:00am ET (minutes since 6pm Globex open)
 const ENTRY_WINDOW_END_MIN = 420; // 1:00am ET -- an hour of poller-restart grace, never drifts toward the weaker 2am/5am checkpoints
 const STAGE2_LEGS_FALLBACK = 6; // only used if the badge's own live calibration is unavailable
-const STOP_FALLBACK_PTS = 700; // used if calibration's chosen cell is "no stop" or unavailable
+const STOP_FALLBACK_PTS = 700; // last resort only, if the calibration row is missing entirely (the calibration now persists chosenCell.protectiveStopPts, derived from data, for the "no stop" case)
+// A stop wider than the daily loss limit lets ONE stop-out breach it alone (2026-10-26: this setup carried 700 points = 1,400 dollars against a 1,000 dollar limit). Pure, exported for the test.
+export function capStopToDailyLimit(stopPts, limitUsd, dollarsPerPoint) { return Number.isFinite(limitUsd) && limitUsd > 0 && dollarsPerPoint > 0 ? Math.min(stopPts, Math.floor(limitUsd / dollarsPerPoint)) : stopPts; }
 const EXIT_TIME_FALLBACK = '16:00'; // RTH close, used if calibration is unavailable
 const T1_PLACEHOLDER_DIST = 1500; // informational-only, unreachable -- never checked, see resolveSetups.js's custom branch
 
@@ -74,12 +77,13 @@ async function getEntryCalibration() {
   try {
     const notes = r.rows[0] ? JSON.parse(r.rows[0].notes) : null;
     const chosen = notes?.chosenCell;
+    const raw = chosen?.stopPts ?? chosen?.protectiveStopPts ?? STOP_FALLBACK_PTS;
     return {
-      stopPts: chosen?.stopPts != null ? chosen.stopPts : STOP_FALLBACK_PTS,
+      stopPts: capStopToDailyLimit(raw, Number(process.env.DTC_DLL_LIMIT_USD), LIVE_INSTRUMENT.dollarsPerPoint),
       exitTime: chosen?.exitTime ?? EXIT_TIME_FALLBACK,
     };
   } catch (_) {
-    return { stopPts: STOP_FALLBACK_PTS, exitTime: EXIT_TIME_FALLBACK };
+    return { stopPts: capStopToDailyLimit(STOP_FALLBACK_PTS, Number(process.env.DTC_DLL_LIMIT_USD), LIVE_INSTRUMENT.dollarsPerPoint), exitTime: EXIT_TIME_FALLBACK };
   }
 }
 
