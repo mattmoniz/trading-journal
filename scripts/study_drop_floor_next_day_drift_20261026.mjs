@@ -1,0 +1,28 @@
+// EXPLORATORY follow-up (2026-10-26) to study_multiday_drop_floor_context_20261026.mjs, whose regime-matched control hinted that a blind long made at a "multi-day drop + retested floor" bar
+// drifts up over the next 24 hours more than a clock-matched blind long. Bar-level market-behaviour check (no setup involved): for each trade date take the FIRST bar (sampled every 5th minute,
+// 02:00-17:00 ET... any session) where DROP and FLOOR hold (definitions identical to the parent study, bars strictly before the entry minute), enter long at the next open, measure the move to
+// +240, +1440 and +2880 minutes in D20 units minus a clock-matched blind long (other dates, within 30 minutes of the same clock). One event per date; explore/hold-out by date; date-bootstrap CI.
+// DROP cut = top tercile over ALL explore-period bars (not over setup events). No multiplicity correction; labelled exploratory.
+import { query } from '../server/db.js';
+import { hashSeed, mulberry32 } from '../server/services/rigorDiagnostics.js';
+import { loadBars, prep, indexBars, clock, mean } from './lib/floorEngine.mjs';
+import { qnt, f3 } from './lib/floorStats.mjs';
+const endRow = (await query(`SELECT (MAX(ts)::date - 3)::text d FROM price_bars_primary WHERE symbol='NQ' AND ts >= CURRENT_DATE - 7 AND ts < CURRENT_DATE + 1`)).rows[0].d;
+const NQ = indexBars(prep(await loadBars('price_bars_primary', `symbol='NQ'`, '2023-03-06', endRow)));
+const rng0 = new Map(); for (let i = 0; i < NQ.n; i++) { const o = rng0.get(NQ.TD[i]) || { h: -Infinity, l: Infinity }; o.h = Math.max(o.h, NQ.H[i]); o.l = Math.min(o.l, NQ.L[i]); rng0.set(NQ.TD[i], o); }
+const dl = [...rng0.keys()].sort(), d20 = {}; dl.forEach((d, i) => { if (i >= 20) d20[d] = mean(dl.slice(i - 20, i).map((x) => rng0.get(x).h - rng0.get(x).l)); });
+const RMIN = Number(process.env.RMIN || 1); const ctx = (b) => { const td = NQ.TD[b], a = NQ.A15[td], D = d20[td]; if (!a || !D) return null; let hi = -Infinity, k = b - 1; while (k >= 0 && NQ.EM[b] - NQ.EM[k] <= 2880) { hi = Math.max(hi, NQ.H[k]); k--; } const drop = (hi - NQ.C[b - 1]) / D;
+  let lw = Infinity, iL = -1; k = b - 1; while (k >= 0 && NQ.EM[b] - NQ.EM[k] <= 1080) { if (NQ.L[k] <= lw) { lw = NQ.L[k]; iL = k; } k--; } let floor = false; if (iL >= 0 && NQ.EM[b] - NQ.EM[iL] >= 180) { let away = false, ret = 0, inZ = false; for (k = iL + 1; k < b; k++) { if (NQ.L[k] > lw + 2 * a) { away = true; inZ = false; } else if (away && NQ.L[k] <= lw + a && !inZ) { ret++; inZ = true; away = false; } } floor = ret >= RMIN; } return { drop, floor, D }; };
+const samp = []; for (let b = 3100; b < NQ.n - 3000; b += 5) { const td = NQ.TD[b]; if (!d20[td]) continue; samp.push(b); }
+const dayList = [...new Set(samp.map((b) => NQ.TD[b]))].sort(), cutDay = dayList[Math.floor(dayList.length * 0.6) - 1];
+const exploreDrops = []; for (let q = 0; q < samp.length; q += 7) { const b = samp[q]; if (NQ.TD[b] > cutDay) break; const c = ctx(b); if (c) exploreDrops.push(c.drop); }
+const DQ = Number(process.env.DQ || 2 / 3), dropCut = qnt(exploreDrops, DQ); console.log(`bars ${NQ.n}, dates ${dayList.length}, explore <= ${cutDay}, DROP cut (top tercile of explore bars) ${dropCut.toFixed(2)} D20, end ${endRow}`);
+const firstPerDay = new Map(); for (const b of samp) { const td = NQ.TD[b]; if (firstPerDay.has(td)) continue; const c = ctx(b); if (c && c.drop >= dropCut && c.floor) firstPerDay.set(td, { b, D: c.D }); }
+const ev = [...firstPerDay].map(([day, v]) => ({ day, ...v })), rng = mulberry32(hashSeed('ddf')), H = [240, 1440, 2880];
+const ctl = (e, h) => { const out = []; for (let t = 0; t < 500 && out.length < 12; t++) { const b = samp[Math.floor(rng() * samp.length)]; if (NQ.TD[b] === e.day || Math.abs(clock(NQ.T[b]) - clock(NQ.T[e.b])) > 30) continue; const x = NQ.byEm.get(NQ.EM[b + 1] + h - 1); if (x !== undefined) out.push((NQ.C[x] - NQ.O[b + 1]) / d20[NQ.TD[b]]); } return out.length >= 3 ? mean(out) : null; };
+for (const e of ev) for (const h of H) { const x = NQ.byEm.get(NQ.EM[e.b + 1] + h - 1); e['r' + h] = x === undefined ? null : (NQ.C[x] - NQ.O[e.b + 1]) / e.D; const c = ctl(e, h); e['x' + h] = e['r' + h] != null && c != null ? e['r' + h] - c : null; e['c' + h] = c; }
+const boot = (a, seed) => { const v = a.filter((x) => x != null); if (v.length < 10) return null; const r = mulberry32(hashSeed(seed)), d = []; for (let i = 0; i < 4000; i++) { let s = 0; for (let k = 0; k < v.length; k++) s += v[Math.floor(r() * v.length)]; d.push(s / v.length); } d.sort((x, y) => x - y); return { m: mean(v), lo: d[100], hi: d[3899], n: v.length }; };
+console.log(`DROP+FLOOR dates (one first-qualifying bar per date): ${ev.length} of ${dayList.length} (${(100 * ev.length / dayList.length).toFixed(1)}%)`);
+for (const h of H) { const all = boot(ev.map((e) => e['x' + h]), 'a' + h), a = boot(ev.filter((e) => e.day <= cutDay).map((e) => e['x' + h]), 'e' + h), b = boot(ev.filter((e) => e.day > cutDay).map((e) => e['x' + h]), 'h' + h); const f = (c) => (c ? `${f3(c.m)} [${f3(c.lo)},${f3(c.hi)}] n=${c.n}` : 'n/a'); console.log(`  +${String(h).padStart(4)} min (D20 units, excess over clock-matched blind long): all ${f(all)} | explore ${f(a)} | hold-out ${f(b)} | raw mean ${f3(mean(ev.filter((e) => e['r' + h] != null).map((e) => e['r' + h])))} | share up ${(100 * ev.filter((e) => e['r' + h] > 0).length / ev.filter((e) => e['r' + h] != null).length).toFixed(0)}%`); }
+console.log(`  typical D20 ${mean(ev.map((e) => e.D)).toFixed(0)} points, so +0.1 D20 is about ${(0.1 * mean(ev.map((e) => e.D))).toFixed(0)} points; months with events: ${[...new Set(ev.map((e) => e.day.slice(0, 7)))].length}`);
+process.exit(0);
