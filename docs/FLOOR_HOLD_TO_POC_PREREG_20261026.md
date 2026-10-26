@@ -39,3 +39,15 @@ Few distinct days for the 3M and PY families (their levels change slowly, so a s
 
 ## Records
 `recordClaim()` for each of H1 and H2 (positive or negative); `flagDecision()` only for a real fork. Nothing changes live behaviour.
+
+---
+## Amendment 1 (2026-10-26, before the first real run) — from the DeepSeek design review (`reports/deepseek_floor_hold_prereg_review_2026-10-26.md`)
+Accepted:
+1. **Primary contrast is now WITHIN-SEQUENCE and paired.** For every sequence that reaches k>=3 (first K3P event), the comparison is that K3P event's outcome minus the outcome of the SAME sequence's K1 event. This removes the survivorship selection (a floor that held three times is more likely to hold again by selection alone). The old unpaired K3P-vs-K1 contrast is kept as a descriptive line only.
+2. **Placebo the paired difference, not just the level.** 200 random-direction trials (not 10) over the same entry times and distances; the real paired hit-rate difference and the real K3P hit rate must each exceed the 97.5th percentile of the placebo distribution (the analytic driftless baseline is printed too).
+3. **SHOWN needs a positive expectancy co-condition**: K3P mean points per trade > 0 and the paired points difference CI lower bound > 0, not a hit rate alone. (Gap conventions are already symmetric: stop fills at the bar open when gapped through, in both directions; target fills at the limit price in both, which is conservative.)
+4. **Bootstrap blocks.** Primary CI = resample SEQUENCES (a floor is autocorrelated for weeks); the day-blocked CI is reported alongside; SHOWN requires both lower bounds above zero.
+5. **Sensitivity (p, s) and the per-family/session/mirror cells are robustness reports, not gates, and carry no BH claim**; the "same sign at all five" gate is dropped. The one primary test is the paired contrast above.
+6. **H2 (ES canary) is descriptive-only** unless both sides have >= 20 distinct days; raw counts always printed.
+7. **Level mismatch.** Resolved before the run by computing the profiles directly (see `docs/OPEN_THREADS.md` 2026-10-26) so the report can say which definition the user's chart lines match; the study tests the stored levels and says so.
+8. **Dropped-event counts** (k>=3 episodes beyond the first K3P per sequence, entries censored by the 2-day cap or a >5-minute fill gap) are printed.
