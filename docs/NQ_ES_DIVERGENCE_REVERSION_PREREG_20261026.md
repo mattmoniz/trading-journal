@@ -32,4 +32,4 @@ Bar-close alignment of two instruments can create apparent divergence from non-s
 5. **Placebo (finding 5).** 10,000 trials, sign flips drawn per TRADE DATE (all events on a date share one random sign) so day clustering is preserved in the null.
 6. **Decomposition (finding 6).** Both the raw ES leg and the beta-adjusted leg are printed; beta is fixed per day from the prior 20 days (stated assumption), plus a variant with a 5-day prior-window beta for the primary.
 7. **Power (finding 7).** Every verdict prints N, per-trade SD and the smallest detectable effect (CI half-width); a NOT SHOWN is worded "unresolved below the resolution bar", and the which-leg-moved reading is descriptive only.
-8. **Splits (finding 8).** Each of explore and hold-out prints its estimate and CI; SHOWN needs the same-sign point estimates with the hold-out CI lower bound above -0.25 x the explore estimate is NOT used (weak); the rule is both positive and the hold-out half-width reported.
+8. **Splits (finding 8).** Each of explore and hold-out prints its estimate and CI; SHOWN needs both point estimates positive; the hold-out half-width is reported so a thin hold-out is visible.
