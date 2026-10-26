@@ -1,0 +1,119 @@
+<title>My Calls</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&family=Barlow+Semi+Condensed:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout concept: one phone-width column. A big clock first (the time stamped is the time you tap), then direction, level, mode, one line of reason, one Log button; the list of earlier calls underneath, read-only. Dark first. */
+:root {
+  --bg: #0d1117; --panel: #151b24; --line: #2a3340; --fg: #e6ebf2; --muted: #8b97a8; --accent: #f0b429;
+  --long: #3fb27f; --short: #e0674f; --focus: #f0b429;
+  --f-label: "Barlow Semi Condensed", "Arial Narrow", sans-serif; --f-body: "Barlow", system-ui, sans-serif; --f-data: "IBM Plex Mono", ui-monospace, monospace;
+  color-scheme: dark;
+}
+@media (prefers-color-scheme: light) { :root:not([data-theme="dark"]) {
+  --bg: #f4f6f9; --panel: #ffffff; --line: #d3dae4; --fg: #18202b; --muted: #5d6b7e; --accent: #b87a00; --long: #1f8a5c; --short: #c2452d; --focus: #b87a00; color-scheme: light; } }
+:root[data-theme="light"] {
+  --bg: #f4f6f9; --panel: #ffffff; --line: #d3dae4; --fg: #18202b; --muted: #5d6b7e; --accent: #b87a00; --long: #1f8a5c; --short: #c2452d; --focus: #b87a00; color-scheme: light; }
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--fg); font-family: var(--f-body); line-height: 1.45; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); padding-block: 16px 40px; }
+.wrap { max-width: 560px; margin: 0 auto; display: flex; flex-direction: column; gap: 14px; }
+h1 { font-family: var(--f-label); font-weight: 700; font-size: 1.35rem; letter-spacing: 0.02em; margin: 0; }
+.sub { color: var(--muted); font-size: 0.9rem; margin: 2px 0 0; }
+.clock { font-family: var(--f-data); font-size: 2rem; letter-spacing: 0.02em; }
+.clock small { font-size: 0.8rem; color: var(--muted); margin-left: 8px; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 14px; display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+label.k { font-family: var(--f-label); text-transform: uppercase; letter-spacing: 0.08em; font-size: 0.72rem; color: var(--muted); display: block; margin-bottom: 4px; }
+.dir { font-family: var(--f-label); font-weight: 700; font-size: 1.3rem; letter-spacing: 0.05em; padding: 16px 10px; border-radius: 6px; border: 2px solid var(--line); background: transparent; color: var(--fg); cursor: pointer; }
+.dir[data-d="LONG"] { --c: var(--long); } .dir[data-d="SHORT"] { --c: var(--short); }
+.dir[aria-pressed="true"] { background: var(--c); border-color: var(--c); color: var(--bg); }
+input[type="text"], input[type="number"], textarea { width: 100%; background: var(--bg); color: var(--fg); border: 1px solid var(--line); border-radius: 4px; padding: 10px 12px; font-family: var(--f-data); font-size: 1.05rem; }
+textarea { font-family: var(--f-body); font-size: 1rem; min-height: 64px; resize: vertical; }
+.seg { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.seg button { font-family: var(--f-label); font-weight: 600; font-size: 0.95rem; padding: 10px; border-radius: 4px; border: 1.5px solid var(--line); background: transparent; color: var(--fg); cursor: pointer; }
+.seg button[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
+details summary { cursor: pointer; color: var(--muted); font-size: 0.9rem; }
+.log { font-family: var(--f-label); font-weight: 700; font-size: 1.15rem; letter-spacing: 0.05em; padding: 14px; border-radius: 6px; border: 0; background: var(--accent); color: #15110a; cursor: pointer; }
+.log:disabled { opacity: 0.45; cursor: not-allowed; }
+.status { font-size: 0.88rem; color: var(--muted); min-height: 1.3em; }
+.rule { font-size: 0.82rem; color: var(--muted); }
+.list { display: flex; flex-direction: column; gap: 8px; }
+.item { border-top: 1px solid var(--line); padding-top: 8px; font-size: 0.92rem; display: grid; grid-template-columns: auto 1fr; gap: 2px 12px; }
+.item b { font-family: var(--f-data); font-weight: 500; }
+.item .LONG { color: var(--long); } .item .SHORT { color: var(--short); }
+.item .tag { font-family: var(--f-label); text-transform: uppercase; letter-spacing: 0.08em; font-size: 0.7rem; color: var(--accent); }
+.pic { display: flex; flex-wrap: wrap; gap: 6px; } .pic button { font-family: var(--f-label); font-weight: 600; font-size: 0.85rem; padding: 7px 10px; border-radius: 14px; border: 1.5px solid var(--line); background: transparent; color: var(--fg); cursor: pointer; text-align: left; } .pic button[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); background: transparent; }
+.item .chips { grid-column: 1 / -1; color: var(--accent); font-size: 0.8rem; }
+.item .why { grid-column: 1 / -1; color: var(--muted); }
+.item img { max-width: 100%; max-height: 160px; border-radius: 4px; border: 1px solid var(--line); margin-top: 6px; }
+.empty { color: var(--muted); font-size: 0.9rem; }
+.export { display: none; } .export.on { display: flex; flex-direction: column; gap: 8px; } .export textarea { font-family: var(--f-data); font-size: 0.75rem; min-height: 100px; }
+button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+</style>
+
+<div class="wrap">
+  <div><h1>My Calls</h1><p class="sub">Log a level you would take, before you know what happens. The time stamped is the moment you tap Log. If you are writing about something you already saw, tick \"from earlier\". Calls cannot be edited or deleted, and outcomes are not shown here.</p></div>
+  <div class="clock" id="clock" aria-live="off">--:--:--<small>ET</small></div>
+  <div class="card">
+    <div class="row2" id="dirs">
+      <button class="dir" data-d="LONG" aria-pressed="false" id="d-long">LONG</button>
+      <button class="dir" data-d="SHORT" aria-pressed="false" id="d-short">SHORT</button>
+    </div>
+    <div><label class="k" for="level">Level price (needed for a limit entry)</label><input type="number" id="level" inputmode="decimal" step="0.25" placeholder="29033.00"></div>
+    <div><label class="k">Entry</label><div class="seg" id="modes"><button data-m="NOW" aria-pressed="true" id="m-now">Now, at market</button><button data-m="LEVEL" aria-pressed="false" id="m-level">At the level (limit)</button></div></div>
+    <div><label class="k"><input type="checkbox" id="retro"> This is from earlier, not live</label><div id="retrobox" hidden><div class="row2" style="margin-top:8px"><div><label class="k" for="asdate">Date you saw it (ET)</label><input type="text" id="asdate" placeholder="2026-10-26" inputmode="numeric"></div><div><label class="k" for="astime">Time (ET)</label><input type="text" id="astime" placeholder="10:32" inputmode="numeric"></div></div><div class="rule" style="margin-top:6px">Calls from earlier are kept separate and are never used as a test, because you already know what happened. They are used as examples of what you look for. The page still stamps today as the time you wrote it.</div></div></div>
+    <div><label class="k">The picture (tap what applies)</label><div class="pic" id="pic"></div><div style="margin-top:8px"><label class="k" for="appr">Times this level has been approached (optional)</label><input type="number" id="appr" inputmode="numeric" step="1" min="0" placeholder="4"></div></div>
+    <div><label class="k" for="why">Why, in one line</label><textarea id="why" placeholder="e.g. third test of the 4h low, sellers stuffed, volume above normal"></textarea></div>
+    <div><label class="k" for="img">Screenshot (optional, replaces the one-line reason if you are in a hurry)</label><input type="file" id="img" accept="image/*"><div class="rule" id="imgnote"></div></div>
+    <details><summary>Your own stop and target (optional)</summary>
+      <div class="row2" style="margin-top:10px"><div><label class="k" for="stop">Stop price</label><input type="number" id="stop" inputmode="decimal" step="0.25"></div><div><label class="k" for="tgt">Target price</label><input type="number" id="tgt" inputmode="decimal" step="0.25"></div></div>
+    </details>
+    <button class="log" id="log" disabled>Log this call</button>
+    <div class="status" id="status" role="status"></div>
+    <div class="rule">Only log what you would take right now. A call written after you have seen the move cannot be used.</div>
+  </div>
+  <div class="card"><label class="k">Your calls</label><div class="list" id="list"><div class="empty">Nothing logged yet.</div></div></div>
+  <div class="card export" id="export"><label class="k">Not saved to the store</label><div class="status">Copy this text and paste it back to Claude.</div><textarea id="exp" readonly></textarea></div>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const PIC = ['Level defended before (days or weeks)', 'Support or resistance on the 4-hour chart', 'Held the overnight high or low', 'At a 3-month, month or week value area line', 'POC or MGI nearby on the volume chart', 'Big orders stuffed at the level', 'Volume above normal', 'Day and multi-day context agree'];
+const calls = new Map(); const picSel = new Set(); let dir = null, mode = 'NOW', db = null, localOnly = false, writing = false;
+const etParts = (d) => { const p = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' }).formatToParts(d).reduce((m, x) => ((m[x.type] = x.value), m), {}); return { date: `${p.year}-${p.month}-${p.day}`, time: `${p.hour}:${p.minute}:${p.second}` }; };
+function tick() { $('clock').firstChild.nodeValue = etParts(new Date()).time; }
+function esc(s) { return String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
+function storeLocal() { try { localStorage.setItem('my-calls', JSON.stringify([...calls.values()])); } catch (e) {} }
+function loadLocal() { try { for (const r of JSON.parse(localStorage.getItem('my-calls') || '[]')) calls.set(r.id, r); } catch (e) {} }
+function render() {
+  const rows = [...calls.values()].sort((a, b) => (a.loggedAt < b.loggedAt ? 1 : -1));
+  $('list').innerHTML = rows.length ? rows.map((r) => `<div class="item"><b>${esc(r.etDate)} ${esc(r.etTime)}</b><span>${r.retro ? '<span class="tag">from earlier (' + esc(r.asOfDate) + ' ' + esc(r.asOfTime) + ') </span>' : ''}<span class="${r.dir}">${r.dir}</span>${r.level != null ? ' at <b>' + esc(r.level) + '</b>' : ''} · ${r.mode === 'NOW' ? 'now' : 'limit at the level'}${r.stop ? ' · stop ' + esc(r.stop) : ''}${r.target ? ' · target ' + esc(r.target) : ''}</span><span class="chips">${(r.picture || []).map(esc).join(' · ')}${r.approaches != null ? ' · approached ' + esc(r.approaches) + 'x' : ''}</span><span class="why">${esc(r.why || '(screenshot)')}${r.image ? '<br><a href="' + esc(r.image.url) + '" target="_blank" rel="noopener"><img src="' + esc(r.image.url) + '" alt="Screenshot attached to this call"></a>' : ''}</span></div>`).join('') : '<div class="empty">Nothing logged yet.</div>';
+  $('export').classList.toggle('on', localOnly); if (localOnly) $('exp').value = JSON.stringify(rows);
+}
+const retroOk = () => !$('retro').checked || (/^\d{4}-\d{2}-\d{2}$/.test($('asdate').value.trim()) && /^\d{1,2}:\d{2}$/.test($('astime').value.trim()));
+function ready() { $('log').disabled = !(dir && (mode === 'NOW' || $('level').value) && ($('why').value.trim().length > 2 || $('img').files.length > 0) && retroOk()); }
+async function log() {
+  if (writing) return; const level = parseFloat($('level').value); if (!dir || (mode === 'LEVEL' && !isFinite(level))) return; writing = true; $('log').disabled = true;
+  const now = new Date(), e = etParts(now), // the time is stamped here, before any upload
+    num = (id) => { const v = parseFloat($(id).value); return isFinite(v) ? v : null; };
+  let image = null; const file = $('img').files[0];
+  if (file) { try { const assets = await claude.use('assets'); if (assets) { const up = await assets.upload(file); image = { id: up.id, url: up.url }; } else $('imgnote').textContent = 'Screenshot upload is not available here; the call was logged without it.'; } catch (err) { $('imgnote').textContent = 'The screenshot could not be uploaded; the call was logged without it.'; } }
+  const rec = { id: 'c' + now.getTime(), loggedAt: now.toISOString(), etDate: e.date, etTime: e.time, dir, level: isFinite(level) ? level : null, mode, why: $('why').value.trim(), stop: num('stop'), target: num('tgt'), image, picture: [...picSel], approaches: num('appr'), retro: $('retro').checked, asOfDate: $('retro').checked ? $('asdate').value.trim() : null, asOfTime: $('retro').checked ? $('astime').value.trim() : null };
+  calls.set(rec.id, rec); storeLocal();
+  try { if (db) await db.collection('calls').doc(rec.id).set(rec); $('status').textContent = db ? `Logged ${e.time} ET` : 'Saved in this browser only'; }
+  catch (err) { localOnly = true; $('status').textContent = 'Could not save to the store. Your calls are kept in this browser; copy them from the box below.'; }
+  $('why').value = ''; $('stop').value = ''; $('tgt').value = ''; $('img').value = ''; $('appr').value = ''; picSel.clear(); document.querySelectorAll('#pic button').forEach((b) => b.setAttribute('aria-pressed', 'false')); $('retro').checked = false; $('retrobox').hidden = true; $('asdate').value = ''; $('astime').value = ''; writing = false; ready(); render();
+}
+function init() {
+  tick(); setInterval(tick, 1000);
+  $('dirs').addEventListener('click', (e) => { const b = e.target.closest('.dir'); if (!b) return; dir = b.dataset.d; for (const x of document.querySelectorAll('.dir')) x.setAttribute('aria-pressed', String(x === b)); ready(); });
+  $('modes').addEventListener('click', (e) => { const b = e.target.closest('button'); if (!b) return; mode = b.dataset.m; for (const x of document.querySelectorAll('#modes button')) x.setAttribute('aria-pressed', String(x === b)); ready(); });
+  $('level').addEventListener('input', ready); $('why').addEventListener('input', ready); $('img').addEventListener('change', ready); $('retro').addEventListener('change', () => { $('retrobox').hidden = !$('retro').checked; ready(); }); $('asdate').addEventListener('input', ready); $('astime').addEventListener('input', ready); $('log').onclick = log;
+  $('pic').innerHTML = PIC.map((t, i) => `<button type="button" data-i="${i}" aria-pressed="false">${esc(t)}</button>`).join('');
+  $('pic').addEventListener('click', (e) => { const b = e.target.closest('button'); if (!b) return; const t = PIC[+b.dataset.i], on = !picSel.has(t); if (on) picSel.add(t); else picSel.delete(t); b.setAttribute('aria-pressed', String(on)); });
+  loadLocal(); render();
+  (async () => { try { db = (window.claude && window.claude.use) ? await window.claude.use('db') : null; } catch (e) { db = null; }
+    if (!db) { localOnly = true; render(); return; }
+    db.collection('calls').onSnapshot((snap) => { for (const d of snap.docs) if (d.exists) calls.set(d.id, d.data()); render(); }, () => { localOnly = true; render(); }); })();
+}
+init();
+</script>
