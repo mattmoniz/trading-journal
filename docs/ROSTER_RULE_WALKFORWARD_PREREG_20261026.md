@@ -31,3 +31,15 @@ For each t draw |R_t| types uniformly from those testable at t, pool their forwa
 
 ## Records
 `recordClaim()` for the primary result and the first-pass table (positive or negative); `flagDecision()` only if a real fork appears. Nothing here changes live behaviour.
+
+---
+## Amendment 1 (2026-10-26, before the first run) — from the DeepSeek design review (`reports/deepseek_roster_walkforward_prereg_review_2026-10-26.md`)
+Accepted and applied:
+1. **Verdict wording.** The rule's constants were chosen on the full window, so this is a causal replay of an in-sample-designed rule, not an out-of-sample test of it. Every verdict line carries "(rule constants fit on the full window)". A SHOWN would mean "the replayed rule's picks kept earning", not that the rule generalises.
+2. **No same-day lookahead.** R_t is built only from events whose `resolved_at` is at or before t 20:23 ET (the cron time), not all events dated <= t.
+3. **Outcome label.** The forward arm is the mean of DETECTED roster-type events (ACTIVE+SHADOW origin), not realised order P&L; suppression/DOW/capital-override gates are not re-applied. Reported as such.
+4. **Hysteresis seeding.** `prevPassing` stays null until a roster first exists (as the live first run did), then is the real previous passing set (an empty set after that, as live).
+5. **The random-pick placebo is now the PRIMARY comparator.** SHOWN requires: roster pooled per-trade mean above the 97.5th percentile of the placebo, AND in both chronological halves of forward days the roster per-trade mean above that half's placebo median. The roster-minus-other-testable difference (with its day-blocked CI) is demoted to descriptive, because past winners vs everyone-else can look positive from mere non-mean-reversion.
+6. **Not-SHOWN label.** A non-SHOWN result is reported as INCONCLUSIVE with the roster-minus-other difference, its CI half-width (the effect size that could not have been detected) and the placebo's 95% spread together.
+7. **Dropped** the "~2.5% expected by chance" comparison (the pass bar is several correlated conditions); the share of testable types that ever pass is reported alone.
+8. **Secondary table 3** is labelled best-case, i.i.d., ignores day-blocking and selection; it is a floor on the days needed, not a forecast.
