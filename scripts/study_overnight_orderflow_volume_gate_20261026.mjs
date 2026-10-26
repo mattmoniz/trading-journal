@@ -1,0 +1,23 @@
+// User question 2026-10-26: "volume is well above normal, could the system acknowledge it and wait for a confirmation before firing off rotations?"
+// Descriptive/exploratory check on the OVERNIGHT_ORDERFLOW population (N=56 nights, same trades as the calibration): does the relative volume of the 6-9 PM window
+// (the window that sets the direction) separate better from worse nights? Pre-stated before running: relative volume = that window's volume / mean of the same window over the 20
+// prior nights; split at the median of the first 60 percent of nights (no peeking); outcome = capture in points at the calibration's chosen exit (13:30) with the new 300-point protective
+// stop; day-blocked bootstrap on high-minus-low; both chronological halves shown. One test, no sweep, N is thin.
+import { query } from '../server/db.js';
+import { dayBlockedBootstrapCI } from '../server/services/rigorDiagnostics.js';
+import { fetchTrades } from './calibrate_overnight_orderflow_entry.mjs';
+const STOP = 300, EXIT = '13:30', mean = (a) => a.reduce((s, x) => s + x, 0) / a.length;
+const { trades } = await fetchTrades();
+const evening = async (d) => { const prev = new Date(d + 'T00:00:00Z'); prev.setUTCDate(prev.getUTCDate() - 1); const pd = prev.toISOString().slice(0, 10); return (await query(`SELECT COALESCE(SUM(volume),0)::float v FROM price_bars_primary WHERE symbol='NQ' AND ts >= $1 AND ts < $2`, [pd + ' 18:00', pd + ' 21:00'])).rows[0].v; };
+const allDays = (await query(`SELECT DISTINCT trade_date::text d FROM level_prices WHERE trade_date >= '2025-09-01' ORDER BY 1`)).rows.map((r) => r.d), vol = new Map(); for (const d of allDays) vol.set(d, await evening(d));
+const rows = trades.map((t) => { const i = allDays.indexOf(t.tDay), prior = allDays.slice(Math.max(0, i - 20), i).map((d) => vol.get(d)).filter((v) => v > 0); const cap = (stop) => { const mae = t.maeAtExitIdx[EXIT]; return stop !== Infinity && mae >= stop ? -stop : (t.priceAtExit(EXIT) - t.entryPrice) * t.direction; };
+  return { day: t.tDay, ratio: prior.length >= 10 ? vol.get(t.tDay) / mean(prior) : null, cap300: cap(STOP), capNone: cap(Infinity) }; }).filter((r) => Number.isFinite(r.ratio));
+const cut = rows[Math.floor(rows.length * 0.6) - 1].day, med = [...rows.filter((r) => r.day <= cut).map((r) => r.ratio)].sort((a, b) => a - b)[Math.floor(rows.filter((r) => r.day <= cut).length / 2)];
+const hi = rows.filter((r) => r.ratio > med), lo = rows.filter((r) => r.ratio <= med), f = (x) => (x >= 0 ? '+' : '') + x.toFixed(1);
+console.log(`nights ${rows.length} (${rows[0].day}..${rows[rows.length - 1].day}); median 6-9PM relative volume from the first 60 percent = ${med.toFixed(2)}; tonight was ${(40711 / 27331).toFixed(2)}`);
+console.log(`HIGH-volume nights n=${hi.length}: mean capture (300pt stop) ${f(mean(hi.map((r) => r.cap300)))} pt, hit ${(100 * hi.filter((r) => r.cap300 > 0).length / hi.length).toFixed(0)}% | LOW n=${lo.length}: ${f(mean(lo.map((r) => r.cap300)))} pt, hit ${(100 * lo.filter((r) => r.cap300 > 0).length / lo.length).toFixed(0)}%`);
+const boot = (a, b) => { const ev = [...a.map((r) => ({ date: r.day, g: 1, pnl: r.cap300 })), ...b.map((r) => ({ date: r.day, g: 0, pnl: r.cap300 }))]; const days = [...new Set(ev.map((e) => e.date))]; let s = 123456789; const rnd = () => ((s = (s * 1664525 + 1013904223) >>> 0) / 4294967296); const d = []; for (let it = 0; it < 2000; it++) { const pick = days.map(() => days[Math.floor(rnd() * days.length)]); const A = [], B = []; for (const k of pick) for (const e of ev) if (e.date === k) (e.g ? A : B).push(e.pnl); if (A.length && B.length) d.push(mean(A) - mean(B)); } d.sort((x, y) => x - y); return [d[Math.floor(0.025 * d.length)], d[Math.floor(0.975 * d.length)]]; };
+const [lo95, hi95] = boot(hi, lo); console.log(`HIGH minus LOW ${f(mean(hi.map((r) => r.cap300)) - mean(lo.map((r) => r.cap300)))} pt, night-blocked bootstrap CI [${f(lo95)}, ${f(hi95)}]`);
+const h1 = rows.filter((r) => r.day <= cut), h2 = rows.filter((r) => r.day > cut), d1 = mean(h1.filter((r) => r.ratio > med).map((r) => r.cap300)) - mean(h1.filter((r) => r.ratio <= med).map((r) => r.cap300)), d2 = mean(h2.filter((r) => r.ratio > med).map((r) => r.cap300)) - mean(h2.filter((r) => r.ratio <= med).map((r) => r.cap300));
+console.log(`halves (split ${cut}): high minus low ${f(d1)} pt (n ${h1.length}) then ${f(d2)} pt (n ${h2.length}); correlation(ratio, capture) ${(() => { const x = rows.map((r) => r.ratio), y = rows.map((r) => r.cap300), mx = mean(x), my = mean(y); return (x.reduce((s, v, i) => s + (v - mx) * (y[i] - my), 0) / Math.sqrt(x.reduce((s, v) => s + (v - mx) ** 2, 0) * y.reduce((s, v) => s + (v - my) ** 2, 0))).toFixed(3); })()}`);
+process.exit(0);
