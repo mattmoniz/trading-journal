@@ -24,6 +24,10 @@ timed_step daily /usr/bin/node scripts/build_daily_rth_stats.mjs
 # fails loudly in this log if no ES file was written in 3 days (Sierra not running / no ES feed).
 timed_step daily /bin/bash scripts/refresh_es_bars.sh
 
+# Tick volume-at-price refresh (2026-10-26, user: build daily/RTH/Globex profiles off ticks): real volume per 0.25 price per trade date from the Sierra tick files, reconciled to the
+# database volume, for server/services/tickVolumeProfile.js. Idempotent, research data only (nothing live reads it yet; OPEN_DECISION faithful_redo_of_narrowed_user_idea_studies_20261026).
+timed_step daily /bin/bash scripts/refresh_vap_daily.sh
+
 # Overnight tripwire baseline (2026-10-26): per-night cumulative volume and 65-point swing counts at every 30-minute checkpoint, so tonight can be ranked against the prior 60 nights
 # (server/services/overnightTripwire.js). Incremental, ~seconds.
 timed_step daily /usr/bin/node scripts/build_overnight_checkpoint_stats.mjs --days 10
