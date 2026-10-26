@@ -1,0 +1,32 @@
+type              | stored N  $/trade  WR  | tick N  $/trade  WR  | stored-only  tick-only | status proxy (N>=20 and $/trade>0)
+3M_POC_LONG       |    23   +21.6  74% |    14   +12.3  71% |    11     2 | keep -> drop   <== FLIPS
+3M_POC_SHORT      |    18    -7.4  61% |    13   -35.8  54% |     8     3 | drop -> drop
+3M_VAH_LONG       |    74   +18.5  69% |    82   +25.0  73% |     6    14 | keep -> keep
+3M_VAH_SHORT      |    86    +0.7  57% |    78    +0.2  55% |    17     9 | keep -> keep
+3M_VAL_LONG       |    30    -4.6  67% |    26   -18.1  62% |     6     2 | drop -> drop
+3M_VAL_SHORT      |    34   -23.1  56% |    37   -15.4  59% |     1     4 | drop -> drop
+PD_POC_LONG       |   266    +4.3  67% |   271    +6.9  69% |    19    24 | keep -> keep
+PD_POC_SHORT      |   228    -5.2  61% |   234    -5.7  62% |    15    21 | drop -> drop
+PD_VAH_LONG       |   218    -3.7  62% |   219    -4.9  62% |    13    14 | drop -> drop
+PD_VAH_SHORT      |   278    +2.2  61% |   278    -0.7  60% |    15    15 | keep -> drop   <== FLIPS
+PD_VAL_LONG       |   275    -1.2  66% |   285    -1.3  66% |     9    19 | drop -> drop
+PD_VAL_SHORT      |   143    +0.6  66% |   151    +2.9  66% |     3    11 | keep -> keep
+PM_POC_LONG       |    32   -26.3  56% |    33   -17.6  58% |     3     4 | drop -> drop
+PM_POC_SHORT      |    32   +10.0  69% |    33   +18.7  73% |     6     7 | keep -> keep
+PM_VAH_LONG       |    67   +10.7  70% |    66    -1.9  65% |     4     3 | keep -> drop   <== FLIPS
+PM_VAH_SHORT      |    62    +6.0  63% |    64    +0.8  59% |     4     6 | keep -> keep
+PM_VAL_LONG       |    41   +24.5  73% |    40    +4.8  63% |     4     3 | keep -> keep
+PM_VAL_SHORT      |    43   -10.2  58% |    38   -21.8  53% |     6     1 | drop -> drop
+PW_POC_LONG       |    74   +16.2  72% |    72    -9.4  61% |    18    16 | keep -> drop   <== FLIPS
+PW_POC_SHORT      |    60   -13.9  58% |    66    -5.9  64% |     9    15 | drop -> drop
+PW_VAH_LONG       |    62    -8.7  63% |    59   -11.0  59% |    11     8 | drop -> drop
+PW_VAH_SHORT      |    94   +12.5  65% |    93   +14.4  65% |    11    10 | keep -> keep
+PW_VAL_LONG       |    65    +9.1  71% |    69    +4.8  68% |     8    12 | keep -> keep
+PW_VAL_SHORT      |    50    +0.5  68% |    53    -0.0  68% |     6     9 | keep -> drop   <== FLIPS
+
+BY FAMILY and POOLED (mean $ per trade; difference = tick minus stored with date-blocked 95% CI, arms resampled by date)
+3M              stored N   265    +3.3 | tick N   250    +2.9 | tick-stored -0.3 [-19.2,+17.7]  (249 / 247 dates)
+PD              stored N  1408    -0.4 | tick N  1438    -0.5 | tick-stored -0.1 [-9.3,+9.2]  (651 / 670 dates)
+PM              stored N   277    +4.1 | tick N   274    -2.5 | tick-stored -6.6 [-24.5,+11.8]  (249 / 245 dates)
+PW              stored N   405    +4.0 | tick N   412    -0.1 | tick-stored -4.1 [-18.2,+10.3]  (282 / 293 dates)
+ALL 4 FAMILIES  stored N  2355    +1.3 | tick N  2374    -0.3 | tick-stored -1.6 [-9.5,+6.2]  (768 / 784 dates)

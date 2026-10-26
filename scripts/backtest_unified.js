@@ -12,6 +12,7 @@
 //               ZONE_EDGE_FADE, C_REVERSAL, C_PAIRED, TRT_MAH (rare).
 // ═══════════════════════════════════════════════════════════════════════
 
+import fs from 'fs';
 import { query } from '../server/db.js';
 import { computeRigor } from '../server/services/rigorDiagnostics.js';
 import { findTradingDayGaps, classifyOpeningCallType } from '../server/services/queries.js';
@@ -19,6 +20,8 @@ import { findTradingDayGaps, classifyOpeningCallType } from '../server/services/
 const PT     = 2;   // $2/pt NQ micro
 const COMM   = 2;   // $2 round-trip commission ($1/side x2, corrected 2026-08-11 — matches server/config/instruments.js MNQ.commissionPerRoundTrip)
 const DRY_RUN = process.argv.includes('--dry-run');
+// Research hooks (2026-10-26, stored-vs-tick level comparison): UB_LEVELS_TABLE swaps the level source (default the canonical level_prices); UB_DUMP=<path> writes every resolved trade as JSON. Both inert unless set.
+const LEVELS_TABLE = /^[a-z0-9_]+$/.test(process.env.UB_LEVELS_TABLE || '') ? process.env.UB_LEVELS_TABLE : 'level_prices';
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 const mean = arr => arr.length ? arr.reduce((a,b)=>a+b,0)/arr.length : null;
@@ -1044,7 +1047,7 @@ async function main() {
   // Batch load all level_prices for the full date range — single query.
   // These are the canonical static levels; inline-computed values are used as fallback.
   const lpResult = await query(
-    `SELECT trade_date::text, level_name, price::float FROM level_prices WHERE trade_date >= $1 AND trade_date <= $2`,
+    `SELECT trade_date::text, level_name, price::float FROM ${LEVELS_TABLE} WHERE trade_date >= $1 AND trade_date <= $2`,
     [dates[0], dates[dates.length - 1]]
   );
   const levelPricesByDate = new Map();
@@ -1425,6 +1428,7 @@ async function main() {
     'MS2':       ['MS2_LONG',       'MS2_SHORT'],
   };
 
+  if (process.env.UB_DUMP) fs.writeFileSync(process.env.UB_DUMP, JSON.stringify(Object.fromEntries(allTrades)));
   const sysBacktestPromises = [];
   if (!DRY_RUN) {
     console.log('\n── SYSTEM_BACKTEST (combined direction) ──────────────────────────────────');
