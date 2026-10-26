@@ -102,3 +102,9 @@ export async function loadLevels() {
   const tab = {}; for (const r of lvRows) { const [f, k] = r.n.split('_'); ((tab[f] ||= new Map()).get(r.d) || tab[f].set(r.d, {}).get(r.d))[k] = r.p; }
   return (f, mirror) => { const ds = [...tab[f].keys()].sort(), cache = new Map(); return (td) => { if (cache.has(td)) return cache.get(td); let lo = 0, hi = ds.length; while (lo < hi) { const m = (lo + hi) >> 1; if (ds[m] >= td) hi = m; else lo = m + 1; } const r = lo < ds.length ? tab[f].get(ds[lo]) : null; const v = r && r.VAL != null && r.POC != null && r.VAH != null ? (mirror ? { val: -r.VAH, poc: -r.POC } : { val: r.VAL, poc: r.POC }) : null; cache.set(td, v); return v; }; };
 }
+
+// Bar utilities shared by the entry-family studies (the entry study keeps identical private copies from before this extraction; a later cleanup can switch it over).
+export const emOf = (ts) => Date.UTC(+ts.slice(0, 4), +ts.slice(5, 7) - 1, +ts.slice(8, 10), +ts.slice(11, 13), +ts.slice(14, 16)) / 60000;
+export function indexBars(B) { B.EM = B.T.map(emOf); B.byEm = new Map(B.EM.map((m, i) => [m, i])); return B; }
+// forward return of an entry at the open of bar i0, measured at the close of the bar h-1 minutes later, in units a; null if that bar is missing
+export function fwdRet(B, i0, h, a) { const j = B.byEm.get(B.EM[i0] + h - 1); return j === undefined ? null : (B.C[j] - B.O[i0]) / a; }
