@@ -23,7 +23,7 @@ async function main() {
     // RTH 5-minute closes up to the bar ending 15:55
     const five = []; for (let i = D.rs; i <= D.re; i++) { const c = clock(NQ.T[i]), j = Math.floor((c - 570) / 5); if (c >= 955) break; (five[j] ||= { start: 570 + 5 * j }).close = NQ.C[i]; }
     let tb = -1; for (let j = 1; j < five.length; j++) if (five[j] && five[j].start >= 575 && five[j].close > onh) { tb = j; break; }
-    const band = 0.02 * sc; let held = tb >= 0 && five[tb].start <= 720; if (held) for (let j = tb + 1; j < five.length; j++) if (five[j] && five[j].close < onh - band) { held = false; break; } if (held && !(five[five.length - 1].close > onh)) held = false;
+    const band = 0.02 * sc; let held = tb >= 0 && five[tb].start <= 720; if (held) for (let j = tb + 1; j < five.length; j++) if (five[j] && five[j].close < onh - band && (!process.env.RECLAIM || five[j].start > 720)) { held = false; break; } if (held && !(five[five.length - 1].close > onh)) held = false; // RECLAIM=1: a retest below the ONH is allowed until 12:00 (post-hoc sensitivity, descriptive only)
     let rthLow = Infinity; for (let i = D.rs; i <= D.re; i++) rthLow = Math.min(rthLow, NQ.L[i]);
     let e0 = -1; for (let i = D.re; i >= D.rs && i > D.re - 12; i--) if (clock(NQ.T[i]) === 956) e0 = i; if (e0 < 0) { for (let i = D.re; i >= D.rs; i--) { if (clock(NQ.T[i]) >= 956) e0 = i; else break; } }
     // forward exit: next trade date's 15:55 bar
