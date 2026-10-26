@@ -1,8 +1,9 @@
 // Independent sanity checks of the loaded ES bars (price_bars_es / es_front_calendar). Re-run after any new load.  node scripts/verify_es_bars_20261026.mjs
 import { query } from '../server/db.js';
 const q = async (sql, p) => (await query(sql, p)).rows;
-const FROM = '2023-03-06', TO = '2025-12-19';
+const FROM = '2023-03-06', TO = '2026-10-23';
 console.log('== per contract'); for (const r of await q(`SELECT contract, COUNT(*)::int n, MIN(ts)::text a, MAX(ts)::text b, MIN(low)::float lo, MAX(high)::float hi FROM price_bars_es GROUP BY contract ORDER BY MIN(ts)`)) console.log(`  ${r.contract}: ${r.n} bars ${r.a.slice(0, 16)} -> ${r.b.slice(0, 16)} price ${r.lo}..${r.hi}`);
+console.log('== thin front-month days (rth_minutes < 371):', (await q(`SELECT COUNT(*)::int n, MIN(trade_date)::text a, MAX(trade_date)::text b FROM es_front_calendar WHERE rth_minutes IS NOT NULL AND rth_minutes < 371`))[0]);
 console.log('== roll calendar'); console.log('  ', (await q(`SELECT trade_date::text d, contract FROM es_front_calendar WHERE is_roll_day ORDER BY 1`)).map((r) => `${r.d}->${r.contract}`).join('  '));
 // coverage vs NQ RTH days (explicit lower AND upper bounds on the NQ view)
 const nq = new Map((await q(`SELECT ts::date::text d, COUNT(*)::int n FROM price_bars_primary WHERE symbol='NQ' AND ts >= $1::date AND ts < ($2::date + 1) AND ts::time >= '09:30' AND ts::time < '16:00' GROUP BY 1`, [FROM, TO])).map((r) => [r.d, r.n]));
