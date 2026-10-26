@@ -6,7 +6,7 @@ import { hashSeed, mulberry32 } from '../server/services/rigorDiagnostics.js';
 import { loadBars, prep, indexBars, clock, mean, walk } from './lib/floorEngine.mjs';
 import { d20Of } from './lib/fourHourLevels.mjs';
 import { COST, PTV, NDRAW, ci, fmt, dc, median } from './lib/exitSim.mjs';
-const calls = JSON.parse(fs.readFileSync(process.argv[2], 'utf8')).sort((a, b) => (a.loggedAt < b.loggedAt ? -1 : 1));
+const rawCalls = JSON.parse(fs.readFileSync(process.argv[2], 'utf8')), INCL_RETRO = process.argv.includes('--include-retro'), calls = rawCalls.filter((c) => INCL_RETRO || !c.retro).sort((a, b) => (a.loggedAt < b.loggedAt ? -1 : 1));
 const f = (x, d = 3) => (Number.isFinite(x) ? (x >= 0 ? '+' : '') + x.toFixed(d) : 'n/a'), HZ = [15, 60, 240];
 async function main() {
   const endRow = (await query(`SELECT (MAX(ts)::date)::text d FROM price_bars_primary WHERE symbol='NQ' AND ts >= CURRENT_DATE - 7 AND ts < CURRENT_DATE + 1`)).rows[0].d;
@@ -27,7 +27,7 @@ async function main() {
     if (c.stop || c.target) { const cap2 = NQ.byEm.get(NQ.EM[i0] + 1439); if (cap2 !== undefined) { const sd = c.stop ? Math.abs(entry - c.stop) : Infinity, tg = c.target ? Math.abs(c.target - entry) : Infinity; r.own = walk(NQ, i0, dir, entry, sd, tg, cap2).pts - COST; } }
     rows.push(r);
   }
-  const done = rows.filter((r) => !r.pending && r.a); console.log(`calls ${calls.length}: scored ${done.length}, NOT_FILLED ${notFilled.length}, pending (too recent) ${rows.filter((r) => r.pending).length}; distinct dates ${new Set(done.map((r) => r.td)).size}`);
+  const done = rows.filter((r) => !r.pending && r.a); console.log(`${rawCalls.length - calls.length} calls marked 'from earlier' (retrospective) excluded${INCL_RETRO ? ' -- NOT excluded, descriptive hindsight run' : ''}; calls ${calls.length}: scored ${done.length}, NOT_FILLED ${notFilled.length}, pending (too recent) ${rows.filter((r) => r.pending).length}; distinct dates ${new Set(done.map((r) => r.td)).size}`);
   const items = (k) => done.filter((r) => r.ax[k] != null).map((r) => ({ day: r.td, v: r.ax[k] }));
   for (const h of HZ) { const it = items(h); if (it.length >= 5) console.log(`${h === 60 ? 'PRIMARY ' : 'descriptive '}exit-free excess at ${h} min: n ${it.length} mean ${f(mean(it.map((x) => x.v)))} D20 ${fmt(mean(it.map((x) => x.v)), ci(it, 0.025, 'mycalls' + h)).split(' ').slice(1).join(' ')} (95% date-blocked)`); }
   const mM = done.filter((r) => r.M != null); if (mM.length >= 5) console.log(`descriptive moonshot M: n ${mM.length}, mean ${f(mean(mM.map((r) => r.M)), 1)} pts (${f(mean(mM.map((r) => r.M)) * PTV, 0)} dollars), median ${f(median(mM.map((r) => r.M)), 1)}; excess vs blind ${f(mean(mM.filter((r) => r.Mx != null).map((r) => r.Mx)), 1)}`);
