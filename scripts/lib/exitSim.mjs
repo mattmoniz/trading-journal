@@ -2,10 +2,10 @@
 import { clock, mean, walk } from './floorEngine.mjs';
 export const COST = 1.5, PTV = 2, NDRAW = 30; // points per trade, MNQ dollars per point, controls per event
 export const ARMS = { M: { stop: 0.5, hold: 1440 }, S25: { stop: 0.25, hold: 1440 }, S100: { stop: 1.0, hold: 1440 }, H240: { stop: 0.5, hold: 240 }, H2880: { stop: 0.5, hold: 2880 }, T100: { stop: 0.5, hold: 2880, tgt: 1.0 }, STRUCT: { struct: true, hold: 1440 }, FREE: { stop: null, hold: 1440 }, M_LEN: { stop: 0.5, hold: 1440, lenient: true }, FREE_LEN: { stop: null, hold: 1440, lenient: true } };
-export function makeSim(NQ) {
+export function makeSim(NQ, cost = COST) { // cost in price points per trade (default the NQ/MNQ 1.5; the ES replication passes its own)
   // lenient = exit at the last bar at or before the target minute (maintenance gap, weekend)
   const capOf = (i0, hold, lenient) => { let cap = NQ.byEm.get(NQ.EM[i0] + hold - 1); if (cap === undefined && lenient) for (let m = NQ.EM[i0] + hold - 2; m > NQ.EM[i0] + 60 && cap === undefined; m--) cap = NQ.byEm.get(m); return cap; };
-  const run = (i0, dir, stopPts, tgtPts, arm) => { const cap = capOf(i0, arm.hold, arm.lenient); if (cap === undefined) return null; const r = walk(NQ, i0, dir, NQ.O[i0], stopPts, tgtPts, cap); return { pnl: r.pts - COST, res: r.res }; };
+  const run = (i0, dir, stopPts, tgtPts, arm) => { const cap = capOf(i0, arm.hold, arm.lenient); if (cap === undefined) return null; const r = walk(NQ, i0, dir, NQ.O[i0], stopPts, tgtPts, cap); return { pnl: r.pts - cost, res: r.res }; };
   const stopOf = (e, arm) => (arm.struct ? Math.max(1, e.dir > 0 ? NQ.O[e.i0] - (e.level - e.band) : e.level + e.band - NQ.O[e.i0]) : arm.stop == null ? Infinity : arm.stop * e.d20);
   const strictOK = (e) => NQ.byEm.get(NQ.EM[e.i0] + 1439) !== undefined;
   return { capOf, run, stopOf, strictOK };
