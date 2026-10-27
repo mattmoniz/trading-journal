@@ -54,3 +54,28 @@ Prompted by the user's question "does this test all three scenarios?". It did no
 **Counted families:** A, B, C, D are four separate families, each Bonferroni over its 2 cells (RTH, Globex). Fade-with-price-level-features on RUN-vs-HELD level touches (scope Amendment 2's first experiment) and the delta / imbalance variants remain separate, later tests.
 
 **Order of work (replaces the earlier list):** loader and event lists for A, B, C, D; print every arm's event count; append the counts as an amendment; run A, B, C, D once each; record claims; flag the forward look for all four.
+
+---
+## Amendment 2 (2026-10-27 15:40 ET, before any event or outcome) — DeepSeek review of Tests C and D (`reports/deepseek_vbp_hold_bail_fade_review_2026-10-27_raw.md`), each point checked against the text
+**Why this review exists:** the earlier DeepSeek request asked only for the three entry-type tests; Test D (hold/bail) was my own design and had no independent review. This one was asked directly.
+
+**Test D is replaced by Test D' (DeepSeek's critique accepted).** The original compared the re-entry arm with blind unconditional drift, so its primary population was a surviving subset (positions that came back inside) with no matched peer; and one decision per position tested only the single "re-entered, bail" rule.
+- Population: Test A breakout positions (entry per Test A, standardised, no stop or target), followed cell by cell for at most 8 completed cells after entry (a frozen limit, same status as the other chosen constants).
+- Decisions: one per position per STATE CHANGE, so decisions never overlap: S1 = the first completed cell that closes back inside the node edge; S2 = the first completed cell after entry that closes outside with HIGH outside density (Test A's measure, same tercile cut).
+- Outcome at each decision: the incremental signed move over the next 60 minutes from the next open (what holding from that point earns; H4 units), reported with the maximum adverse excursion against the original direction over the same 60 minutes. Descriptive: the share of positions whose open profit at the decision is fully given back within 60 minutes.
+- Comparison arm: positions still open and OUTSIDE the edge at the SAME number of cells since entry, so both arms have survived to the same offset (a like-for-like state comparison instead of a blind-drift contrast).
+- **Primary statistic (one):** at S1, mean incremental 60-minute signed move of the re-entered arm minus the matched still-outside arm (per-trade means as sum over N, day-blocked interval); the bail rule is supported only if the one-sided 97.5 percent UPPER bound is below 0 (counted cells: RTH, Globex). **Deviation from DeepSeek, stated:** DeepSeek preferred give-back or MAE to a stop as the outcome; the primary stays the incremental move (what holding earns) with MAE reported beside it, because the house rule is one primary statistic and the move is the quantity the user's "bail" question turns on. The S2 hold read (HIGH versus LOW density at the same offset, incremental move) is a descriptive secondary.
+
+**Test C is changed (DeepSeek's critique accepted in part).**
+- Population restricted to nodes whose peak is NOT within `0.5 x H4` of a named POC line; POC-coincident nodes are descriptive only (there, the fade is the already-tested POC fade under another name).
+- Primary contrast becomes the fade in the back-inside arm minus the fade in the no-back-inside arm (breakout cells that did not close back inside by the next cell, entered at the same offset in the fade direction); the blind same-clock matched-geometry arm is secondary.
+- Primary outcome becomes the signed move toward the peak in H4 units at 60 minutes (reach rate alone flatters a fade whose target is near and whose natural stop is far); reach rate and an expectancy using the node's far edge as the stop are reported beside it.
+- **Deviation from DeepSeek, stated:** it advised not running C at all on this spent history. C is kept, run after A and D', only on non-POC nodes, because that restriction answers its stated reason (a relabelled POC fade); it stays a screen.
+
+**Test B:** unchanged; run third, UNDERPOWERED if under 30 events or 20 dates.
+
+**A unified design (not adopted now):** DeepSeek proposed one regression of the signed 60-minute move on profile state at state changes, deriving engage / fade / hold / bail from the sign of the forecast. Not adopted: it contradicts its own earlier round (the three actions must differ in sign or they are one effect), it cannot see stop or risk asymmetry, and it adds covariates and a slope definition not yet pre-registered. Kept as a later analysis, considered only if A or D' shows signal.
+
+**Order of work (replaces the earlier list):** loader and event lists for A, B, C, D'; print every arm's event count; append them as an amendment; run A, then D', then B, then C, each once; record claims; flag the forward look for all.
+
+**Practitioner claims DeepSeek ranked testable but not yet in any pre-registered test:** the point of control migrating with price (hold), volume drying up at the extreme (bail or fade), a low-volume pocket behind price. Diagonal imbalances read as AGGRESSION are testable from tick bid/ask by price at finer than 30-minute resolution (not yet built); read as "resting liquidity" they need market depth, which has no reader here.
