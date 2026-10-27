@@ -40,3 +40,20 @@ export async function getDailyProfiles(queryFn, { startDate, endDate, session = 
   const by = new Map(); for (const x of r.rows) (by.get(x.d) || by.set(x.d, []).get(x.d)).push(x);
   const out = {}; for (const [d, rows] of by) out[d] = profileFromRows(rows); return out;
 }
+
+// Per-bar profiles (the Sierra "one value area and POC per bar" picture) from the 30-minute cells (volume_at_price_30m): bars of `barMinutes` (30, 60, 120, 240, ...) aligned to the 18:00 ET session
+// open, so a 240-minute bar is 18:00-22:00, 22:00-02:00, ... Returns [{ start ('YYYY-MM-DD HH:MM' ET), poc, vah, val, high, low, totalVolume, width }] in time order. Bars are never merged across the
+// 17:00-18:00 maintenance hour (a session's last bar simply ends at 17:00). startDate/endDate are ET calendar dates covering the bars wanted (inclusive of the evening before).
+export async function getBarProfiles(queryFn, { startTs, endTs, barMinutes = 60 }) {
+  const r = await queryFn(`SELECT to_char(bar_start, 'YYYY-MM-DD HH24:MI') AS t, price::float AS price, vol::float AS vol FROM volume_at_price_30m WHERE bar_start >= $1::timestamp AND bar_start < $2::timestamp ORDER BY bar_start`, [startTs, endTs]);
+  const groups = new Map();
+  for (const x of r.rows) {
+    const hh = +x.t.slice(11, 13), mm = +x.t.slice(14, 16), m = hh * 60 + mm, e = m >= 1080 ? m - 1080 : m + 360; // minutes since the session's 18:00 anchor
+    const k = Math.floor(e / barMinutes), startE = k * barMinutes, anchorMs = Date.UTC(+x.t.slice(0, 4), +x.t.slice(5, 7) - 1, +x.t.slice(8, 10), hh, mm) - e * 60000; // anchor = that session's 18:00 (as a naive UTC clock)
+    const s = new Date(anchorMs + startE * 60000).toISOString().slice(0, 16).replace('T', ' ');
+    let g = groups.get(s); if (!g) groups.set(s, (g = [])); g.push(x);
+  }
+  const out = [];
+  for (const [start, rows] of [...groups].sort((a, b) => (a[0] < b[0] ? -1 : 1))) { const p = profileFromRows(rows); if (p) out.push({ start, ...p, width: +(p.vah - p.val).toFixed(2) }); }
+  return out;
+}
