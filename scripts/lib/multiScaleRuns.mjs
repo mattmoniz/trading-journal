@@ -15,6 +15,6 @@ export function multiScaleEvents(NQ, h4ByTd, { scales = [60, 120, 240], bandMult
   }
   all.sort((a, b) => a.em - b.em);
   const out = [];
-  for (const e of all) { const dup = out.find((o) => o.side === e.side && e.em - o.em <= mergeMinutes && Math.abs(o.extreme - e.extreme) <= mergeBand * e.H4); if (dup) { dup.scales.push(e.scale); continue; } out.push({ ...e, scales: [e.scale] }); }
+  for (const e of all) { const dup = out.find((o) => o.side === e.side && e.em - o.em <= mergeMinutes && Math.abs(o.extreme - e.extreme) <= mergeBand * o.H4); if (dup) { dup.scales.push(e.scale); continue; } out.push({ ...e, scales: [e.scale] }); }
   return out;
 }
