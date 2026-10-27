@@ -58,6 +58,7 @@ async function main() {
   const conf = {}; for (const e of events) { const k = Math.min(e.lines.length, 4) + ' lines'; conf[k] = (conf[k] || 0) + 1; } console.log('period lines per event:', JSON.stringify(conf));
   const byLine = {}; for (const e of events) for (const l of e.lines) byLine[l] = (byLine[l] || 0) + 1; console.log('events by line:', JSON.stringify(byLine));
   const byYear = {}; for (const e of events) byYear[e.td.slice(0, 7)] = (byYear[e.td.slice(0, 7)] || 0) + 1; console.log('events by month:', JSON.stringify(byYear));
+  fs.writeFileSync('scratch/defended_lines_by_date_20261026.json', JSON.stringify(Object.fromEntries([...memo].map(([d, ls]) => [d, ls.map((x) => [x.name, +x.price.toFixed(2)])]))));
   fs.writeFileSync(`scratch/defended_events_band${BAND_MULT}_20261026.json`, JSON.stringify({ endRow, band: BAND_MULT, events }));
   fs.writeFileSync('scratch/defended_bars_20261026.json', JSON.stringify(bars.map((b) => [b.td, NQ.T[b.i0], b.O, b.H, b.L, b.C, b.V, b.relBase ? +(b.V / b.relBase).toFixed(2) : null])));
 }
