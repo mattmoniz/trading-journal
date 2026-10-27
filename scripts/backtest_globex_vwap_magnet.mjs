@@ -80,7 +80,7 @@ async function run() {
       const res = resolve(bars, i, direction, entry, stop, target, 1440);
       const resolution = res.result === 'EXPIRED' ? 'TIME_EXPIRED' : res.result;
       const status = resolution === 'TIME_EXPIRED' ? 'EXPIRED' : 'RESOLVED';
-      const pnl = res.result === 'EXPIRED' ? 0 : res.pnl;
+      const pnl = res.result === 'EXPIRED' ? 0 : res.pnl; // LEGACY: scores a time-expiry at 0; after any regeneration run scripts/repair_backfill_time_expired_mtm_20261027.mjs --commit (marks to market, idempotent)
       const resolvedIdx = Math.min(bars.length - 1, i + Math.max(1, res.barsHeld));
       const resolvedAt = resolution === 'TIME_EXPIRED' ? null : bars[resolvedIdx].ts;
 

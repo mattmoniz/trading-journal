@@ -78,7 +78,7 @@ async function run() {
             const target = isLong ? entry + 20 : entry - 20;
 
             const res = resolve(bars, i, direction, entry, stop, target, 240);
-            const pnl = res.result === 'EXPIRED' ? 0 : res.pnl;
+            const pnl = res.result === 'EXPIRED' ? 0 : res.pnl; // LEGACY: scores a time-expiry at 0; after any regeneration run scripts/repair_backfill_time_expired_mtm_20261027.mjs --commit (marks to market, idempotent)
             
             globalTrades++;
             globalPnl += (pnl * 20); // Standard NQ contract ($20/pt)

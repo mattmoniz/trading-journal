@@ -225,7 +225,7 @@ for (const date of dates) {
     let pnl = null;
     if (resolution === 'TARGET_HIT') pnl = Math.round((params.t1Dist * PT - COMM) * 100) / 100;
     if (resolution === 'STOP_HIT') pnl = Math.round((-params.stopDist * PT - COMM) * 100) / 100;
-    if (resolution === 'TIME_EXPIRED') pnl = 0;
+    if (resolution === 'TIME_EXPIRED') pnl = 0; // LEGACY: scores a time-expiry at 0; after any regeneration run scripts/repair_backfill_time_expired_mtm_20261027.mjs --commit (marks to market, idempotent)
     const status = resolution === 'TIME_EXPIRED' ? 'EXPIRED' : 'RESOLVED';
     const setupType = `${f.levelName}_FADE_${f.dir}`;
     const t1Label = `T1: ${params.t1Dist}pt (p50 MFE) | Stop: ${params.stopDist}pt (p75 MAE) [first-touch-anytime, data-derived]`;

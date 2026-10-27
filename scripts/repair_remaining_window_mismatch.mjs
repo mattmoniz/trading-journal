@@ -164,7 +164,7 @@ for (const date of dates) {
     let pnl = null;
     if (resolution === 'TARGET_HIT') pnl = Math.round((t1Dist * PT - COMM) * 100) / 100;
     if (resolution === 'STOP_HIT') pnl = Math.round((-stopDist * PT - COMM) * 100) / 100;
-    if (resolution === 'TIME_EXPIRED') pnl = 0;
+    if (resolution === 'TIME_EXPIRED') pnl = 0; // LEGACY: scores a time-expiry at 0; after any regeneration run scripts/repair_backfill_time_expired_mtm_20261027.mjs --commit (marks to market, idempotent)
     const status = resolution === 'TIME_EXPIRED' ? 'EXPIRED' : 'RESOLVED';
     const pa = perfParams[fire.levelName] || {};
     const expiresAt = `${date} 16:00:00`;
