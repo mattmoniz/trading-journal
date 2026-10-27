@@ -1,0 +1,30 @@
+# Pre-registration: volume-by-price + stationary-kinematics veto filter for the RTH structural-level fades, and the breakout flip — 2026-10-27
+
+Written BEFORE any feature or outcome was computed. Origin: the user's 4-step pipeline (8 features at bar t-1, buckets A/B/C, constrained single-feature sweep, four veto rules, breakout flip), executed as specified. This document records only (a) how ambiguous spec points were implemented and (b) the audit layer added beside the requested tables. Nothing in the user's spec is dropped.
+
+## Population (the "unfiltered baseline strategy")
+`active_setups` rows with `origin_status='BACKFILL'` (the simulated baseline strategy, NOT an account record; the only rows that store the level price in `structural_level_touched`), `is_rth`, `%FADE%`, not `%OVERNIGHT%`, cluster primaries (or null), none of the five `*_basis` flags, resolution TARGET_HIT / STOP_HIT / TIME_EXPIRED, direction by `resolveDirection()`, fired 09:35-15:59 ET, roll weeks and the sparse window 2025-09-28..2025-11-19 excluded, and the fired-minute bar must contain the entry price (integrity check, mismatches dropped and counted). Net_PnL = stored `actual_pnl` (backfill carries $1 per trade commission; flips use the same $1 so the comparison is like-for-like; the real figure is $2).
+
+## Implementation choices where the spec is silent
+1. Features are computed from 1-minute NQ bars (`price_bars_primary`) of the SAME trade date's RTH session only (09:30 on), strictly through bar t-1 where t = the fired minute. Windows are truncated to `min(W, bars_elapsed)`; at least 5 session bars required (09:35 onward).
+2. dPOC_prev: lag = min(30, bars_elapsed - 5); NaN if lag < 3. The migration is NOT rescaled to a 30-minute equivalent (disclosed; early-session trades therefore see smaller migrations).
+3. Profile: bin 1.0 point, each bar's volume spread uniformly over the bins from floor(Low) to floor(High). Zone volumes use fractional bin overlap. POC ties: lowest bin.
+4. ATR_14 uses session bars only (fewer than 14 early), floored at 1e-6.
+5. Direction: Trade_Dir from `resolveDirection`, Approach_Sign = -Trade_Dir, level L = `structural_level_touched`.
+6. Buckets: A = Net_PnL > 0. B = Net_PnL <= 0, STOP_HIT, MFE >= 0.5 x stop distance. C = Net_PnL <= 0, STOP_HIT, MFE < 0.5 x stop distance. **Deviation:** TIME_EXPIRED rows (Net_PnL exactly 0) are a "flat" group, kept in the baseline totals but outside A/B/C, because nothing blew through the level. Stop distance = |entry - stop_level|.
+7. Table 3 direction of each veto is the one the spec names (high is bad for features 1,3,4,5,6,7; low is bad for 2 and 8). The best cutoff keeping <= 15 percent of A is the A quantile (closed form, the blocked share of C only falls as the cutoff rises).
+8. Rule 4: top 2 Group-1 and top 1 Group-2 features by the Table 3 ratio; veto = OR of the three at their Table 3 cutoffs; if the union kills > 20 percent of A, every feature's allowed A-kill share is lowered in 1-point steps until it is <= 20 percent.
+9. Max drawdown on the cumulative P&L in fired_at order (single stream; this ignores that the live roster can hold parallel positions).
+10. Flip (Step 4): vetoed set = Rule 4. Direction reversed, same stop distance, targets 1R / 1.5R / 2R, plus a trailing exit (close crosses the 20-bar regression line, filled at the next open) with the initial stop. Two entry variants: (i) at the fade's entry price at bar t (the spec; optimistic: no break confirmation), (ii) break-confirmed: the first 1-minute close beyond L in the approach direction within 30 bars, entry at the next open. Realistic fills: a stop gapped through fills at that bar's open; stop checked before target in the same bar; on the entry bar only the stop is checked. Time exit at the 15:59 close.
+
+## Audit layer added (the tables above are still printed exactly as asked)
+- **Hold-out:** all fitted quantities (S_75, Table 3 cutoffs, Rule 4 composition and cutoffs) re-derived on the earlier 60 percent of trade dates and applied to the later 40 percent (Table 4b). Rules 1-2 and the Rule 3 constants have fixed numbers from the spec, but S_75 is fit.
+- **Does the veto remove below-average trades?** For each rule, vetoed average P&L minus the all-trade average with a date-blocked bootstrap interval (a random veto has expected difference 0).
+- **Random-veto placebo** for the flip (same count of random fades flipped) and for Rule 4 (same count vetoed at random).
+- Trade-level correlation: backfill has many near-duplicate setup_types per touch, so intervals are date-blocked and Mann-Whitney p-values are reported as descriptive only.
+
+## What counts as "the filter works" (fixed now)
+Held-out (later 40 percent): the vetoed trades' average P&L is below the all-trade average with the one-sided 97.5 percent date-blocked bound below 0, AND winners killed <= 20 percent, AND steamrolls blocked share exceeds winners killed share. In-sample-only success is reported as in-sample. "The flip is viable" only if the held-out flipped trades net positive with the 97.5 percent lower bound above 0 AND beat the random-flip placebo. A null is stated with the resolution reached, not as proof the idea is wrong.
+
+## Scope not covered (flagged, not skipped silently)
+Globex/overnight: the baseline's Globex rows carry no level price (15 backfill rows), so the RTH-only result cannot be extended; decision `vbp_trend_filter_globex_untested_20261027`. Live ACTIVE/SHADOW rows also lack the level price and are not used.
