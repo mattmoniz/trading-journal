@@ -34,3 +34,24 @@ Both tests: the same rules on events dated 2026-10-28 or later, one look at 150 
 
 ## Order of work
 1. DeepSeek design review (requested), amend this document. 2. Build the per-bar point-of-control loader and the level-memory engine; print event counts per arm; append as an amendment. 3. Run Test E, then Test F, once each; record each claim with `recordClaim`; flag the forward looks. These come after Tests A, D', B, C of `docs/VBP_ACCEPTANCE_REENTRY_PREREG_20261027.md` unless the user says otherwise.
+
+---
+## Amendment 1 (2026-10-27 15:25 ET, before any event is built) — DeepSeek design review (`reports/deepseek_poc_migration_multiweek_review_2026-10-27_raw.md`), each point checked against the text above
+**Accepted and changed**
+- **Test E object (1a).** The user reads the composite profile beside the candles, so the primary object is the COMPOSITE point of control, not a single four-hour bar's. Composite = all completed 30-minute cells of the last 5 trade dates plus the current trade date's completed cells (`getPeriodProfile`, all-session; 5 days is a chosen, frozen length). Updated at each completed four-hour bar. The per-bar point of control becomes descriptive only.
+- **Control (1b).** A single bar's point of control sits near its own close in a trend, so "migrated" would mean "trended" and the matched arm would be nearly empty. The composite point of control accumulates over days and is not tied to the last close, so both arms exist; the matched arm stays (same net price change over the same window, within one tercile of H4 distance, point of control below the cut). **First look before any outcome:** the distribution of the migration measure, the share of events in the migrated arm, and the matched arm's balance on price change and its size (stop and report if either arm has fewer than 30 events).
+- **Window and cut (1c).** Migration = change in composite POC over the last 3 completed four-hour bars, in H4 units, at or above the trailing-60-session 75th percentile of the same signed quantity (the frozen primary). A descriptive sweep over composite length (3, 5, 10 days) and cut (50, 75, 90) is printed and never used to choose the primary.
+- **Close-side condition (1d)** dropped.
+- **Overlap (1e).** One event per episode: no event within 3 completed bars (12 hours) of the previous one in the same direction; the overlap share and a non-overlapping subset are printed.
+- **The user's own case (1b, second fix).** Descriptive stratum, not counted: composite point of control migrating while price is within the floor band.
+- **Test F control (2a, 2c).** The counted control becomes events of the SAME level age (bars since birth, within one tercile) that are the 1st or 2nd approach, so approach count is isolated from "the level has survived". Fresh-extreme births become descriptive.
+- **Approach separation (2b):** a separating bar must have its low above the band top by at least `0.25 x H4` (chosen, frozen); the gap distribution is printed first.
+- **One event per level (2d):** the primary is the 3rd approach only; the 4th and 5th are a descriptive within-level gradient, counted as levels, not events.
+- **One effect counted twice (3).** E and F are two zooms of one idea (price turns at a floor and the profile follows). They are pre-registered as ONE family of 4 counted cells (E: Globex, RTH; F: floors, tops), Bonferroni over 4 (one-sided 98.75 percent bound). If both pass, report one corroborated effect, not two.
+
+**Not accepted as written (stated)**
+- **Survivorship as a mechanical bias (2a).** DeepSeek says a level that has survived 3 approaches has an upward-biased outcome window. Survival BEFORE the decision is known at decision time, so it does not mechanically bias the forward move; the real problem is comparability with fresh births (different regime and age). I accept the control change for that reason but not the claim of mechanical bias.
+- **Session arms (1f).** DeepSeek proposed pooling with a session covariate. Kept as two counted cells defined by the session the DECISION and entry fall in (that is what a trader acts on, and the project's both-windows rule asks for both); the share of each event's migration window that lies in Globex minutes is printed as a descriptive covariate.
+- **Dropping fresh-extreme births entirely:** kept as a descriptive reference.
+
+**Power (all guesses, to be replaced by the printed counts):** DeepSeek expects E to have a few hundred migrated bars and a thin matched arm, and F fewer than 30 levels with 3 or more approaches on 3 or more dates; either arm under 30 events or 20 dates is called UNDERPOWERED, not negative. The earlier four-hour tests found 0 of 4 cells and the sequential study 39 floors, which is why F is the one expected to be thin.
