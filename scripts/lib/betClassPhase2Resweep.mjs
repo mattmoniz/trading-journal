@@ -193,7 +193,7 @@ export async function runBetClassPhase2Resweep({ betClass, claimSlug, scriptFile
   const calibratedBeatsFlat = flatEv == null || walkForwardEv > flatEv;
   const bothNegative = walkForwardEv <= 0 && (flatEv == null || flatEv <= 0);
   let recommendation;
-  if (bothNegative) recommendation = 'NEGATIVE_EV_BOTH_ARMS';
+  if (bothNegative) recommendation = 'NEG_EV_BOTH_ARMS'; // 16 chars: the old 21-char literal overflowed performance_audit.recommendation VARCHAR(20) and crashed both bet_class steps every time the verdict was negative (found 2026-10-27)
   else if (calibratedBeatsFlat && walkForwardEv > 0) recommendation = 'SHIP_CALIBRATED';
   else if (!calibratedBeatsFlat && flatEv > 0) recommendation = 'SHIP_FLAT';
   else recommendation = 'AMBIGUOUS';

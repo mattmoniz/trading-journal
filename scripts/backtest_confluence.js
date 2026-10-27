@@ -492,7 +492,9 @@ async function run() {
   console.log('ANALYSIS 2: WR BY EXACT CONFLUENCE COUNT (linear test)');
   console.log('═══════════════════════════════════════════════════════════\n');
 
-  const maxConf = Math.max(...deduped.map(t => t.confluenceCount));
+  // reduce, not Math.max(...array): spreading a list this long into a call overflows the JS argument limit ("Maximum call stack size exceeded"), which made this whole
+  // audit crash silently every Sunday from 2026-10-11 (found 2026-10-27, last stored CONFLUENCE_AUDIT rows were 2026-10-04).
+  const maxConf = deduped.reduce((m, t) => Math.max(m, t.confluenceCount), 0);
   console.log(`  Count | N      | 20pt WR  | 30pt WR  | MAE P50  | MFE P50  | EV(30/90)`);
   console.log(`  ------+--------+----------+----------+----------+----------+----------`);
   for (let c = 1; c <= Math.min(maxConf, 7); c++) {
