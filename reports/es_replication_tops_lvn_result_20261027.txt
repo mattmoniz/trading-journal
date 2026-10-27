@@ -1,0 +1,32 @@
+ES to 2026-10-23; dates excluded for thin volume 68 (2023-02-24, 2023-02-27, 2023-02-28, 2023-03-01, 2023-03-02, 2023-03-03...); merged events 949, after dropping thin-volume dates and +/-7 days around 13 contract rolls 799 (floors 325, tops 474)
+target DEEP: events used 447 of 799; skipped {"noTarget":347,"noExit":4,"stopDegenerate":1}
+target NEXT: events used 447 of 799; skipped {"noTarget":347,"noExit":4,"stopDegenerate":1}
+target R3: events used 794 of 799; skipped {"noExit":4,"stopDegenerate":1}
+
+COUNTED CELLS (ES tops, frozen NQ rule; 2 cells, 97.5 percent CI): REPLICATES = EXCESS vs blind CI lower bound above 0 AND absolute net above 0 AND EXCESS-FRESH point above 0
+
+ES TOPS DEEP LVN: n 333 on 289 dates; net per trade mean -1.927 pts (-96.348 dollars per ES contract before commission), median -13.573; stopped 69%, target 18%, time 13%; top-5-trade share n/a (total<=0)
+  EXCESS vs blind -1.039 [-5.096,+3.081] (97.5% CI; half-width +4.088) | EXCESS-FRESH +0.089 [-6.180,+6.845] (n 116) | real minus MIRROR -1.857 [-7.842,+4.262]
+  non-overlapping subset: 173 of 333, mean net +0.731, EXCESS +1.251 [-3.564,+6.336]
+  context: NQ non-overlapping subset +32.7 [+8.0,+57.8]; NQ all-dates tops +15.8 [-2.4,+33.7]
+  => DOES NOT REPLICATE
+
+ES TOPS NEXT LVN: n 333 on 289 dates; net per trade mean +0.343 pts (+17.153 dollars per ES contract before commission), median -12.300; stopped 61%, target 32%, time 7%; top-5-trade share 3.97
+  EXCESS vs blind +1.109 [-2.596,+4.685] (97.5% CI; half-width +3.640) | EXCESS-FRESH +3.055 [-2.665,+9.196] (n 116) | real minus MIRROR +2.033 [-3.687,+7.591]
+  non-overlapping subset: 173 of 333, mean net +2.749, EXCESS +3.372 [-1.026,+7.957]
+  context: NQ non-overlapping subset +20.0 [+1.3,+40.0]; NQ all-dates tops +8.7 [-5.3,+23.2]
+  => DOES NOT REPLICATE
+
+DESCRIPTIVE
+  DEEP floor: n 114 mean net +6.373 EXCESS +5.674 [-2.928,+14.827]
+  DEEP top: n 333 mean net -1.927 EXCESS -1.039 [-4.370,+2.383]
+  NEXT floor: n 114 mean net +2.073 EXCESS +1.738 [-4.250,+7.645]
+  NEXT top: n 333 mean net +0.343 EXCESS +1.109 [-1.981,+4.394]
+  R3 floor: n 322 mean net +1.635 EXCESS +1.100 [-2.923,+5.224]
+  R3 top: n 472 mean net -0.426 EXCESS +0.639 [-2.534,+4.018]
+  DEEP tops first fired at 60m: n 268 mean net -1.704 EXCESS -0.535 [-4.282,+3.377]
+  DEEP tops first fired at 120m: n 53 mean net -1.693 EXCESS -2.127 [-9.648,+6.188]
+  DEEP tops first fired at 240m: n 12 mean net -7.938 EXCESS -7.492 [-23.999,+11.663]
+  ES top events (DEEP arm) on a trade date that also has an NQ top event: 77% of 333; NQ top event dates 486
+
+VERDICT: NEITHER CELL REPLICATES
