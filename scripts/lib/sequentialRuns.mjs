@@ -1,8 +1,8 @@
 // Sequential defended runs on four-hour bars (user definition, 2026-10-26: "4 or more sequential 4 hour bars that are pretty obviously being defended").
 // FLOOR run: consecutive four-hour bars whose LOWS all sit within `band` of each other (they terminate at the same price) and whose closes all stay above the run's lowest low;
 // the bar before the run came from above (its low is more than `band` above the run low). TOP is the mirror. An event fires at the close of the bar where the run first reaches `minLen`.
-// band = bandMult x H4 (mean four-hour range of the 20 prior trade days), never a fixed point value. Pure function of the bars, causal (uses only bars up to the firing bar).
-export function sequentialRuns(bars, h4, { bandMult = 0.25, minLen = 4, maxLookback = 40 } = {}) {
+// A PRIOR REFERENCE is required (price traded in the zone before; excludes a run at an all-time extreme). band = bandMult x H4 (mean four-hour range of the 20 prior trade days), never a fixed point value. Pure function of the bars, causal (uses only bars up to the firing bar).
+export function sequentialRuns(bars, h4, { bandMult = 0.25, minLen = 4, maxLookback = 40, refLookback = 780, requireReference = true } = {}) {
   const out = [];
   for (const side of ['floor', 'top']) {
     const sg = side === 'floor' ? 1 : -1, lo = (b) => (sg > 0 ? b.L : -b.H), cl = (b) => (sg > 0 ? b.C : -b.C); // mirror tops onto floors
@@ -18,6 +18,9 @@ export function sequentialRuns(bars, h4, { bandMult = 0.25, minLen = 4, maxLookb
       }
       // "came from above" is REQUIRED: the bar before the run must sit more than one band above the run low; otherwise the run is not a clean floor (or is longer than the lookback) and is rejected
       if (best > 0 && !(bs > 0 && lo(bars[bs - 1]) > mnBest + band)) { best = 0; bs = -1; }
+      // PRIOR REFERENCE (user, 2026-10-26, on tops at all-time highs: "defended would have a previous instance where that level was defended"): price must have traded in the zone before the run,
+      // i.e. some four-hour bar at least two bars before the run's start (so not the approach bar) whose high-low range overlaps [run low - band, run low + band], within `refLookback` bars.
+      if (best > 0 && requireReference) { const Lz = mnBest, band2 = band; let ref = false; for (let k = bs - 2; k >= Math.max(0, bs - refLookback); k--) { const bl = lo(bars[k]), bh = sg > 0 ? bars[k].H : -bars[k].L; if (bl <= Lz + band2 && bh >= Lz - band2) { ref = true; break; } } if (!ref) { best = 0; bs = -1; } }
       len[t] = best; start[t] = bs;
     }
     for (let t = 1; t < bars.length; t++) {
