@@ -3,7 +3,7 @@
 // active_setups rows that were fired on a repaired date. Read-only.
 import fs from 'fs';
 import { query } from '../server/db.js';
-const A = JSON.parse(fs.readFileSync('scratch/ub_before_repair_20261027.json')), B = JSON.parse(fs.readFileSync('scratch/ub_after_repair_20261027.json')), bad = new Set(JSON.parse(fs.readFileSync('scratch/level_bad_dates_20261027.json')).all);
+const A = JSON.parse(fs.readFileSync('scratch/ub_before_repair_20261027.json')), B = JSON.parse(fs.readFileSync('scratch/ub_after_repair_20261027.json')), bad = new Set(JSON.parse(fs.readFileSync('scratch/level_repaired_dates_all_20261027.json')).all);
 const mean = (a) => (a.length ? a.reduce((s, x) => s + x, 0) / a.length : NaN), f = (x) => (Number.isNaN(x) ? 'n/a' : (x >= 0 ? '+' : '') + x.toFixed(1));
 const types = [...new Set([...Object.keys(A), ...Object.keys(B)])].sort(); let nA = 0, nB = 0, onBadA = 0, onBadB = 0; const rows = [];
 for (const t of types) { const a = A[t] || [], b = B[t] || []; nA += a.length; nB += b.length; onBadA += a.filter((x) => bad.has(x.date)).length; onBadB += b.filter((x) => bad.has(x.date)).length;

@@ -42,6 +42,10 @@ timed_step daily /usr/bin/node scripts/build_overnight_checkpoint_stats.mjs --da
 # code as build-breaking in this cron.
 timed_step daily /usr/bin/node scripts/check_contract_roll_health.mjs
 
+# Derived-table guard (2026-10-27): developing_value_log, level_prices PD/PW/PM and acd_daily_log opening ranges must agree with price_bars_primary for the last 25 trade dates (read-only; logs to
+# scratch/server_errors.jsonl on a mismatch). Added after the audit found stale rows from quarterly rolls and later bar repairs (docs/DB_BACKUP_CATALOG.md, 2026-10-27 entries).
+timed_step daily /usr/bin/node scripts/check_derived_tables_vs_bars.mjs
+
 timed_step daily /usr/bin/node scripts/backfill_mae_mfe.mjs
 
 # ML meta-labeling data foundation (2026-09-21, DeepSeek ML thread, docs/OPEN_THREADS.md) --

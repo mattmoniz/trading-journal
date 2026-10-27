@@ -1,13 +1,13 @@
-Stored vs tick-volume levels (RTH, same definitions), |tick - stored| in points. Dates compared per family: PD 823, PW 747, PM 520, 3M 402
-PD  POC n= 823 median    3.3  p90    83.3  max  1845  share >25pt 20%  >100pt 8%
-PD  VAH n= 823 median    1.3  p90    43.3  max  1761  share >25pt 12%  >100pt 5%
-PD  VAL n= 823 median    1.3  p90    38.5  max  1641  share >25pt 12%  >100pt 5%
-PW  POC n= 747 median    4.5  p90   226.0  max   929  share >25pt 29%  >100pt 18%
-PW  VAH n= 747 median    1.0  p90   119.3  max   388  share >25pt 20%  >100pt 11%
-PW  VAL n= 747 median    1.0  p90   118.5  max   653  share >25pt 21%  >100pt 12%
-PM  POC n= 520 median    4.8  p90   177.0  max   643  share >25pt 25%  >100pt 18%
-PM  VAH n= 520 median    3.0  p90   117.3  max   429  share >25pt 23%  >100pt 13%
-PM  VAL n= 520 median    2.0  p90   165.0  max   531  share >25pt 22%  >100pt 17%
-3M  POC n= 402 median    7.0  p90   779.0  max  1966  share >25pt 32%  >100pt 25%
-3M  VAH n= 402 median    4.0  p90   550.0  max  1544  share >25pt 38%  >100pt 31%
-3M  VAL n= 402 median    3.3  p90   827.0  max  2339  share >25pt 39%  >100pt 34%
+Stored vs tick-volume levels (RTH, same definitions), |tick - stored| in points. Dates compared per family: PD 824, PW 752, PM 557, 3M 403
+PD  POC n= 824 median    3.3  p90    54.3  max   814  share >25pt 16%  >100pt 5%
+PD  VAH n= 824 median    1.0  p90    17.5  max   534  share >25pt 8%  >100pt 2%
+PD  VAL n= 824 median    1.0  p90    21.3  max   409  share >25pt 8%  >100pt 1%
+PW  POC n= 752 median    4.5  p90   217.5  max   929  share >25pt 27%  >100pt 15%
+PW  VAH n= 752 median    1.0  p90    95.0  max   388  share >25pt 18%  >100pt 10%
+PW  VAL n= 752 median    1.0  p90   103.5  max   653  share >25pt 19%  >100pt 10%
+PM  POC n= 557 median    4.5  p90   127.3  max   262  share >25pt 19%  >100pt 12%
+PM  VAH n= 557 median    1.0  p90    89.5  max   172  share >25pt 19%  >100pt 8%
+PM  VAL n= 557 median    1.8  p90    58.8  max   252  share >25pt 12%  >100pt 8%
+3M  POC n= 403 median    6.3  p90   214.8  max  1934  share >25pt 21%  >100pt 15%
+3M  VAH n= 403 median    2.3  p90   331.3  max  1308  share >25pt 24%  >100pt 17%
+3M  VAL n= 403 median    2.0  p90   273.8  max  2339  share >25pt 22%  >100pt 16%

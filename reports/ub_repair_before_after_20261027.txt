@@ -1,0 +1,47 @@
+unified backtest, all 156 setup types: trades before 26217, after 26549; trades on repaired dates before 5143, after 5475 (21% of all trades after)
+setup types with a material change (mean pnl +/-3 dollars, or count +/-5 percent, or 10 percent of trades differ): 55 of 156
+type | trades before -> after | mean $/trade before -> after | trades that differ
+MS2_LONG                       11 ->    8 |   +27.1 ->   +73.0 | 3
+FLOOR_R3_LONG                  18 ->   12 |   -10.8 ->   +16.3 | 8
+3M_VAL_LONG                    32 ->   32 |   -12.6 ->   -36.9 | 6
+3M_POC_LONG                    76 ->   65 |    +8.8 ->    -8.4 | 19
+MS1_SHORT                      29 ->   28 |    +4.4 ->   -11.9 | 5
+PM_VAL_SHORT                   51 ->   45 |    -6.9 ->   -22.2 | 12
+IB_HIGH_LONG                   36 ->   30 |    +2.8 ->   -12.2 | 8
+MS2_SHORT                       9 ->    7 |    -6.4 ->    +6.6 | 2
+PM_POC_SHORT                   58 ->   68 |   +11.9 ->   +23.7 | 14
+PM_VAL_LONG                    48 ->   52 |   +17.3 ->    +8.1 | 14
+IB_LOW_SHORT                   21 ->   22 |    +5.9 ->    -2.6 | 1
+PM_VAH_LONG                    55 ->   63 |   -10.2 ->    -2.2 | 12
+3M_VAL_SHORT                   31 ->   29 |   +11.0 ->    +4.3 | 6
+PM_LOW_LONG                    40 ->   34 |    -8.0 ->   -14.4 | 8
+PM_HIGH_LONG                   56 ->   60 |   +40.9 ->   +34.7 | 4
+WS1_LONG                       91 ->   93 |   +16.6 ->   +22.6 | 2
+MR1_SHORT                      50 ->   51 |   +16.8 ->   +11.3 | 19
+WR1_LONG                       56 ->   58 |   -21.8 ->   -27.0 | 10
+FLOOR_S1_LONG                 262 ->  277 |    -5.1 ->    -0.1 | 19
+FLOOR_S2_SHORT                 34 ->   35 |   -13.5 ->   -18.3 | 1
+WR2_LONG                       22 ->   18 |   +19.2 ->   +14.8 | 4
+MONTHLY_OPEN_LONG              94 ->   95 |    +7.5 ->   +11.8 | 13
+PW_LOW_LONG                    86 ->   87 |   -10.9 ->    -6.9 | 1
+CAM_R4_LONG                    95 ->   88 |   -13.7 ->    -9.9 | 21
+PM_POC_LONG                    63 ->   68 |   -17.5 ->   -21.4 | 7
+FLOOR_R2_LONG                  41 ->   39 |    +3.0 ->    -0.8 | 10
+CAM_R3_SHORT                  306 ->  316 |    +3.6 ->    +7.4 | 22
+FLOOR_S1_SHORT                 77 ->   81 |    +7.5 ->   +11.0 | 6
+MR2_SHORT                      13 ->   16 |   -26.5 ->   -23.0 | 7
+PW_HIGH_LONG                   93 ->   94 |    +4.2 ->    +0.7 | 3
+FLOOR_S3_LONG                  99 ->  108 |    -2.7 ->    +0.7 | 9
+WS2_LONG                       35 ->   34 |   -67.4 ->   -64.1 | 1
+WEEKLY_OPEN_LONG              180 ->  181 |    +7.4 ->   +10.6 | 5
+PW_HIGH_SHORT                 135 ->  134 |    -1.3 ->    +1.9 | 7
+3M_POC_SHORT                   63 ->   57 |    +2.5 ->    +5.4 | 10
+CAM_R3_LONG                   194 ->  195 |    -5.9 ->    -8.7 | 21
+PD_HIGH_LONG                  163 ->  167 |   -12.8 ->   -15.5 | 18
+FLOOR_R1_LONG                 113 ->  114 |   -11.1 ->   -13.8 | 21
+FLOOR_S2_LONG                 159 ->  174 |    -6.6 ->    -3.9 | 15
+WR2_SHORT                      34 ->   30 |   -10.9 ->   -13.5 | 4
+
+level-derived families pooled (116 types): trades 15259 -> 15543, mean $/trade -2.0 -> -2.1
+
+active_setups primary rows fired on a repaired date (total, of which on a level-derived setup type): ACTIVE: 82 (39) | BACKFILL: 5268 (2627) | SHADOW: 286 (120) | UNKNOWN: 580 (21)
