@@ -79,3 +79,33 @@ Prompted by the user's question "does this test all three scenarios?". It did no
 **Order of work (replaces the earlier list):** loader and event lists for A, B, C, D'; print every arm's event count; append them as an amendment; run A, then D', then B, then C, each once; record claims; flag the forward look for all.
 
 **Practitioner claims DeepSeek ranked testable but not yet in any pre-registered test:** the point of control migrating with price (hold), volume drying up at the extreme (bail or fade), a low-volume pocket behind price. Diagonal imbalances read as AGGRESSION are testable from tick bid/ask by price at finer than 30-minute resolution (not yet built); read as "resting liquidity" they need market depth, which has no reader here.
+
+---
+## Amendment 3 (2026-10-27 ~16:30 ET, before any outcome) — loader built; event counts frozen; definition clarifications made while building
+Code: `scripts/lib/vbpProfiles.mjs` (completed-cell loader, sessions, fat nodes, density, events, value-area event), `scripts/study_vbp_counts_20261027.mjs` (COUNTS ONLY: no forward move, reach or P&L is computed in it). `STUDY_END=2026-10-23`.
+
+**Clarifications fixed here (each a reading of the text above that the build forced; none looked at an outcome):**
+1. Node and density use the profile through the PREVIOUS completed cell; the breakout cell must be at least the 5th cell of the session (profile at least 4 completed cells old).
+2. "Previous cell closed inside the edge or at it" = previous close within the node's [lower edge, upper edge], inclusive.
+3. Several nodes crossed in one cell in one direction: one event per cell per direction, the node with the largest peak volume (a Part-B-style collapse).
+4. Outside density units made consistent: the cell's volume per occupied 0.25 price beyond the edge, divided by (the profile's median volume per non-empty 0.25 price divided by the number of cells in the profile), so a one-cell numerator is compared with a per-cell denominator.
+5. Density and distance terciles are pooled within a session arm (up and down together), not across RTH and Globex.
+6. Sessions are used only when every 30-minute slot is present (13 RTH, 31 Globex); 21 RTH sessions were dropped as incomplete (half-days and gaps), 62 roll-week and 76 sparse-window sessions dropped, 32 early sessions have no H4 yet.
+7. Counted-cell statistics are computed on the EXPLORE half (earlier 60 percent of an arm's event dates); the hold-out half and the full sample are reported beside it as a screen, as in the earlier studies. A cell "passes the screen" only if the explore bound clears its rule AND the hold-out point estimate has the same sign.
+8. Forward move: entry = open of the first 1-minute bar after the decision cell's close; move at 60 minutes = close of the bar 59 minutes later minus that open, signed by direction, in units of the session's H4. Missing bars give no outcome (event dropped from that statistic only).
+9. Test C: the decision cell is the cell after the breakout cell; "back inside" = its close at or inside the edge. Test D': S1 = first of the 8 cells after entry that closes at or inside the edge; control at offset m = positions whose cells 1..m after entry ALL closed outside the edge; the S2 high-density cell uses the Test A tercile cut of the same session arm.
+10. Test B: the first completed cell whose close is inside the prior RTH value area, with the next cell also closing inside, when the previous cell (or the session open) was outside.
+
+**Frozen event counts (explore/hold-out split by event dates):**
+| Arm | Events | Dates | Notes |
+|---|---|---|---|
+| A RTH | 1,010 | 608 | up 497 / down 513; HIGH 337, LOW 337; distance strata HIGH/LOW 112/123, 124/97, 101/117; explore 616 events (364 dates), hold-out 394; node peak within 0.5 H4 of a named POC: 37% |
+| A Globex | 1,168 | 574 | up 603 / down 565; HIGH 390, LOW 390; strata 123/148, 123/118, 144/124; explore 653 (344 dates), hold-out 515; POC-coincident: 46% |
+| C RTH (non-POC nodes) | 562 | — | back-inside 163 (144 dates), no-back-inside 399 |
+| C Globex (non-POC) | 582 | — | back-inside 152 (127 dates), no-back-inside 430 |
+| D' RTH | 1,010 positions | — | S1 526 (offsets 1-8: 270,106,54,54,24,11,5,2), never re-entered 484, S2 decisions 752 (321 HIGH) |
+| D' Globex | 1,168 positions | — | S1 655 (307,123,78,53,34,26,22,12), never re-entered 513, S2 936 (354 HIGH) |
+| B RTH | 163 | 163 | up 74 / down 89 (260 sessions open inside the value area, 316 never re-enter) |
+| B Globex | 164 | 164 | up 76 / down 88 (421 open inside, 175 never re-enter) |
+
+All arms clear the 30-event / 20-date bar. Offsets 7 and 8 of D' RTH S1 (5 and 2 events) are too thin to be analysed on their own and enter only through the offset-weighted mean. **Order of work:** A, then D', then B, then C, each run once; record each claim; flag the forward look.
