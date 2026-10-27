@@ -11,7 +11,7 @@ import { multiScaleEvents } from './lib/multiScaleRuns.mjs';
 import { COST, PTV, makeSim, blindDraws, poolDraws, median, dc, ci, diffCI, fmt, dropTopDate } from './lib/exitSim.mjs';
 const ARM = { hold: 2880, lenient: true }, STOP_MULT = 0.5, ALPHA6 = 0.05 / 6 / 2, LVN_N = 3;
 async function main() {
-  const endRow = (await query(`SELECT (MAX(ts)::date - 3)::text d FROM price_bars_primary WHERE symbol='NQ' AND ts >= CURRENT_DATE - 7 AND ts < CURRENT_DATE + 1`)).rows[0].d;
+  const endRow = process.env.STUDY_END || (await query(`SELECT (MAX(ts)::date - 3)::text d FROM price_bars_primary WHERE symbol='NQ' AND ts >= CURRENT_DATE - 7 AND ts < CURRENT_DATE + 1`)).rows[0].d; // STUDY_END pins the data end date (the pre-registered counts were made with 2026-10-23)
   const NQ = indexBars(prep(await loadBars('price_bars_primary', `symbol='NQ'`, '2023-03-06', endRow))), d20 = d20Of(NQ), { bars, h4 } = build4h(NQ), LIM = pinnedLimit(NQ, endRow), { run, capOf } = makeSim(NQ);
   const events = multiScaleEvents(NQ, h4, { limit: LIM }), linesBy = JSON.parse(fs.readFileSync('scratch/defended_lines_by_date_20261026.json'));
   const rthDays = (await query(`SELECT DISTINCT ts::date::text d FROM price_bars_primary WHERE symbol='NQ' AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 959 ORDER BY 1`)).rows.map((r) => r.d);
