@@ -1,0 +1,55 @@
+NQ to 2026-10-23; SEQ events 122 (floors 39, tops 83); REPEATED-DEFENSE events 146 (floors 72, tops 74); explore/hold-out cut 2025-04-23 (earlier 60 percent of 213 event dates)
+
+PRIMARY TRADE: entry next open, stop 0.5 x H4 beyond the defended extreme, target 3 x risk, time exit 2,879 min, cost 1.5 pts. TIER 1 = 4 counted cells (explore CI 98.75 percent, explore EXCESS-FRESH above 0, hold-out one 95 percent test).
+skipped events: SEQ {} REP {}
+
+SEQUENTIAL RUN FLOOR: n 39 on 39 dates. ABSOLUTE net per trade: mean -23.734 pts (-47.469 dollars), median -69.010; stopped 74%, target 8%, time-exit 18%; worst -243.138; top-5-trades share n/a (total<=0); stop distance median +0.933 H4
+  all dates: EXCESS vs blind -23.391 [-77.066,+40.326] | EXCESS-FRESH -22.866 [-79.742,+45.782] | real minus MIRROR -62.685 [-168.298,+46.555]
+  explore n=26/26d
+  hold-out n=13/13d
+  => UNDERPOWERED (explore)
+
+SEQUENTIAL RUN TOP: n 83 on 81 dates. ABSOLUTE net per trade: mean -19.057 pts (-38.114 dollars), median -78.769; stopped 61%, target 11%, time-exit 28%; worst -339.237; top-5-trades share n/a (total<=0); stop distance median +0.818 H4
+  all dates: EXCESS vs blind -16.838 [-66.099,+36.178] | EXCESS-FRESH -18.251 [-65.188,+34.515] | real minus MIRROR -11.163 [-97.714,+77.905]
+  explore +4.008 [-55.239,+74.151] n=45/44d, FRESH +11.562, abs +3.130, without top date -7.683
+  hold-out n=38/37d
+  => no
+
+REPEATED DEFENSE FLOOR: n 72 on 52 dates. ABSOLUTE net per trade: mean -22.840 pts (-45.680 dollars), median -28.625; stopped 38%, target 0%, time-exit 63%; worst -582.043; top-5-trades share n/a (total<=0); stop distance median +2.112 H4
+  all dates: EXCESS vs blind -29.625 [-106.552,+46.173] | EXCESS-FRESH -35.885 [-119.642,+43.521] | real minus MIRROR -27.292 [-175.328,+114.069]
+  explore +22.571 [-61.525,+115.161] n=47/32d, FRESH +28.509, abs +22.703, without top date +6.081
+  hold-out n=25/20d
+  => no
+
+REPEATED DEFENSE TOP: n 74 on 59 dates. ABSOLUTE net per trade: mean +60.643 pts (+121.285 dollars), median +18.125; stopped 27%, target 4%, time-exit 69%; worst -550.661; top-5-trades share 0.90; stop distance median +1.845 H4
+  all dates: EXCESS vs blind +61.420 [-24.377,+145.823] | EXCESS-FRESH +53.474 [-27.567,+140.938] | real minus MIRROR +99.068 [-44.142,+247.091]
+  explore -4.808 [-93.430,+76.016] n=43/34d, FRESH -13.898, abs -5.131, without top date -23.920
+  hold-out n=30/24d
+  => no
+
+TIER 1 CELLS TESTED 3 (of 4), CANDIDATES 0, expected by chance about 0.04, SCREEN-SURVIVORS 0
+
+TIER 2 (SEQ, floors and tops pooled; side breakdown below each). LARGE move cut (top tercile of prior 3-day move in H4 units, explore events only) = +4.384 H4; HEAVY = relative volume >= 1.0
+  HEAVY minus LIGHT: all dates +28.158 (A n=27, B n=95) | explore +67.947 [-59.446,+197.156] A n=16/16d (mean +56.652) B n=55/54d (mean -11.295) | hold-out A n=11, B n=40 | no
+    side breakdown (all dates): floor: A n=15 mean +50.257 | B n=24 mean -69.420 ; top: A n=12 mean -56.086 | B n=71 mean -10.204
+  LARGE move minus REST: all dates +26.035 (A n=40, B n=82) | explore +23.925 [-72.927,+132.669] A n=24/23d (mean +19.855) B n=47/46d (mean -4.070) | hold-out A n=16, B n=35 | no
+    side breakdown (all dates): floor: A n=5 mean +36.158 | B n=34 mean -32.148 ; top: A n=35 mean -6.804 | B n=48 mean -24.154
+
+SENSITIVITY (descriptive, all dates, SEQ then REPEATED-DEFENSE): variant | arm | side | n | mean net pts | mean EXCESS vs blind [95% date-blocked CI] | stopped %
+  stop 1.0 H4                      SEQ floor n  39 | +4.081 | -3.923 [-80.422,+78.988] | stopped 54%
+  stop 1.0 H4                      SEQ top   n  83 | -10.674 | -16.419 [-74.694,+46.558] | stopped 39%
+  target 2R                        SEQ floor n  39 | -19.709 | -15.961 [-64.774,+38.078] | stopped 67%
+  target 2R                        SEQ top   n  83 | -5.811 | -3.584 [-50.964,+47.888] | stopped 57%
+  target 4R                        SEQ floor n  39 | -14.855 | -14.740 [-74.840,+51.930] | stopped 74%
+  target 4R                        SEQ top   n  83 | -14.592 | -13.982 [-61.902,+41.077] | stopped 61%
+  entry after next confirming bar  SEQ floor n  21 | -46.100 | -43.258 [-123.494,+43.629] | stopped 57% (dropped for no confirming bar: 18)
+  entry after next confirming bar  SEQ top   n  45 | -53.536 | -46.075 [-122.777,+36.051] | stopped 53% (dropped for no confirming bar: 38)
+  band 0.5 H4                      SEQ floor n 153 | -23.659 | -23.528 [-55.577,+9.551] | stopped 61%
+  band 0.5 H4                      SEQ top   n 260 | +21.121 | +23.851 [-9.042,+58.595] | stopped 55%
+  band 0.35 H4                     SEQ floor n  79 | -15.831 | -9.468 [-55.062,+38.809] | stopped 68%
+  band 0.35 H4                     SEQ top   n 154 | +12.623 | +14.149 [-24.124,+56.755] | stopped 56%
+  non-overlapping subset (events >= 2,880 min apart) SEQ floor: 38 of 39 events, mean net -22.818
+  non-overlapping subset (events >= 2,880 min apart) SEQ top: 74 of 83 events, mean net -26.855
+  overlap (starts within 2,880 min of the previous same-side event): SEQ floors 3% tops 12%; REP floors 37% tops 41%
+  REP floor another period line within the same event (2+ lines merged): yes n=26 mean excess -45.277 | no n=46 mean -20.778
+  REP top another period line within the same event (2+ lines merged): yes n=26 mean excess +158.422 | no n=48 mean +8.877
