@@ -114,7 +114,9 @@ export async function loadAndTagTrades(config) {
     FROM active_setups s LEFT JOIN acd_daily_log a ON a.trade_date=s.trade_date
     -- TIME_EXPIRED included (2026-08-31, OPEN_DECISION
     -- time_expired_display_stats_sweep_remaining, user-confirmed): these rows now carry a
-    -- real mark-to-market actual_pnl, so excluding them skewed the simulation input toward
+    -- real mark-to-market actual_pnl (TRUE for live ACTIVE/SHADOW rows only; the 930 BACKFILL
+    -- time-expiries carry exactly 0, not a mark to market -- found 2026-10-27, OPEN_DECISION
+    -- backfill_time_expired_scored_zero_not_mtm_20261027, no origin filter here yet), so excluding them skewed the simulation input toward
     -- cleaner TARGET_HIT/STOP_HIT outcomes than real trading actually produces. The win
     -- classification just below is updated to match (sign of pnl for TIME_EXPIRED rows).
     WHERE s.resolution IN ('TARGET_HIT','STOP_HIT','TIME_EXPIRED') AND s.entry_zone_low IS NOT NULL
