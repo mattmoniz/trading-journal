@@ -97,7 +97,7 @@ export const LEVEL_FADE_DEFINITIONS = {
   MONTHLY_OPEN: { rule: 'PRIOR_PERIOD', displayName: 'Monthly Open', levelDesc: "this month's first trading day opening price" },
   // VWAP
   WEEKLY_VWAP:  { rule: 'PRIOR_PERIOD', displayName: 'Weekly VWAP', levelDesc: 'week-to-date volume-weighted average price, all sessions, from the first Globex bar of the week (Sunday 6 PM ET) through the start of the current trade session' },
-  MONTHLY_VWAP: { rule: 'PRIOR_PERIOD', displayName: 'Monthly VWAP', levelDesc: 'month-to-date volume-weighted average price' },
+  MONTHLY_VWAP: { rule: 'PRIOR_PERIOD', displayName: 'Monthly VWAP', levelDesc: 'month-to-date volume-weighted average price, all sessions, from 00:00 ET on the 1st through the start of the current trade session' },
   // Ordinary close-range touch of the running (developing) RTH VWAP -- distinct from
   // VWAP_MAGNET_LONG/SHORT (OTHER_SETUP_DEFINITIONS below), which only fires on a rare
   // sigma-distance departure. This is the same 15pt-proximity mechanism every other level

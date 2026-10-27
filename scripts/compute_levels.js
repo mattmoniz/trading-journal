@@ -392,18 +392,17 @@ async function computeLevelsForDate(date) {
   `, [`${dayShift(wb.mon, -1)} 18:00:00`, `${dayShift(date, -1)} 18:00:00`]) : { rows: [] };
   add('WEEKLY_VWAP', weekVwapR.rows[0]?.vwap ? parseFloat(weekVwapR.rows[0].vwap) : null, 'VWAP');
 
-  // Monthly VWAP (month open → date, month-to-date as of the date being computed).
-  // Same live-accumulating convention as WEEKLY_VWAP above (deliberate, not a lookahead
-  // bug — live acd.js will read this with no time gate, so day-by-day it only ever
-  // accumulates through "today" since future bars don't exist yet). Added 2026-07-19.
-  // Reuses `mb` (current month bounds) already computed above for MONTHLY_OPEN.
-  const monthVwapR = await q(`
+  // Monthly VWAP: ALL SESSIONS from 00:00 ET on the 1st of the month (during Globex; user 2026-10-27: "start at midnight during Globex of the first day of the month") up to the
+  // START of `date`'s own trade session (the prior evening 18:00), the same no-lookahead cutoff WEEKLY_VWAP uses and identical whenever the job runs. Before 2026-10-27 this was RTH
+  // bars only from the 1st, as of the prior session. The midnight anchor is by calendar date: the Globex evening of the last day of the previous month (18:00-23:59) belongs to the
+  // previous month even though it is the next trade date's session. No row on a trade date that has no earlier bar in its month (the 1st, or the first trading day after a weekend
+  // 1st) and none on weekend dates. Reuses `mb` (current month bounds) and `dayShift` from above.
+  const monthVwapR = (dateDow >= 1 && dateDow <= 5) ? await q(`
     SELECT SUM(close::numeric * volume::numeric) / NULLIF(SUM(volume::numeric), 0) AS vwap
     FROM price_bars_primary
-    WHERE symbol = 'NQ' AND ts::date >= $1 AND ts::date < $2
-      AND EXTRACT(hour FROM ts) * 60 + EXTRACT(minute FROM ts) BETWEEN 570 AND 959
+    WHERE symbol = 'NQ' AND ts >= $1::timestamp AND ts < $2::timestamp
       AND volume > 0
-  `, [mb.first, date]);
+  `, [`${mb.first} 00:00:00`, `${dayShift(date, -1)} 18:00:00`]) : { rows: [] };
   add('MONTHLY_VWAP', monthVwapR.rows[0]?.vwap ? parseFloat(monthVwapR.rows[0].vwap) : null, 'VWAP');
 
   // ── 8. Prior week H/L/VA ─────────────────────────────────────────────────
