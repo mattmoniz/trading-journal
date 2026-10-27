@@ -22,6 +22,8 @@ const COMM   = 2;   // $2 round-trip commission ($1/side x2, corrected 2026-08-1
 const DRY_RUN = process.argv.includes('--dry-run');
 // Research hooks (2026-10-26, stored-vs-tick level comparison): UB_LEVELS_TABLE swaps the level source (default the canonical level_prices); UB_DUMP=<path> writes every resolved trade as JSON. Both inert unless set.
 const LEVELS_TABLE = /^[a-z0-9_]+$/.test(process.env.UB_LEVELS_TABLE || '') ? process.env.UB_LEVELS_TABLE : 'level_prices';
+// UB_ACD_TABLE (2026-10-27) swaps the ACD source (default acd_daily_log), for before/after checks of ACD repairs. Inert unless set.
+const ACD_TABLE = /^[a-z0-9_]+$/.test(process.env.UB_ACD_TABLE || '') ? process.env.UB_ACD_TABLE : 'acd_daily_log';
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 const mean = arr => arr.length ? arr.reduce((a,b)=>a+b,0)/arr.length : null;
@@ -190,7 +192,7 @@ async function loadData() {
            day_type,
            COALESCE(daily_score, 0)::int as score,
            SUM(COALESCE(daily_score,0)) OVER (ORDER BY trade_date ROWS BETWEEN 29 PRECEDING AND CURRENT ROW) as nl30
-    FROM acd_daily_log
+    FROM ${ACD_TABLE}
     ORDER BY trade_date
   `);
   const acdByDate = new Map();
