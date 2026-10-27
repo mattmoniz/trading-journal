@@ -1,0 +1,84 @@
+NQ to 2026-10-23; merged events 922 (floors 353, tops 569); explore/hold-out cut 2025-04-24 (earlier 60 percent of 642 event dates)
+
+TRADE: entry next open, stop 0.5 x H4 beyond the run extreme, time exit 2,879 min, cost 1.5 pts. 6 COUNTED CELLS (explore CI 99.17 percent, explore EXCESS-FRESH above 0, hold-out one 95 percent test).
+target POC: events used 582 of 922; skipped {"noTarget":334,"noExit":4,"stopDegenerate":2}
+target DEEP: events used 621 of 922; skipped {"noTarget":295,"noExit":4,"stopDegenerate":2}
+target NEXT: events used 621 of 922; skipped {"noTarget":295,"noExit":4,"stopDegenerate":2}
+target DEEPD: events used 573 of 922; skipped {"noTarget":343,"noExit":4,"stopDegenerate":2}
+target NEXTD: events used 573 of 922; skipped {"noTarget":343,"noExit":4,"stopDegenerate":2}
+target R3: events used 916 of 922; skipped {"noExit":4,"stopDegenerate":2}
+
+POC TARGET FLOOR: events with both controls 57 of 150. n 150 on 137 dates. ABSOLUTE net per trade: mean -0.298 pts (-0.595 dollars), median -62.938; stopped 65%, target 23%, time-exit 13%; worst -349.778; top-5-trades share n/a (total<=0); target distance median +2.229 R
+  all dates: EXCESS vs blind -0.345 [-29.239,+29.676] | EXCESS-FRESH -5.415 [-50.110,+43.080] | real minus MIRROR -4.016 [-51.892,+43.349]
+  explore +7.722 [-49.920,+77.099] n=35/34d, FRESH +0.079, abs +0.897, without top date -6.130
+  hold-out n=22/20d
+  => no
+
+POC TARGET TOP: events with both controls 143 of 432. n 432 on 374 dates. ABSOLUTE net per trade: mean +7.707 pts (+15.414 dollars), median -57.405; stopped 62%, target 22%, time-exit 15%; worst -267.000; top-5-trades share 1.27; target distance median +2.885 R
+  all dates: EXCESS vs blind +8.912 [-8.112,+26.914] | EXCESS-FRESH +6.148 [-24.710,+40.695] | real minus MIRROR +3.007 [-26.405,+33.088]
+  explore -13.366 [-43.855,+20.929] n=92/88d, FRESH -17.704, abs -12.130, without top date -18.857
+  hold-out n=51/49d
+  => no
+
+DEEPEST LVN TARGET FLOOR: events with both controls 65 of 175. n 175 on 162 dates. ABSOLUTE net per trade: mean -10.142 pts (-20.284 dollars), median -61.676; stopped 69%, target 18%, time-exit 14%; worst -349.778; top-5-trades share n/a (total<=0); target distance median +2.819 R
+  all dates: EXCESS vs blind -6.383 [-30.314,+19.105] | EXCESS-FRESH -0.501 [-41.173,+45.101] | real minus MIRROR -16.730 [-59.624,+26.401]
+  explore +25.893 [-34.140,+96.531] n=41/40d, FRESH +14.888, abs +20.492, without top date +12.975
+  hold-out n=24/22d
+  => no
+
+DEEPEST LVN TARGET TOP: events with both controls 148 of 446. n 446 on 385 dates. ABSOLUTE net per trade: mean +11.941 pts (+23.882 dollars), median -59.377; stopped 64%, target 22%, time-exit 14%; worst -267.000; top-5-trades share 0.68; target distance median +3.245 R
+  all dates: EXCESS vs blind +15.777 [-2.380,+33.704] | EXCESS-FRESH +26.682 [-2.440,+58.052] | real minus MIRROR +17.507 [-10.941,+47.504]
+  explore +9.564 [-26.864,+48.527] n=92/88d, FRESH +8.676, abs +8.215, without top date +4.200
+  hold-out n=56/54d
+  => no
+
+NEXT LVN TARGET FLOOR: events with both controls 65 of 175. n 175 on 162 dates. ABSOLUTE net per trade: mean -9.231 pts (-18.463 dollars), median -58.503; stopped 63%, target 30%, time-exit 7%; worst -349.778; top-5-trades share n/a (total<=0); target distance median +1.681 R
+  all dates: EXCESS vs blind -8.458 [-29.227,+13.140] | EXCESS-FRESH -9.870 [-45.309,+29.050] | real minus MIRROR -22.943 [-63.591,+17.714]
+  explore +1.487 [-44.390,+55.578] n=41/40d, FRESH +8.874, abs +9.995, without top date -7.081
+  hold-out n=24/22d
+  => no
+
+NEXT LVN TARGET TOP: events with both controls 148 of 446. n 446 on 385 dates. ABSOLUTE net per trade: mean +3.930 pts (+7.861 dollars), median -55.126; stopped 59%, target 32%, time-exit 9%; worst -267.000; top-5-trades share 1.45; target distance median +1.803 R
+  all dates: EXCESS vs blind +8.693 [-5.268,+23.163] | EXCESS-FRESH +22.162 [-4.477,+49.391] | real minus MIRROR +14.566 [-10.593,+40.348]
+  explore +1.178 [-26.346,+31.963] n=92/88d, FRESH -0.286, abs +0.310, without top date -2.849
+  hold-out n=56/54d
+  => no
+
+TIER 1 CELLS TESTED 6 (of 6), CANDIDATES 0, expected by chance about 0.03, SCREEN-SURVIVORS 0
+
+REFERENCE (descriptive): the SAME events with a fixed 3R target
+  3R floor: n 352 mean net -9.100 EXCESS -7.981 [-24.961,+9.714]
+  3R top: n 564 mean net +1.573 EXCESS +5.469 [-9.376,+20.774]
+
+TIER 2 (POC-target trade, floors and tops pooled; own budget of 2): LARGE prior move cut (top tercile, explore only) = +2.969 H4; HEAVY = relative volume >= 1.0
+  HEAVY minus LIGHT: all dates -28.198 | explore -31.417 [-68.765,+6.672] A n=95 B n=272 | hold-out A n=42, B n=172 | no
+    side breakdown: floor: A n=52 mean -23.581 | B n=98 mean +11.984 ; top: A n=85 mean -9.805 | B n=347 mean +13.497
+  LARGE move minus REST: all dates -38.475 | explore -33.080 [-68.348,+0.560] A n=122 B n=243 | hold-out A n=78, B n=136 | no
+    side breakdown: floor: A n=39 mean -20.517 | B n=111 mean +6.742 ; top: A n=161 mean -18.336 | B n=269 mean +25.067
+
+DESCRIPTIVE
+  POC scale 60m (first firing): n 467 mean net +2.318 EXCESS +3.291 [-12.381,+19.756]
+  POC scale 120m (first firing): n 91 mean net +26.890 EXCESS +29.564 [-6.105,+68.028]
+  POC scale 240m (first firing): n 24 mean net -10.186 EXCESS -17.878 [-83.886,+54.513]
+  DEEP scale 60m (first firing): n 504 mean net +1.165 EXCESS +4.253 [-10.710,+19.240]
+  DEEP scale 120m (first firing): n 91 mean net +28.542 EXCESS +32.882 [-6.911,+77.130]
+  DEEP scale 240m (first firing): n 26 mean net +14.102 EXCESS +30.152 [-53.067,+125.934]
+  NEXT scale 60m (first firing): n 504 mean net -4.904 EXCESS -1.410 [-12.928,+10.311]
+  NEXT scale 120m (first firing): n 91 mean net +22.269 EXCESS +25.579 [-9.327,+61.940]
+  NEXT scale 240m (first firing): n 26 mean net +22.407 EXCESS +29.991 [-42.042,+107.898]
+  POC target family chosen: {"PW":185,"3M":70,"PD":166,"PM":98,"P3M":63}
+  DEEP LVN lies within 0.5 H4 of a named POC line: 18% of 621 events
+  NEXT LVN lies within 0.5 H4 of a named POC line: 33% of 621 events
+  overlap (start within 2,880 min of the previous same-side event): floors 44% tops 59%
+  DEPTH-FILTERED DEEPD floor: n 162 mean net -10.420 EXCESS -10.460 [-37.398,+16.915]
+  DEPTH-FILTERED DEEPD top: n 411 mean net +11.635 EXCESS +16.126 [-2.803,+35.244]
+  DEPTH-FILTERED NEXTD floor: n 162 mean net -11.395 EXCESS -11.548 [-34.562,+11.525]
+  DEPTH-FILTERED NEXTD top: n 411 mean net +4.211 EXCESS +7.188 [-8.299,+24.144]
+  DEEPEST LVN: the lowest-volume valley beyond 1R lies beyond the 6R cap for 47% of 621 events (it is replaced by the deepest within 6R)
+  NON-OVERLAPPING (>= 2,880 min apart) POC floor: 106 of 150 events, mean net -10.801, EXCESS -12.588 [-43.112,+19.977]
+  NON-OVERLAPPING (>= 2,880 min apart) POC top: 238 of 432 events, mean net +11.911, EXCESS +13.325 [-8.018,+35.453]
+  NON-OVERLAPPING (>= 2,880 min apart) DEEP floor: 117 of 175 events, mean net -20.588, EXCESS -15.012 [-41.760,+14.334]
+  NON-OVERLAPPING (>= 2,880 min apart) DEEP top: 243 of 446 events, mean net +27.371, EXCESS +32.694 [+8.002,+57.790]
+  NON-OVERLAPPING (>= 2,880 min apart) NEXT floor: 117 of 175 events, mean net -16.186, EXCESS -14.937 [-39.467,+11.671]
+  NON-OVERLAPPING (>= 2,880 min apart) NEXT top: 243 of 446 events, mean net +14.694, EXCESS +20.027 [+1.296,+39.980]
+  NOT RUN in this pass (listed as optional in the prereg): near/far-edge LVN variants, Globex-only composite, stop 1.0 H4, band 0.35.
