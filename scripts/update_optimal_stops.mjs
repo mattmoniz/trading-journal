@@ -648,6 +648,7 @@ export async function loadVolatilityDefaultInputs() {
   const realNRes = await query(`
     SELECT setup_type, COUNT(*) n FROM active_setups
     WHERE origin_status IN ('ACTIVE','SHADOW') AND resolution IN ('TARGET_HIT','STOP_HIT','TIME_EXPIRED')
+      AND stale_levels_basis IS NOT TRUE
       AND mae_points IS NOT NULL AND mfe_points IS NOT NULL
     GROUP BY setup_type
   `);
@@ -903,6 +904,7 @@ async function main() {
         percentile_cont(0.75) WITHIN GROUP (ORDER BY mfe_points) as p75mfe
       FROM active_setups
       WHERE origin_status IN ('ACTIVE','SHADOW') AND resolution IN ('STOP_HIT','TARGET_HIT')
+        AND stale_levels_basis IS NOT TRUE
         AND mae_points IS NOT NULL AND mfe_points IS NOT NULL
       GROUP BY setup_type
       HAVING COUNT(*) >= 20
@@ -939,7 +941,7 @@ async function main() {
     WHERE status = 'RESOLVED' AND entry_zone_low IS NOT NULL
       AND stop_level IS NOT NULL AND t1_level IS NOT NULL
       AND actual_pnl IS NOT NULL
-      AND bad_bars_basis IS NOT TRUE
+      AND bad_bars_basis IS NOT TRUE AND stale_levels_basis IS NOT TRUE
     GROUP BY setup_type
   `);
   const dppByType = {};
@@ -958,7 +960,7 @@ async function main() {
       AND mae_points <= 300 AND mfe_points <= 300
       AND status = 'RESOLVED'
       AND replay_resolution IN ('TARGET_HIT', 'STOP_HIT')
-      AND bad_bars_basis IS NOT TRUE
+      AND bad_bars_basis IS NOT TRUE AND stale_levels_basis IS NOT TRUE
   `);
   const rawByType = {};
   for (const t of rawRes.rows) {
