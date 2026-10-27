@@ -8,15 +8,16 @@ export function sequentialRuns(bars, h4, { bandMult = 0.25, minLen = 4, maxLookb
     const sg = side === 'floor' ? 1 : -1, lo = (b) => (sg > 0 ? b.L : -b.H), cl = (b) => (sg > 0 ? b.C : -b.C); // mirror tops onto floors
     const len = new Array(bars.length).fill(0), start = new Array(bars.length).fill(-1);
     for (let t = 0; t < bars.length; t++) {
-      const H4 = h4[bars[t].td]; if (!H4) continue; const band = bandMult * H4; let best = 0, bs = -1;
+      const H4 = h4[bars[t].td]; if (!H4) continue; const band = bandMult * H4; let best = 0, bs = -1, mnBest = 0;
+      let mn = Infinity, mx = -Infinity;
       for (let s = t; s >= Math.max(0, t - maxLookback); s--) {
-        let mn = Infinity, mx = -Infinity, ok = true;
-        for (let k = s; k <= t; k++) { const l = lo(bars[k]); mn = Math.min(mn, l); mx = Math.max(mx, l); }
+        const l = lo(bars[s]); mn = Math.min(mn, l); mx = Math.max(mx, l);
         if (mx - mn > band) break; // lows spread too wide; starting earlier only widens it
-        for (let k = s; k <= t; k++) if (!(cl(bars[k]) > mn)) { ok = false; break; }
-        if (!ok) break; if (s > 0 && !(lo(bars[s - 1]) > mn + band)) { /* previous bar is also at the level: the run extends further back, keep scanning */ best = t - s + 1; bs = s; continue; }
-        best = t - s + 1; bs = s; // came from above: a clean start
+        let ok = true; for (let k = s; k <= t; k++) if (!(cl(bars[k]) > mn)) { ok = false; break; }
+        if (ok) { best = t - s + 1; bs = s; mnBest = mn; } // a failing start is NOT final: an earlier, lower low can make every close clear the run low (fixed 2026-10-26 after the DeepSeek review)
       }
+      // "came from above" is REQUIRED: the bar before the run must sit more than one band above the run low; otherwise the run is not a clean floor (or is longer than the lookback) and is rejected
+      if (best > 0 && !(bs > 0 && lo(bars[bs - 1]) > mnBest + band)) { best = 0; bs = -1; }
       len[t] = best; start[t] = bs;
     }
     for (let t = 1; t < bars.length; t++) {
