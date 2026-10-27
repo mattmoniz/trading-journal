@@ -14,7 +14,7 @@ const SUPPORT = /_(VAL|LOW|POC)$/, RESIST = /_(VAH|HIGH|POC)$/;
 const FWD = process.env.FORWARD_FROM || null;
 
 async function main() {
-  const endRow = (await query(`SELECT (MAX(ts)::date - 3)::text d FROM price_bars_primary WHERE symbol='NQ' AND ts >= CURRENT_DATE - 7 AND ts < CURRENT_DATE + 1`)).rows[0].d;
+  const endRow = process.env.STUDY_END || (await query(`SELECT (MAX(ts)::date - 3)::text d FROM price_bars_primary WHERE symbol='NQ' AND ts >= CURRENT_DATE - 7 AND ts < CURRENT_DATE + 1`)).rows[0].d;
   const NQ = indexBars(prep(await loadBars('price_bars_primary', `symbol='NQ'`, '2023-03-06', endRow))), d20 = d20Of(NQ), { bars, h4 } = build4h(NQ), LIM = pinnedLimit(NQ, endRow), sim = makeSim(NQ);
   const stored = new Map(); for (const r of (await query(`SELECT trade_date::text d, level_name n, price::float p FROM level_prices WHERE level_name = ANY($1) AND trade_date >= '2023-03-01'`, [NAMES])).rows) (stored.get(r.d) || stored.set(r.d, []).get(r.d)).push(r);
   const match = (x) => (stored.get(x.day) || []).filter((r) => Math.abs(r.p - x.level) <= x.band).map((r) => r.n);

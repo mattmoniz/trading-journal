@@ -42,19 +42,21 @@ async function getGlobexSessionDates() {
   // Session date S = the RTH date this overnight window leads INTO (matches
   // detectGlobexSetup()'s own sessionDate convention). Requires level_prices coverage
   // (for the prior-day level lookup) AND overnight bar coverage for the window ending at S.
+  // Rewritten 2026-10-27: the old form ran a correlated EXISTS against the price_bars_primary VIEW for every level_prices row (about 66,000 view scans, 4 minutes for a
+  // 4-month window and over 27 minutes for the full history, three at once). The qualifying dates are computed once instead: a session date S qualifies if a bar exists on
+  // S-1 at or after 18:00 or on S before 08:30. Verified identical to the old query on four windows (2026-07, 2025-09..12, 2024-02..03, 2023-03..04) in 129-947 ms vs 8-253 s.
   const r = await query(`
+    WITH ob AS (
+      SELECT (ts::date + 1) AS d FROM price_bars_primary
+      WHERE symbol = 'NQ' AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) >= 1080 GROUP BY 1
+      UNION
+      SELECT ts::date AS d FROM price_bars_primary
+      WHERE symbol = 'NQ' AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) < 510 GROUP BY 1
+    )
     SELECT lp.trade_date::text as trade_date
     FROM level_prices lp
     WHERE lp.trade_date <= CURRENT_DATE
-      AND EXISTS (
-        SELECT 1 FROM price_bars_primary p
-        WHERE p.symbol = 'NQ'
-          AND (
-            (p.ts::date = lp.trade_date - 1 AND EXTRACT(hour FROM p.ts)*60+EXTRACT(minute FROM p.ts) >= 1080)
-            OR
-            (p.ts::date = lp.trade_date AND EXTRACT(hour FROM p.ts)*60+EXTRACT(minute FROM p.ts) < 510)
-          )
-      )
+      AND lp.trade_date IN (SELECT d FROM ob)
     GROUP BY lp.trade_date
     HAVING COUNT(DISTINCT lp.level_name) >= 5
     ORDER BY lp.trade_date DESC
