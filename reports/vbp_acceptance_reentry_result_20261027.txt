@@ -1,0 +1,80 @@
+
+====================================================================================================
+TEST A RTH: events 1010; explore through 2025-01-28
+  EXPLORE (counted)  HIGH-LOW stratified 60m diff +0.014  97.5% one-sided lower -0.074 (upper +0.108)   HIGH n=199 mean +0.021  LOW n=224 mean +0.004
+  HOLD-OUT           HIGH-LOW stratified 60m diff -0.018  97.5% one-sided lower -0.190 (upper +0.135)   HIGH n=138 mean +0.009  LOW n=113 mean +0.038
+  FULL               HIGH-LOW stratified 60m diff +0.002  97.5% one-sided lower -0.083 (upper +0.083)   HIGH n=337 mean +0.016  LOW n=337 mean +0.016
+  HIGH excess over blind (explore) n=199: +0.022  lower -0.045 upper +0.090
+  LOW excess over blind (explore) n=224: +0.011  lower -0.054 upper +0.076
+  240m sensitivity HIGH-LOW (explore +0.045, hold-out +0.128, full +0.079)
+  up only HIGH-LOW full: -0.049 (n 497)
+  down only HIGH-LOW full: +0.046 (n 513)
+  descriptive: share re-entering the node within 2 cells  HIGH 31.2%  LOW 40.9%
+  descriptive: HIGH-LOW on POC-coincident nodes +0.087 (n 374), non-POC nodes -0.046 (n 636)
+
+====================================================================================================
+TEST A GLOBEX: events 1168; explore through 2025-03-10
+  EXPLORE (counted)  HIGH-LOW stratified 60m diff +0.125  97.5% one-sided lower +0.031 (upper +0.218)   HIGH n=259 mean +0.076  LOW n=168 mean -0.046
+  HOLD-OUT           HIGH-LOW stratified 60m diff -0.005  97.5% one-sided lower -0.114 (upper +0.096)   HIGH n=131 mean -0.017  LOW n=222 mean -0.000
+  FULL               HIGH-LOW stratified 60m diff +0.062  97.5% one-sided lower -0.001 (upper +0.124)   HIGH n=390 mean +0.045  LOW n=390 mean -0.020
+  HIGH excess over blind (explore) n=259: +0.075  lower +0.013 upper +0.139
+  LOW excess over blind (explore) n=168: -0.034  lower -0.094 upper +0.023
+  240m sensitivity HIGH-LOW (explore +0.130, hold-out -0.069, full +0.056)
+  up only HIGH-LOW full: +0.113 (n 603)
+  down only HIGH-LOW full: +0.003 (n 565)
+  descriptive: share re-entering the node within 2 cells  HIGH 29.2%  LOW 39.7%
+  descriptive: HIGH-LOW on POC-coincident nodes +0.006 (n 541), non-POC nodes +0.099 (n 627)
+
+====================================================================================================
+TEST D' RTH: positions 1010; S1 rows 526; control rows 2208; explore through 2025-01-28
+  EXPLORE (counted)  S1(re-entered) minus still-outside, incremental 60m signed move: +0.034  97.5% one-sided UPPER +0.113 (lower -0.049)
+  HOLD-OUT           S1(re-entered) minus still-outside, incremental 60m signed move: +0.105  97.5% one-sided UPPER +0.216 (lower -0.009)
+  FULL               S1(re-entered) minus still-outside, incremental 60m signed move: +0.044  97.5% one-sided UPPER +0.111 (lower -0.023)
+  descriptive (full): S1 mean +0.024 (n 526) MAE median +0.220; controls mean -0.021 (n 2208) MAE median +0.265
+  descriptive: S1 positions in open profit at the decision 0; fully given back within 60m: n/a%
+   offset 1: S1 n=270 mean +0.031   controls n=627 mean -0.012
+   offset 2: S1 n=106 mean -0.017   controls n=458 mean -0.043
+   offset 3: S1 n=54 mean +0.070   controls n=361 mean -0.034
+   offset 4: S1 n=54 mean +0.015   controls n=254 mean -0.030
+  descriptive S2 (first outside cell after entry): HIGH-density minus LOW-density incremental 60m +0.093 [-0.034,+0.221]  (HIGH n 321, LOW n 123)
+
+====================================================================================================
+TEST D' GLOBEX: positions 1168; S1 rows 655; control rows 3325; explore through 2025-03-10
+  EXPLORE (counted)  S1(re-entered) minus still-outside, incremental 60m signed move: +0.011  97.5% one-sided UPPER +0.073 (lower -0.054)
+  HOLD-OUT           S1(re-entered) minus still-outside, incremental 60m signed move: +0.062  97.5% one-sided UPPER +0.130 (lower -0.008)
+  FULL               S1(re-entered) minus still-outside, incremental 60m signed move: +0.030  97.5% one-sided UPPER +0.076 (lower -0.015)
+  descriptive (full): S1 mean +0.026 (n 655) MAE median +0.197; controls mean -0.012 (n 3325) MAE median +0.203
+  descriptive: S1 positions in open profit at the decision 0; fully given back within 60m: n/a%
+   offset 1: S1 n=307 mean +0.014   controls n=786 mean -0.012
+   offset 2: S1 n=123 mean +0.070   controls n=584 mean -0.023
+   offset 3: S1 n=78 mean +0.084   controls n=468 mean -0.018
+   offset 4: S1 n=53 mean -0.031   controls n=395 mean +0.000
+  descriptive S2 (first outside cell after entry): HIGH-density minus LOW-density incremental 60m -0.059 [-0.131,+0.014]  (HIGH n 354, LOW n 239)
+
+====================================================================================================
+TEST B RTH: events 159; explore through 2025-03-03 (95 events), hold-out 64
+  EXPLORE (counted)  far-boundary reach +45.3% vs matched blind +46.3%   diff -1.1 pts  97.5% one-sided lower -9.5 (n 95, 95 dates)
+  HOLD-OUT           far-boundary reach +43.8% vs matched blind +47.9%   diff -4.1 pts  97.5% one-sided lower -13.8 (n 64, 64 dates)
+  FULL               far-boundary reach +44.7% vs matched blind +46.9%   diff -2.3 pts  97.5% one-sided lower -8.6 (n 159, 159 dates)
+  descriptive: signed 60m move toward the far boundary mean +0.031 (H4 units); mirrored-target reach 46.5%
+
+====================================================================================================
+TEST B GLOBEX: events 162; explore through 2025-02-10 (97 events), hold-out 65
+  EXPLORE (counted)  far-boundary reach +29.9% vs matched blind +28.1%   diff +1.8 pts  97.5% one-sided lower -6.6 (n 97, 97 dates)
+  HOLD-OUT           far-boundary reach +44.6% vs matched blind +38.4%   diff +6.2 pts  97.5% one-sided lower -3.7 (n 65, 65 dates)
+  FULL               far-boundary reach +35.8% vs matched blind +32.2%   diff +3.6 pts  97.5% one-sided lower -2.9 (n 162, 162 dates)
+  descriptive: signed 60m move toward the far boundary mean +0.015 (H4 units); mirrored-target reach 32.1%
+
+====================================================================================================
+TEST C RTH (non-POC nodes): events 562; explore through 2025-01-31
+  EXPLORE (counted)  fade toward peak, signed 60m: back-inside -0.014 (n 93) minus no-back-inside +0.027 (n 248) = -0.041  97.5% one-sided lower -0.164
+  HOLD-OUT           fade toward peak, signed 60m: back-inside +0.015 (n 70) minus no-back-inside -0.094 (n 151) = +0.108  97.5% one-sided lower -0.077
+  FULL               fade toward peak, signed 60m: back-inside -0.002 (n 163) minus no-back-inside -0.019 (n 399) = +0.017  97.5% one-sided lower -0.085
+  descriptive (back-inside, full): peak reach 65.5% vs matched blind 65.4% (n 110); MAE median +0.269 p90 +0.886
+
+====================================================================================================
+TEST C GLOBEX (non-POC nodes): events 582; explore through 2025-04-03
+  EXPLORE (counted)  fade toward peak, signed 60m: back-inside -0.039 (n 78) minus no-back-inside -0.037 (n 255) = -0.002  97.5% one-sided lower -0.109
+  HOLD-OUT           fade toward peak, signed 60m: back-inside -0.026 (n 74) minus no-back-inside +0.027 (n 175) = -0.053  97.5% one-sided lower -0.179
+  FULL               fade toward peak, signed 60m: back-inside -0.032 (n 152) minus no-back-inside -0.011 (n 430) = -0.022  97.5% one-sided lower -0.106
+  descriptive (back-inside, full): peak reach 71.2% vs matched blind 74.9% (n 111); MAE median +0.231 p90 +0.690

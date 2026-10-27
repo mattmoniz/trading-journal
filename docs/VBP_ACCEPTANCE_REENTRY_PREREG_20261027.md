@@ -109,3 +109,20 @@ Code: `scripts/lib/vbpProfiles.mjs` (completed-cell loader, sessions, fat nodes,
 | B Globex | 164 | 164 | up 76 / down 88 (421 open inside, 175 never re-enter) |
 
 All arms clear the 30-event / 20-date bar. Offsets 7 and 8 of D' RTH S1 (5 and 2 events) are too thin to be analysed on their own and enter only through the offset-weighted mean. **Order of work:** A, then D', then B, then C, each run once; record each claim; flag the forward look.
+
+---
+## Amendment 4 (2026-10-27 evening) — RESULTS of the single run (`scripts/study_vbp_acceptance_reentry_20261027.mjs`, output `reports/vbp_acceptance_reentry_result_20261027.txt`)
+Run once per the frozen plan. One defect in my script was found and fixed after the first look at the output: Test B had let in events from the first 20 trade days (no H4, so their blind targets were NaN); they were dropped as in the other tests and the script rerun in full (Tests A, C and D' came out byte-identical; Test B moved by a point or two and its verdict did not change). Claims `vbp_breakout_outside_density_not_shown_20261027`, `vbp_bail_on_node_reentry_not_supported_20261027`, `vbp_prior_va_reentry_far_side_not_shown_20261027`, `vbp_failed_breakout_node_fade_not_shown_20261027`.
+
+| Test | Arm | Counted statistic (explore half) | One-sided 97.5% bound | Hold-out | Verdict |
+|---|---|---|---|---|---|
+| A engage | RTH | HIGH-LOW 60m +0.014 H4 | lower -0.074 | -0.018 | NOT SHOWN |
+| A engage | Globex | HIGH-LOW +0.125 (HIGH excess over blind +0.075) | lower +0.031 (excess lower +0.013) | -0.005 | explore clears, hold-out reverses: fails the screen rule; lead for the forward look only |
+| D' bail | RTH | re-entered minus still-outside +0.034 | upper +0.113 (needed below 0) | +0.105 | NOT SUPPORTED (wrong sign for bailing) |
+| D' bail | Globex | +0.011 | upper +0.073 | +0.062 | NOT SUPPORTED |
+| B value-area re-entry | RTH (159 events) | reach -1.1 points vs matched blind | lower -9.5 | -4.1 | NOT SHOWN |
+| B value-area re-entry | Globex (162) | reach +1.8 points | lower -6.6 | +6.2 | NOT SHOWN |
+| C fade failed breakout (non-POC) | RTH (562) | back-inside minus no-back-inside -0.041 | lower -0.164 | +0.108 | NOT SHOWN |
+| C fade failed breakout (non-POC) | Globex (582) | -0.002 | lower -0.109 | -0.053 | NOT SHOWN |
+
+**What the numbers can and cannot say.** Resolution: the explore-half intervals are about 0.18 H4 wide for A and D' (0.1 H4 is about 17 NQ points), about 17 points of reach for B. An effect smaller than that could not have been seen. The practitioner readings tested here (volume building outside a node, bail on re-entry, prior value-area re-entry, fade a failed breakout) were NOT SHOWN on this history with these definitions (Sierra peak rule N=3, 30-minute cells, density relative to the developing profile); that is not a finding that the reading is wrong, and it does not test delta or imbalance reads, discretionary shape reads, or finer than 30-minute resolution. Descriptive only (not counted): the Globex A effect sits in non-POC nodes and in up-breakouts; D' S2 (high versus low outside density while still outside) has opposite signs in RTH and Globex; the planned D' give-back descriptive is vacuous by construction. Eight counted cells exist, so one explore-half clearing by chance is about an 18 percent event. **Forward look:** decision `vbp_acceptance_forward_look_20270401`. **Next in the thread:** the point-of-control migration and multi-week floor tests (`docs/POC_MIGRATION_AND_MULTIWEEK_FLOOR_PREREG_20261027.md`), first step the first-look distributions before any outcome.
