@@ -71,7 +71,7 @@ async function main() {
   const rows = (await query(`SELECT setup_type, trade_date::text d, cluster_touch_id cl, actual_pnl::float p FROM active_setups
     WHERE origin_status IN ('ACTIVE','SHADOW') AND trade_date >= '2026-07-09' AND actual_pnl IS NOT NULL
       AND resolution IS DISTINCT FROM 'NOT_FILLED' AND ib_window_stale_basis IS NOT TRUE AND stale_entry_price_basis IS NOT TRUE
-      AND late_fill_past_expiry_basis IS NOT TRUE AND bad_bars_basis IS NOT TRUE
+      AND late_fill_past_expiry_basis IS NOT TRUE AND bad_bars_basis IS NOT TRUE AND stale_levels_basis IS NOT TRUE
       AND NOT (fired_at::time >= '16:00' AND fired_at::time < '18:00') AND setup_type NOT LIKE 'POC_ROTATION_JOIN%'`)).rows;
   const by = new Map(); for (const r of rows) (by.get(r.setup_type) || by.set(r.setup_type, []).get(r.setup_type)).push(r);
   const evals = new Map();

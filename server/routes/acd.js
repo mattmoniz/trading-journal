@@ -50,7 +50,7 @@ import { getDayTypeAtFire, getVolBucketAtFire, minutesFromSessionOpen, computeFi
 export { getDayTypeAtFire, getVolBucketAtFire, minutesFromSessionOpen, computeFireTags, FIRE_TAG_COLS, fireTagValues };
 import { getOrVolBaseline20d, getVolatilityScaledDefault, getValueAreaRegimeMap, computeRegimeStamp, REGIME_STAMP_COLS, regimeStampValues, getVolumeBuildingCalibration, computeLiveVolumeBuildingSignal, getPaceBaseline, getVaOverlapStreak, getPriorDayProfile } from '../services/acdLiveCalibration.js';
 export { getPaceBaseline };
-import { getGLine, getConvictionData, computeDynamicConviction, getTrailingVwapStd, getTrailing24hrVwapStd, getGlobex24hrBars, rollingStats, getTrailingORWidths, classifyOpeningCallType, getPriorDayRthRange } from '../services/queries.js';
+import { getGLine, getConvictionData, computeDynamicConviction, getTrailingVwapStd, getTrailing24hrVwapStd, getGlobex24hrBars, rollingStats, getTrailingORWidths, classifyOpeningCallType, getPriorDayRthRange, getPriorMonthRthStats } from '../services/queries.js';
 import {
   computeACDFromBars,
   getBestACDParams,
@@ -2256,19 +2256,8 @@ export default function createACDRouter(io) {
       const priorFrom = `${priorYear}-${String(priorMonth).padStart(2, '0')}-01`;
       const priorTo   = `${currentYear}-${String(currentMonth + 1).padStart(2, '0')}-01`;
 
-      const r = await query(`
-        SELECT
-          MAX(high)   as prior_month_high,
-          MIN(low)    as prior_month_low,
-          (SELECT close FROM price_bars_primary WHERE symbol='NQ'
-            AND ts >= $1::date AND ts < $2::date
-            AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16
-            ORDER BY ts DESC LIMIT 1) as prior_month_close
-        FROM price_bars_primary
-        WHERE symbol = 'NQ'
-          AND ts >= $1::date AND ts < $2::date
-          AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16
-      `, [priorFrom, priorTo]);
+      const rth = await getPriorMonthRthStats(priorFrom, priorTo);
+      const r = { rows: [{ prior_month_high: rth.h, prior_month_low: rth.l, prior_month_close: rth.c }] };
 
       const { prior_month_high: ph, prior_month_low: pl, prior_month_close: pc } = r.rows[0];
       if (!ph || !pl || !pc) return res.status(404).json({ error: 'Insufficient bar data for prior month' });

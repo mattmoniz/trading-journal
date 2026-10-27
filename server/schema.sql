@@ -456,7 +456,8 @@ CREATE TABLE public.active_setups (
     bad_bars_basis boolean,
     pnl_source character varying(10),
     broker_pnl numeric,
-    rotation_65pt_gate_shadow jsonb
+    rotation_65pt_gate_shadow jsonb,
+    stale_levels_basis boolean
 );
 
 

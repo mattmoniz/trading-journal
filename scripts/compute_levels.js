@@ -375,7 +375,11 @@ async function computeLevelsForDate(date) {
   `, [date]);
   add('RTH_VWAP', rthVwapR.rows[0]?.vwap ? parseFloat(rthVwapR.rows[0].vwap) : null, 'VWAP');
 
-  // Weekly VWAP (Mon open → date, week-to-date as of the date being computed)
+  // Weekly VWAP (Mon open → the session BEFORE `date`: week-to-date AS OF THE OPEN of `date`)
+  // 2026-10-27: the upper bound is now EXCLUSIVE (`ts::date < date`). It used to be `BETWEEN wb.mon AND date`, which made every row written by a backfill/recompute
+  // include the trade day's own full session (median 54 points from the as-of-open value), while rows written live by the 08:00 cron could only ever contain prior
+  // days, so historical backtests of WEEKLY_VWAP/MONTHLY_VWAP touches saw a level shaped by that day's afternoon. Now both agree with live. Consequence (same as live):
+  // no row on the first trading day of a week or month (nothing to average yet). RTH_VWAP stays day-of (intraday by nature).
   // Fixed 2026-07-14: was `BETWEEN wb.mon AND wb.fri` (the week's Friday, regardless of `date`)
   // -- a genuine lookahead bug for any date before that week's Friday, since it pulled in
   // volume/price data from days that hadn't happened yet relative to `date`. Live acd.js reads
@@ -386,7 +390,7 @@ async function computeLevelsForDate(date) {
   const weekVwapR = await q(`
     SELECT SUM(close::numeric * volume::numeric) / NULLIF(SUM(volume::numeric), 0) AS vwap
     FROM price_bars_primary
-    WHERE symbol = 'NQ' AND ts::date BETWEEN $1 AND $2
+    WHERE symbol = 'NQ' AND ts::date >= $1 AND ts::date < $2
       AND EXTRACT(hour FROM ts) * 60 + EXTRACT(minute FROM ts) BETWEEN 570 AND 959
       AND volume > 0
   `, [wb.mon, date]);
@@ -400,7 +404,7 @@ async function computeLevelsForDate(date) {
   const monthVwapR = await q(`
     SELECT SUM(close::numeric * volume::numeric) / NULLIF(SUM(volume::numeric), 0) AS vwap
     FROM price_bars_primary
-    WHERE symbol = 'NQ' AND ts::date BETWEEN $1 AND $2
+    WHERE symbol = 'NQ' AND ts::date >= $1 AND ts::date < $2
       AND EXTRACT(hour FROM ts) * 60 + EXTRACT(minute FROM ts) BETWEEN 570 AND 959
       AND volume > 0
   `, [mb.first, date]);

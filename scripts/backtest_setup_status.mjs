@@ -79,7 +79,12 @@ const SUPPRESS_MAX_EV  = -5;   // EV below -$5/trade (sole condition — no WR g
 // price history, but the live system would never actually leave a resting order open that
 // long -- it marks NOT_FILLED at expiry, full stop. Flagged so these can be inspected without
 // silently inflating any setup_type's real N/EV with fills that could never have happened live.
-export const REAL_TRADE_FILTER = `origin_status IN ('ACTIVE','SHADOW') AND (resolution_method IS NULL OR resolution_method NOT IN ('MARK_TO_MARKET','RECOVERY_MTM')) AND ib_window_stale_basis IS NOT TRUE AND stale_entry_price_basis IS NOT TRUE AND late_fill_past_expiry_basis IS NOT TRUE AND bad_bars_basis IS NOT TRUE`;
+// stale_levels_basis (2026-10-27, user request after the level repairs, scripts/flag_stale_levels_basis_20261027.mjs): rows whose own entry rested on a level the 2026-10-25..27
+// repairs later proved wrong (stale prior-day/week/month/3-month/prior-year values, a wrong monthly pivot or opening range, the ONH/ONL window bug) or on a lookahead
+// VWAP (BACKFILL rows of WEEKLY/MONTHLY_VWAP fades). Flagged per row by evidence (entry closer to the old level than to the corrected one), never by date alone; 1,474 rows, of
+// which 58 real primary rows (16 ACTIVE, almost all on 2026-10-08 when prior-day levels were built from an incomplete 10-07 session). Rows are kept, only excluded here.
+// NOT applied to the quick-check Performance card (it filters client-side and still shows every real fired trade).
+export const REAL_TRADE_FILTER = `origin_status IN ('ACTIVE','SHADOW') AND (resolution_method IS NULL OR resolution_method NOT IN ('MARK_TO_MARKET','RECOVERY_MTM')) AND ib_window_stale_basis IS NOT TRUE AND stale_entry_price_basis IS NOT TRUE AND late_fill_past_expiry_basis IS NOT TRUE AND bad_bars_basis IS NOT TRUE AND stale_levels_basis IS NOT TRUE`;
 // EDGE_ATTRIBUTABLE_TRADE_FILTER (2026-10-12, OPEN_DECISION
 // risk_gate_blocked_shadow_rows_pollute_real_ev_20261012, DeepSeek-reviewed): a SEPARATE,
 // narrower constant from REAL_TRADE_FILTER above -- deliberately NOT folded into the shared

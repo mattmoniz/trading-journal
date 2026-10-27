@@ -99,6 +99,7 @@ import { run as runMonthlyReport } from '../scripts/monthly_report.js';
 import { runDailyCoaching } from '../scripts/daily_coaching.js';
 
 import { query, getQueryProfile } from './db.js';
+import { getPriorMonthRthStats } from './services/queries.js';
 import { cacheGet, cacheSet } from './lib/cache.js';
 import { monitorEventLoopDelay } from 'node:perf_hooks';
 import { logProcess } from './lib/processLog.js';
@@ -307,7 +308,7 @@ async function autoBulkBackfillIfEmpty() {
       const priorFrom  = `${priorYear}-${String(priorMonth).padStart(2,'0')}-01`;
       const priorTo    = `${nowET.getFullYear()}-${String(nowET.getMonth()+1).padStart(2,'0')}-01`;
       const monthYear  = `${nowET.getFullYear()}-${String(nowET.getMonth()+1).padStart(2,'0')}`;
-      const pr = await query(`SELECT MAX(high) as h, MIN(low) as l, (SELECT close FROM price_bars_primary WHERE symbol='NQ' AND ts >= $1::date AND ts < $2::date AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16 ORDER BY ts DESC LIMIT 1) as c FROM price_bars_primary WHERE symbol='NQ' AND ts >= $1::date AND ts < $2::date AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16`, [priorFrom, priorTo]);
+      const pr = { rows: [await getPriorMonthRthStats(priorFrom, priorTo)] };
       const { h: ph, l: pl, c: pc } = pr.rows[0];
       if (ph && pl && pc) {
         const piv = (parseFloat(ph) + parseFloat(pl) + parseFloat(pc)) / 3;
@@ -1702,14 +1703,7 @@ httpServer.listen(PORT, () => {
       const priorYear  = nowET.getMonth() === 0 ? nowET.getFullYear()-1 : nowET.getFullYear();
       const priorFrom  = `${priorYear}-${String(priorMonth).padStart(2,'0')}-01`;
       const priorTo    = `${nowET.getFullYear()}-${String(nowET.getMonth()+1).padStart(2,'0')}-01`;
-      const pr = await query(`
-        SELECT MAX(high) as h, MIN(low) as l,
-          (SELECT close FROM price_bars_primary WHERE symbol='NQ' AND ts >= $1::date AND ts < $2::date
-           AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16 ORDER BY ts DESC LIMIT 1) as c
-        FROM price_bars_primary WHERE symbol='NQ' AND ts >= $1::date AND ts < $2::date
-        AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16
-      `, [priorFrom, priorTo]);
-      const { h, l, c } = pr.rows[0];
+      const { h, l, c } = await getPriorMonthRthStats(priorFrom, priorTo);
       if (!h || !l || !c) return;
       const piv = (parseFloat(h)+parseFloat(l)+parseFloat(c))/3;
       await query(`INSERT INTO acd_monthly_pivot (month_year,prior_month_high,prior_month_low,prior_month_close,pivot_level,pivot_r1,pivot_s1) VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT (month_year) DO NOTHING`,

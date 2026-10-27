@@ -84,10 +84,13 @@ export async function computeACDFromBars(date, orMinutes, aMultiplier, sustainMi
     if (aDownFired && c < orLow)  { cDownConfirmed = true; cDownTime = new Date(bar.ts).toISOString().slice(11, 16); break; }
   }
 
-  // Session close
-  const sessionClose = parseFloat(bars.rows[bars.rows.length - 1]?.close) || null;
-  const sessionHigh  = Math.max(...bars.rows.map(b => parseFloat(b.high)));
-  const sessionLow   = Math.min(...bars.rows.map(b => parseFloat(b.low)));
+  // Session close/high/low over the RTH window only (09:30 to the last bar before 16:00). The query above reads to 16:15 (so C confirmation can see the
+  // first minutes after the close), and taking the LAST bar of that window made "session_close" the 16:14 price, about 10 points off the real 15:59 close
+  // on every row written by this function (455 of 914 rows, found 2026-10-27). developing_value_log.session_close already uses the 15:59 definition.
+  const rthBars = bars.rows.filter(b => minsFromBar(b.ts) < 16 * 60);
+  const sessionClose = parseFloat(rthBars[rthBars.length - 1]?.close) || null;
+  const sessionHigh  = Math.max(...rthBars.map(b => parseFloat(b.high)));
+  const sessionLow   = Math.min(...rthBars.map(b => parseFloat(b.low)));
 
   // Score
   let score = 0;

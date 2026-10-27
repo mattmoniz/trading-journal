@@ -6,6 +6,22 @@
 import { query } from '../db.js';
 import { cacheGet, cacheSet } from '../lib/cache.js';
 
+// ── Prior-month RTH stats (high / low / close) for the monthly pivot ───────────────────────
+// RTH window = 09:30 to the last bar before 16:00 (minute-of-day 570..959), the same window level_prices (PM_*, MPP/MR/MS) uses. The four monthly-pivot writers used to
+// filter `EXTRACT(hour FROM ts) BETWEEN 9 AND 16` (09:00-16:59: pre-open half hour and the whole post-close hour) and took the 16:59 bar as "close", so
+// acd_monthly_pivot disagreed with level_prices by up to 71 points on the pivot (2026-08). priorFrom/priorTo = first day of the prior month / first day of this month.
+export async function getPriorMonthRthStats(priorFrom, priorTo) {
+  const r = await query(`
+    SELECT MAX(high)::float AS h, MIN(low)::float AS l,
+      (SELECT close::float FROM price_bars_primary WHERE symbol='NQ' AND ts >= $1::date AND ts < $2::date
+         AND EXTRACT(hour FROM ts)*60 + EXTRACT(minute FROM ts) BETWEEN 570 AND 959 ORDER BY ts DESC LIMIT 1) AS c
+    FROM price_bars_primary
+    WHERE symbol='NQ' AND ts >= $1::date AND ts < $2::date
+      AND EXTRACT(hour FROM ts)*60 + EXTRACT(minute FROM ts) BETWEEN 570 AND 959
+  `, [priorFrom, priorTo]);
+  return r.rows[0] || { h: null, l: null, c: null };
+}
+
 // ── NL30 / NL10 rolling sums ────────────────────────────────────────────────
 
 /**
