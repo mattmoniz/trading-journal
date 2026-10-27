@@ -10,5 +10,8 @@ console.log('created');
 // any bar size is composed by summing aligned slots. Built by scripts/tick_microstructure/build_vap_30m_20261026.py, loaded by scripts/load_vap_30m.mjs.
 await query(`CREATE TABLE IF NOT EXISTS volume_at_price_30m (bar_start TIMESTAMP NOT NULL, price NUMERIC(9,2) NOT NULL, vol INTEGER NOT NULL, PRIMARY KEY (bar_start, price))`);
 await query(`CREATE TABLE IF NOT EXISTS volume_at_price_30m_days (trade_date DATE PRIMARY KEY, tick_volume BIGINT NOT NULL, loaded_at TIMESTAMP DEFAULT NOW())`);
+await query(`CREATE TABLE IF NOT EXISTS volume_at_price_30m_ba (bar_start TIMESTAMP NOT NULL, price NUMERIC(9,2) NOT NULL, bid_vol INTEGER NOT NULL, ask_vol INTEGER NOT NULL, PRIMARY KEY (bar_start, price))`);
+await query(`CREATE TABLE IF NOT EXISTS volume_at_price_30m_ba_days (trade_date DATE PRIMARY KEY, bid_volume BIGINT NOT NULL, ask_volume BIGINT NOT NULL, loaded_at TIMESTAMP DEFAULT NOW())`);
+// 2026-10-26 (later): bid_vol = aggressive sells (BidVolume), ask_vol = aggressive buys (AskVolume), summed from the RAW records per price per 30-minute slot as Sierra's Volume by Price / Numbers Bars do; bid_vol + ask_vol = vol of volume_at_price_30m in every cell (checked). delta by price = ask_vol - bid_vol. Built by build_vap_30m_ba_20261026.py, loaded by load_vap_30m_ba.mjs.
 console.log('created 30m tables');
 process.exit(0);
