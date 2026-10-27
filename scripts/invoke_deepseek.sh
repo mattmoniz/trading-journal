@@ -43,6 +43,16 @@ if [ ! -f "$REQUEST" ]; then
   exit 1
 fi
 
+# Peak-pricing guard (added 2026-10-26, user: "it just drains my account quickly"). DeepSeek's surge windows are defined in UTC: Monday-Friday (UTC calendar day), 01:00-04:00 and
+# 06:00-10:00 UTC (reference_deepseek_no_midnight_to_7am_est memory, verified against api-docs.deepseek.com/quick_start/pricing 2026-09-13). The check uses the UTC clock directly so it
+# is DST-proof. Refuses unless DEEPSEEK_ALLOW_PEAK=1 is set, which is only for when the USER has said to pay the surge cost for an immediate run. A run takes minutes, so the end of the
+# allowed window is not checked; schedule a long run so it does not drift into the next window.
+UTC_DOW=$(date -u +%u); UTC_HOUR=$((10#$(date -u +%H)))
+if [ "$UTC_DOW" -le 5 ] && { { [ "$UTC_HOUR" -ge 1 ] && [ "$UTC_HOUR" -lt 4 ]; } || { [ "$UTC_HOUR" -ge 6 ] && [ "$UTC_HOUR" -lt 10 ]; }; } && [ "${DEEPSEEK_ALLOW_PEAK:-0}" != "1" ]; then
+  echo "REFUSED: DeepSeek PEAK pricing window now ($(TZ=America/New_York date '+%a %H:%M ET') = $(date -u '+%a %H:%M UTC')). Off-peak: 04:00-06:00 and 10:00-01:00 UTC on weekdays, all weekend UTC (ET: 12-2 AM and 6 AM-9 PM weekdays during EDT; Fri 8 PM-Sun 9 PM ET always). Set DEEPSEEK_ALLOW_PEAK=1 only if the user says to pay for an immediate run." >&2
+  exit 3
+fi
+
 # Convert "15m"/"30m"/"1h" style timeout into seconds for cline's -t flag (which takes
 # raw seconds, unlike agy's --print-timeout which accepts the "15m" string directly).
 case "$TIMEOUT_ARG" in
