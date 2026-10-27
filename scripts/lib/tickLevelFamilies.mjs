@@ -4,7 +4,8 @@
 import { query } from '../../server/db.js';
 import { profileFromRows } from '../../server/services/tickVolumeProfile.js';
 export const add = (s, n) => { const d = new Date(s + 'T12:00:00Z'); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
-export const addMonths = (s, n) => { const d = new Date(s + 'T12:00:00Z'); d.setUTCMonth(d.getUTCMonth() + n); return d.toISOString().slice(0, 10); };
+import { shiftMonthsClamped } from '../../server/lib/dateMath.js';
+export const addMonths = (s, n) => shiftMonthsClamped(s, n); // clamped (2026-10-27): the raw setUTCMonth overflowed on the 29th-31st
 const weekBounds = (s) => { const d = new Date(s + 'T12:00:00Z'), dow = d.getUTCDay(), back = dow === 0 ? 6 : dow - 1; const mon = add(s, -back); return [mon, add(mon, 4)]; };
 const monthBounds = (s) => { const d = new Date(s + 'T12:00:00Z'); return [new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1)).toISOString().slice(0, 10), new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0)).toISOString().slice(0, 10)]; };
 export async function loadTick({ session = 'rth' } = {}) {   // session: 'rth' (stored-level definitions) or 'all' (Sierra-style, whole trade-date session)

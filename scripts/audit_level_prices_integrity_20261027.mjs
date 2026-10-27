@@ -9,7 +9,8 @@ const add = (s, n) => { const d = new Date(s + 'T12:00:00Z'); d.setUTCDate(d.get
 const rng = (a, b) => { let h = -Infinity, l = Infinity, n = 0; for (const d of rth) if (d >= a && d <= b) { const x = days.get(d); h = Math.max(h, x.h); l = Math.min(l, x.l); n++; } return n ? { h, l, n } : null; };
 const prior = (d) => { let lo = 0, hi = rth.length; while (lo < hi) { const m = (lo + hi) >> 1; if (rth[m] < d) lo = m + 1; else hi = m; } return lo ? rth[lo - 1] : null; };
 const wk = (s) => { const d = new Date(s + 'T12:00:00Z'), dow = d.getUTCDay(), back = dow === 0 ? 6 : dow - 1, mon = add(s, -back); return [add(mon, -7), add(mon, -3)]; };
-const mo = (s) => { const d = new Date(s + 'T12:00:00Z'); d.setUTCMonth(d.getUTCMonth() - 1); return [new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1)).toISOString().slice(0, 10), new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0)).toISOString().slice(0, 10)]; };
+// Prior month computed INDEPENDENTLY of compute_levels.js's helper: from the year/month digits of the date, never by shifting a Date (which overflowed on the 31st and hid the bug from this audit until 2026-10-27).
+const mo = (s) => { const y = +s.slice(0, 4), m = +s.slice(5, 7); const f = Date.UTC(y, m - 2, 1), l = Date.UTC(y, m - 1, 0); return [new Date(f).toISOString().slice(0, 10), new Date(l).toISOString().slice(0, 10)]; };
 const st = new Map(); for (const r of (await query(`SELECT trade_date::text d, level_name n, price::float p FROM level_prices WHERE trade_date >= '2023-11-01' AND level_name ~ '^(PD|PW|PM)_(HIGH|LOW|VAH|VAL|POC)$'`)).rows) { let m = st.get(r.d); if (!m) st.set(r.d, (m = {})); m[r.n] = r.p; }
 const bad = { PD: [], PW: [], PM: [] }, why = {};
 for (const [d, s] of [...st].sort()) {

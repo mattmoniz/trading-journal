@@ -31,6 +31,7 @@
 import pg from 'pg';
 import dotenv from 'dotenv';
 import { computeVolumeProfileForRange, computeAndPersistSession } from '../server/services/developingValueService.js';
+import { shiftMonthsClamped } from '../server/lib/dateMath.js';
 dotenv.config();
 
 const pool = new pg.Pool({
@@ -90,9 +91,8 @@ function monthBounds(dateStr) {
 
 // ─── 3-month start (approx 63 trading days back) ─────────────────────────
 function threeMonthStart(dateStr) {
-  const d = new Date(dateStr + 'T12:00:00Z');
-  d.setUTCMonth(d.getUTCMonth() - 3);
-  return d.toISOString().slice(0, 10);
+  // Clamped month shift (2026-10-27): setUTCMonth(-3) overflowed on dates like May 31 / Dec 31 / Jul 31 and started the window 1-3 days late.
+  return shiftMonthsClamped(dateStr, -3);
 }
 
 // ─── Year boundaries (calendar year containing dateStr) ───────────────────
@@ -453,9 +453,9 @@ async function computeLevelsForDate(date) {
   }
 
   // ── 9. Prior month H/L/VA ────────────────────────────────────────────────
-  const pmD = new Date(date + 'T12:00:00Z');
-  pmD.setUTCMonth(pmD.getUTCMonth() - 1);
-  const pmBounds = monthBounds(pmD.toISOString().slice(0, 10));
+  // Prior month via the clamped shift (2026-10-27). The old `setUTCMonth(getUTCMonth() - 1)` turned July 31 into "June 31" = July 1, so on 17 trading dates
+  // since 2023-03 (every 31st after a 30-day month, plus March 29-31) "prior month" was the CURRENT month, the day itself included.
+  const pmBounds = monthBounds(shiftMonthsClamped(date, -1));
 
   const pmHlR = await q(`
     SELECT MAX(high)::float AS h, MIN(low)::float AS l

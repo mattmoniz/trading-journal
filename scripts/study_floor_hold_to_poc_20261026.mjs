@@ -119,7 +119,7 @@ function contrast(label, res) {
 const show = (c) => console.log(`${c.label.padEnd(24)} paired n=${c.pairs}/${c.pairDays}d | K3P hit ${f3(c.hitK3)} pts ${f1(c.ptsK3)} vs its own K1 hit ${f3(c.hitK1)} pts ${f1(c.ptsK1)} | ` + (c.underpowered ? 'UNDERPOWERED' : `hitDiff ${f3(c.hitDiff)} seqCI [${f3(c.hitCIseq.lo)},${f3(c.hitCIseq.hi)}] dayCI [${f3(c.hitCIday.lo)},${f3(c.hitCIday.hi)}] | ptsDiff ${f1(c.ptsDiff)} seqCI [${f1(c.ptsCIseq.lo)},${f1(c.ptsCIseq.hi)}] dayCI [${f1(c.ptsCIday.lo)},${f1(c.ptsCIday.hi)}]`) + ` | (descriptive unpaired: K3P ${f3(c.unpairedHitK3)} n${c.k3n} vs K1 ${f3(c.unpairedHitK1)} n${c.k1n})`);
 
 async function main() {
-  const endRow = (await query(`SELECT (MAX(ts)::date - 1)::text d FROM price_bars_primary WHERE symbol='NQ' AND ts >= CURRENT_DATE - 7 AND ts < CURRENT_DATE + 1`)).rows[0].d;
+  const endRow = process.env.STUDY_END || (await query(`SELECT (MAX(ts)::date - 1)::text d FROM price_bars_primary WHERE symbol='NQ' AND ts >= CURRENT_DATE - 7 AND ts < CURRENT_DATE + 1`)).rows[0].d; // STUDY_END (2026-10-27) pins the end for before/after repair comparisons; inert unless set
   console.log(`NQ bars ${START}..${endRow} (last complete date, reused verbatim)`);
   const NQ = prep(await loadBars('price_bars_primary', `symbol='NQ'`, START, endRow));
   console.log(`bars ${NQ.n}, trade dates ${NQ.days.length}`);

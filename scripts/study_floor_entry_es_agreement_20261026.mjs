@@ -124,7 +124,7 @@ function summarizeSide(label, rows, counts) {
 }
 
 async function main() {
-  const endRow = (await query(`SELECT (MAX(ts)::date - 1)::text d FROM price_bars_primary WHERE symbol='NQ' AND ts >= CURRENT_DATE - 7 AND ts < CURRENT_DATE + 1`)).rows[0].d;
+  const endRow = process.env.STUDY_END || (await query(`SELECT (MAX(ts)::date - 1)::text d FROM price_bars_primary WHERE symbol='NQ' AND ts >= CURRENT_DATE - 7 AND ts < CURRENT_DATE + 1`)).rows[0].d; // STUDY_END (2026-10-27) pins the end for before/after repair comparisons; inert unless set
   console.log(`NQ/ES bars ${START}..${endRow} (last complete date, reused verbatim); turn fraction m=${M}`);
   const NQ = index(prep(await loadBars('price_bars_primary', `symbol='NQ'`, START, endRow))), ES = index(prep(await loadBars('price_bars_es_front', '1=1', START, endRow)));
   const NQn = index(neg(NQ)), ESn = index(neg(ES)); NQn.A15 = NQ.A15; NQn.TD = NQ.TD; ESn.A15 = ES.A15; ESn.TD = ES.TD; NQn.days = NQ.days; NQn.capIdx = NQ.capIdx;
