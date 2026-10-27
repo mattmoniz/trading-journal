@@ -16,3 +16,8 @@ ES floors (both targets); scale split; the fixed-3R target on the same events; t
 
 ## Forward look
 Add ES to the existing forward look of the NQ test (`multiscale_run_forward_look_20270401`): same frozen rule on events dated 2026-10-27 or later.
+
+---
+## Amendment 1 (2026-10-27, before any ES event or outcome was computed) — data-quality exclusion
+A check of ES daily volume by month (no prices, no outcomes) found it normal (median 1.0 to 1.9 million contracts) except 2023-02/early 2023-03 (the file starts 2023-02-24; the first sessions hold a few thousand contracts) and 2026-01/2026-02 (median 635 and 1,690: the thin ESM6 back-month stretch already known as `rth_minutes < 371` in `es_front_calendar`). **Exclusion:** an ES trade date is excluded (events, controls, composites) when its session volume is below 20 percent of the median of the preceding 60 dates (and for the first 60 dates, below 20 percent of the median of the dates so far, minimum 20). Dates excluded are counted and printed.
+The ES tick builder (`scripts/tick_microstructure/build_vap_daily_es_20261027.py`) reconciled exactly to the database volume on the 15 dates tested across 2023, 2025 and 2026 before this amendment.
