@@ -9,7 +9,7 @@ import { f3 } from './lib/floorStats.mjs';
 import { build4h, k1Events, d20Of, pinnedLimit } from './lib/fourHourLevels.mjs';
 import { multiScaleEvents } from './lib/multiScaleRuns.mjs';
 import { COST, PTV, makeSim, blindDraws, poolDraws, median, dc, ci, diffCI, fmt, dropTopDate } from './lib/exitSim.mjs';
-const ARM = { hold: 2880, lenient: true }, STOP_MULT = 0.5, ALPHA6 = 0.05 / 6 / 2;
+const ARM = { hold: 2880, lenient: true }, STOP_MULT = 0.5, ALPHA6 = 0.05 / 6 / 2, LVN_N = 3;
 async function main() {
   const endRow = (await query(`SELECT (MAX(ts)::date - 3)::text d FROM price_bars_primary WHERE symbol='NQ' AND ts >= CURRENT_DATE - 7 AND ts < CURRENT_DATE + 1`)).rows[0].d;
   const NQ = indexBars(prep(await loadBars('price_bars_primary', `symbol='NQ'`, '2023-03-06', endRow))), d20 = d20Of(NQ), { bars, h4 } = build4h(NQ), LIM = pinnedLimit(NQ, endRow), { run, capOf } = makeSim(NQ);
@@ -26,9 +26,9 @@ async function main() {
     if (prior.length === 20 && have.length >= 17) {
       const bw = Math.max(0.25, Math.round((0.1 * H4) / 0.25) * 0.25), acc = new Map(); let mn = Infinity, mx = -Infinity;
       for (const d of have) for (const [k, v] of vap.get(d)) { const p = k / 4, b = Math.floor(p / bw); acc.set(b, (acc.get(b) || 0) + v); mn = Math.min(mn, b); mx = Math.max(mx, b); }
-      const n = mx - mn + 1, raw = new Array(n).fill(0); for (const [b, v] of acc) raw[b - mn] = v; const s = raw.map((_, i) => { let t = 0, c = 0; for (let j = i - 1; j <= i + 1; j++) if (j >= 0 && j < n) { t += raw[j]; c++; } return t / c; });
-      const out = [];
-      for (let i = 1; i < n - 1; i++) if (s[i] < s[i - 1] && s[i] <= s[i + 1]) { let l = i; while (l > 0 && s[l - 1] >= s[l]) l--; let r = i; while (r < n - 1 && s[r + 1] >= s[r]) r++; if (l === i || r === i) continue; const pk = Math.min(s[l], s[r]); if (s[i] <= 0.7 * pk) out.push({ price: (mn + i + 0.5) * bw, vol: s[i] }); }
+      const n = mx - mn + 1, raw = new Array(n).fill(0); for (const [b, v] of acc) raw[b - mn] = v; const out = [], N = LVN_N;
+      // Sierra Chart's own Volume by Price definition (docs: "A peak or valley is defined when a given volume bar has bars above that are ... greater than it (Valley) ... and volume bars below that are ... greater than or equal to it (Valley)", searched N bars above and below; profile edges excluded = "Include High/Low in Peaks and Valleys: No")
+      for (let i = N; i < n - N; i++) { let ok = true; for (let k = 1; k <= N && ok; k++) if (!(raw[i + k] > raw[i]) || !(raw[i - k] >= raw[i])) ok = false; if (ok) out.push({ price: (mn + i + 0.5) * bw, vol: raw[i] }); }
       res = { valleys: out, bw, days: have.length };
     }
     compCache.set(key, res); return res;
