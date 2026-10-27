@@ -10859,3 +10859,23 @@ data drift over hours, not a regression); real DB-backed tests for all three mec
 trades (134741, and the earlier 3 missing-order cases) all confirmed resolved in the live DB,
 not just in test fixtures.
 
+
+---
+## Archive batch: 2026-10-26 (cutoff 2026-10-19, keep last 7 days)
+
+### From "2026-10-18/19 overnight session (Sierra incident + bias-state research) — handoff"
+
+- **Done and committed (last commit `49af673`):** stranded short 136064 flattened by a guarded manual close; baseline reset id 4; order-account label bug found (the default order path never sends the per-session account; 63 orders 2026-10-13..18 were labelled Globex but ran under DTC-Live-Simulator) — repaired labels (backup `order_placements_trade_account_backup_20261019`), set `DTC_GLOBEX_TRADE_ACCOUNT=DTC-Live-Simulator`, mismatch now DETECTED not rewritten, boot warning; `POSITION_SAMPLE` trigger migration; ML scoring supervisor hardened (reap stale scorer, retry, kill on exit, banner on scorer down / gate fail-closed); daily-loss gate unblocked by repairing 136064's entry price (29784) and `broker_pnl` (+161.00). Details: CLAUDE.md "Where to look" first Sierra entries, `docs/SIERRA_CHART_NOTES.md`.
+
+
+
+- **Directional bias state study (crack size + open single print + stretch):** market-level L1 failed its pre-registered kill rule; roster-level "with the prior-2-session direction beats against" exists only in the BACKFILL simulation and does not replicate for the same setup families in the real era; nothing built or wired. `docs/DIRECTIONAL_BIAS_STATE_SPEC.md` sections 10-12, claims `bias_state_*`, `ib_break_hold_continuation_bar_level_20261018`, `globex_heavy_leg_leads_rth_lag_20261018`. Successor decision `bias_state_real_era_recheck_20261019` (data-gated).
+
+
+
+- **Open (all flagged as OPEN_DECISIONs, see `node scripts/flag_decision.mjs --list`):** `dll_gate_blocks_entries_if_entry_price_missing_20261019` (HIGH, will recur), `sierra_post_fix_first_live_trade_verification_20261019`, `server_logs_too_noisy_for_incident_diagnosis_20261019`, `shadow_no_reason_rows_leak_to_live_20261019`, `poc_exit_shakeout_in_trend_test_20261019`, `catchup_select_distinct_order_by_error_20261019`, `per_order_account_routing_unproven_20261019`; existing `manual_sierra_action_no_broker_pnl_visibility_20261013` is again relevant (the manual close had no broker P&L until set by hand).
+
+
+
+- **Standing user-stated facts from this session:** shadow is a pipeline to live; the declustered lens is the primary one; DeepSeek peak pricing is 21:00-24:00 and 02:00-06:00 ET (off-peak 00:00-02:00 and 06:00-21:00, Fri 20:00-Sun 21:00); the user reads setups as IB break + hold + open TPO single prints below and watches velocity live — none of that is tracked in the app, and the single-print magnet effect was NOT supported in 11 months of data (22-36% reached vs 55-67% for a mirror level, n=9/11).
+
