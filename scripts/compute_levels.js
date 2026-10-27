@@ -375,25 +375,21 @@ async function computeLevelsForDate(date) {
   `, [date]);
   add('RTH_VWAP', rthVwapR.rows[0]?.vwap ? parseFloat(rthVwapR.rows[0].vwap) : null, 'VWAP');
 
-  // Weekly VWAP (Mon open → the session BEFORE `date`: week-to-date AS OF THE OPEN of `date`)
-  // 2026-10-27: the upper bound is now EXCLUSIVE (`ts::date < date`). It used to be `BETWEEN wb.mon AND date`, which made every row written by a backfill/recompute
-  // include the trade day's own full session (median 54 points from the as-of-open value), while rows written live by the 08:00 cron could only ever contain prior
-  // days, so historical backtests of WEEKLY_VWAP/MONTHLY_VWAP touches saw a level shaped by that day's afternoon. Now both agree with live. Consequence (same as live):
-  // no row on the first trading day of a week or month (nothing to average yet). RTH_VWAP stays day-of (intraday by nature).
-  // Fixed 2026-07-14: was `BETWEEN wb.mon AND wb.fri` (the week's Friday, regardless of `date`)
-  // -- a genuine lookahead bug for any date before that week's Friday, since it pulled in
-  // volume/price data from days that hadn't happened yet relative to `date`. Live acd.js reads
-  // lp.WEEKLY_VWAP with no time gate, so in live day-by-day usage this only ever accumulated
-  // through "today" anyway (future bars don't exist yet) -- the bug only bit historical
-  // re-computation (--backfill), where the full week's data already exists. See
-  // docs/KNOWN_ISSUES.md.
-  const weekVwapR = await q(`
+  // Weekly VWAP: ALL SESSIONS from the first Globex bar of the week (Sunday 18:00 ET, or the first bar of that week if Sunday has none: a Monday holiday still starts the
+  // week Sunday evening, a Good Friday week starts the next Sunday) up to the START of `date`'s own trade session (the prior evening 18:00). Redefined 2026-10-27 (user:
+  // "make it start at Sunday night at Globex start"), same first-Globex-bar-of-the-week anchor WEEKLY_OPEN uses. It used to be RTH bars only from Monday 09:30 (median 10.6
+  // points, p90 40, different from this). The upper bound is the start of the trade date, the only cutoff with no lookahead for BOTH the RTH session and the overnight session
+  // that belongs to the same trade date (a bound at 09:29 would include bars after an evening Globex fire), and it is identical whenever the job runs (08:00 cron or a backfill).
+  // Consequences: no row on the first trade date of a week (nothing before it to average yet: Monday, or Tuesday after a Monday-closed week) and none on weekend dates.
+  // History: 2026-07-14 fixed a lookahead through the week's Friday; 2026-10-27 first made the bound exclusive of the trade day (RTH-only), then this. RTH_VWAP stays day-of.
+  const dayShift = (d, n) => { const x = new Date(d + 'T12:00:00Z'); x.setUTCDate(x.getUTCDate() + n); return x.toISOString().slice(0, 10); };
+  const dateDow = new Date(date + 'T12:00:00Z').getUTCDay();
+  const weekVwapR = (dateDow >= 1 && dateDow <= 5) ? await q(`
     SELECT SUM(close::numeric * volume::numeric) / NULLIF(SUM(volume::numeric), 0) AS vwap
     FROM price_bars_primary
-    WHERE symbol = 'NQ' AND ts::date >= $1 AND ts::date < $2
-      AND EXTRACT(hour FROM ts) * 60 + EXTRACT(minute FROM ts) BETWEEN 570 AND 959
+    WHERE symbol = 'NQ' AND ts >= $1::timestamp AND ts < $2::timestamp
       AND volume > 0
-  `, [wb.mon, date]);
+  `, [`${dayShift(wb.mon, -1)} 18:00:00`, `${dayShift(date, -1)} 18:00:00`]) : { rows: [] };
   add('WEEKLY_VWAP', weekVwapR.rows[0]?.vwap ? parseFloat(weekVwapR.rows[0].vwap) : null, 'VWAP');
 
   // Monthly VWAP (month open → date, month-to-date as of the date being computed).
