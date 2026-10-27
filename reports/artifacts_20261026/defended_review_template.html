@@ -57,6 +57,7 @@ svg text { font-family: var(--mono); font-size: 10.5px; fill: var(--muted); }
 .rate button[data-v=skip].on { background: var(--skip); color: #fff; border-color: var(--skip); }
 .rate button[data-v=unsure].on { background: var(--unsure); color: #fff; border-color: var(--unsure); }
 .rate input[type=text] { flex: 1 1 260px; width: auto; }
+.zc { margin-left: 8px; display: inline-flex; gap: 4px; flex-wrap: wrap; } .zb { font: inherit; font-size: 12px; background: var(--panel2); color: var(--fg); border: 1px solid var(--line); border-radius: 5px; padding: 3px 9px; cursor: pointer; min-height: 28px; } .zb.on { background: var(--accent); border-color: var(--accent); color: #fff; }
 .saved { font-size: 12px; color: var(--muted); min-width: 60px; }
 .banner { background: var(--panel2); border: 1px solid var(--line); border-radius: 6px; padding: 8px 12px; margin: 12px 0; color: var(--muted); }
 .row { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; align-items: end; }
@@ -99,8 +100,8 @@ document.getElementById('nTot').textContent = visible().length;
 const lg = document.getElementById('legend');
 [['3M', 'current 3-month block'], ['P3M', 'previous block'], ['PM', 'prior month'], ['PW', 'prior week'], ['PD', 'prior day']].forEach(([k, t]) => { const s = document.createElement('span'); s.style.setProperty('--c', FAM[k]); s.textContent = t; lg.appendChild(s); });
 const sEv = document.createElement('span'); sEv.style.setProperty('--c', 'var(--ev)'); sEv.textContent = 'the level the finder flagged (shaded band)'; lg.appendChild(sEv);
-function chart(ev, from, w, h, detail) {
-  const bars = ev.bars.slice(-from), W = 1100, H = h, padR = 120, padL = 8, padT = 10, padB = detail ? 22 : 14;
+function chart(ev, from, w, h, detail, off = 0, labels = detail) {
+  const bars = ev.bars.slice(Math.max(0, ev.bars.length - off - from), ev.bars.length - off), W = 1100, H = h, padR = 120, padL = 8, padT = 10, padB = detail ? 22 : 14;
   const svg = el('svg', { viewBox: `0 0 ${W} ${H}`, class: 'chart', role: 'img', 'aria-label': `Four-hour candles for ${ev.id}` });
   let lo = Math.min(...bars.map((b) => b[4])), hi = Math.max(...bars.map((b) => b[3]));
   lo = Math.min(lo, ev.level - ev.band); hi = Math.max(hi, ev.level + ev.band); const pad = (hi - lo) * 0.04; lo -= pad; hi += pad;
@@ -108,7 +109,7 @@ function chart(ev, from, w, h, detail) {
   // price gridlines
   const step = [5, 10, 20, 25, 50, 100, 200, 250, 500].find((s) => (hi - lo) / s <= 7) || 500; for (let p = Math.ceil(lo / step) * step; p <= hi; p += step) { el('line', { x1: padL, x2: W - padR, y1: y(p), y2: y(p), stroke: 'var(--line)', 'stroke-width': .5 }, svg); const t = el('text', { x: W - padR + 6, y: y(p) + 3 }, svg); t.textContent = fmt(p).replace('.00', ''); }
   // period lines (context) and the flagged level
-  (ev.ctx || []).forEach(([nm, p]) => { if (p < lo || p > hi) return; const f = famOf(nm); el('line', { x1: padL, x2: W - padR, y1: y(p), y2: y(p), stroke: FAM[f] || 'var(--lpd)', 'stroke-width': nm.endsWith('_POC') ? 1.6 : 1, 'stroke-dasharray': nm.endsWith('_HI') || nm.endsWith('_LO') ? '2 3' : '', opacity: .85 }, svg); if (detail) { const t = el('text', { x: W - padR + 6, y: y(p) - 2 }, svg); t.setAttribute('style', 'fill:' + (FAM[f] || 'var(--lpd)')); t.textContent = nm.replace('_', ' '); } });
+  (ev.ctx || []).forEach(([nm, p]) => { if (p < lo || p > hi) return; const f = famOf(nm); el('line', { x1: padL, x2: W - padR, y1: y(p), y2: y(p), stroke: FAM[f] || 'var(--lpd)', 'stroke-width': nm.endsWith('_POC') ? 1.6 : 1, 'stroke-dasharray': nm.endsWith('_HI') || nm.endsWith('_LO') ? '2 3' : '', opacity: .85 }, svg); if (labels) { const t = el('text', { x: W - padR + 6, y: y(p) - 2 }, svg); t.setAttribute('style', 'fill:' + (FAM[f] || 'var(--lpd)')); t.textContent = nm.replace('_', ' '); } });
   el('rect', { x: padL, y: y(ev.level + ev.band), width: W - padL - padR, height: Math.max(1.5, y(ev.level - ev.band) - y(ev.level + ev.band)), fill: 'var(--bandfill)' }, svg);
   el('line', { x1: padL, x2: W - padR, y1: y(ev.level), y2: y(ev.level), stroke: 'var(--ev)', 'stroke-width': 1.8 }, svg);
   const lt = el('text', { x: W - padR + 6, y: y(ev.level) + 3 }, svg); lt.setAttribute('style', 'fill:var(--ev);font-weight:600'); lt.textContent = fmt(ev.level);
@@ -118,7 +119,7 @@ function chart(ev, from, w, h, detail) {
     const top = y(Math.max(o, c)), bot = y(Math.min(o, c)); el('rect', { x: cx - bw * 0.35, y: top, width: Math.max(1, bw * 0.7), height: Math.max(1, bot - top), fill: col }, svg);
     if (def.has(idx)) { const my = ev.side === 'floor' ? y(ll) + 9 : y(hh) - 9; el('path', { d: ev.side === 'floor' ? `M${cx - 4},${my + 4} L${cx + 4},${my + 4} L${cx},${my - 3} Z` : `M${cx - 4},${my - 4} L${cx + 4},${my - 4} L${cx},${my + 3} Z`, fill: 'var(--mark)' }, svg); }
     if (idx === ev.tIdx) { el('rect', { x: cx - bw / 2, y: padT, width: bw, height: H - padT - padB, fill: 'none', stroke: 'var(--accent)', 'stroke-width': 1 }, svg); } });
-  if (detail) { let last = ''; bars.forEach((b, i) => { const d = b[1].slice(0, 5); if (d !== last && b[1].slice(6, 8) === '18') { last = d; const t = el('text', { x: x(i), y: H - 6, 'text-anchor': 'start' }, svg); t.textContent = d; } }); }
+  if (true) { let last = ''; bars.forEach((b, i) => { const d = from > 240 ? b[1].slice(0, 2) : b[1].slice(0, 5); if (d !== last && b[1].slice(6, 8) === '18') { last = d; const t = el('text', { x: x(i), y: H - 6, 'text-anchor': 'start' }, svg); t.textContent = b[1].slice(0, 5); } }); }
   return svg;
 }
 const cards = document.getElementById('cards'), state = {}; let db = null;
@@ -128,15 +129,18 @@ DATA.forEach((ev) => {
   c.innerHTML = `<div class="head"><span class="id">${ev.id}</span><span class="side ${ev.side}">${ev.side.toUpperCase()}</span><span class="facts"><span>level <b>${fmt(ev.level)}</b></span><span>bar close <b>${ev.date}</b></span><span>defense bars <b>${ev.K}</b></span><span>separate approaches <b>${ev.A}</b></span><span>volume vs normal <b>${ev.relVol == null ? 'n/a' : ev.relVol.toFixed(2) + 'x'}</b></span></span></div>
   <div class="chips">${lines.map(([n, p]) => `<span class="chip" style="border-color:${FAM[famOf(n)]};color:${FAM[famOf(n)]}">${n.replace('_', ' ')} ${fmt(p)}</span>`).join('')}</div>
   <div class="cap">Last 12 days, four-hour candles. Black markers = bars that defended the level. Outlined bar = the confirming bar (the chart ends here).</div><div class="d"></div>
-  <div class="cap">Last 120 days for context.</div><div class="x"></div>
+  <div class="cap"><span class="zlab">Last 120 days for context.</span> <span class="zc"><button type="button" data-z="120" class="zb on">120d</button><button type="button" data-z="60" class="zb">60d</button><button type="button" data-z="30" class="zb">30d</button><button type="button" data-p="e" class="zb">◀ earlier</button><button type="button" data-p="l" class="zb">later ▶</button></span></div><div class="x"></div>
   <div class="rate"><button type="button" data-v="take">Take</button><button type="button" data-v="skip">Not mine</button><button type="button" data-v="unsure">Unsure</button><input type="text" placeholder="Why, in a few words" aria-label="Note for ${ev.id}"><span class="saved"></span></div>`;
-  c.querySelector('.d').appendChild(chart(ev, 72, 1100, 330, true)); c.querySelector('.x').appendChild(chart(ev, ev.bars.length, 1100, 170, false)); cards.appendChild(c);
+  c.querySelector('.d').appendChild(chart(ev, 72, 1100, 330, true)); let zd = 120, zo = 0; const xs = c.querySelector('.x'), zl = c.querySelector('.zlab');
+  const drawCtx = () => { xs.innerHTML = ''; xs.appendChild(chart(ev, zd * 6, 1100, 260, false, zo * 6, zd <= 60)); zl.textContent = zo ? `${zd} days, shifted ${zo} days back from the confirming bar.` : `Last ${zd} days for context.`; c.querySelectorAll('.zb[data-z]').forEach((b) => b.classList.toggle('on', +b.dataset.z === zd)); };
+  c.querySelectorAll('.zb').forEach((b) => b.addEventListener('click', () => { if (b.dataset.z) { zd = +b.dataset.z; } else { const st = Math.max(1, Math.round(zd / 3)), maxOff = Math.max(0, Math.floor(ev.bars.length / 6) - zd); zo = b.dataset.p === 'e' ? Math.min(maxOff, zo + st) : Math.max(0, zo - st); } zo = Math.min(zo, Math.max(0, Math.floor(ev.bars.length / 6) - zd)); drawCtx(); }));
+  drawCtx(); cards.appendChild(c);
   const note = c.querySelector('input'), saved = c.querySelector('.saved');
   let timer = null; const save = async (v) => { if (!db) return; const cur = state[ev.id] || {}; const verdict = v || cur.verdict || null; saved.textContent = 'saving'; try { await db.doc('ratings/' + ev.id).set({ id: ev.id, key: ev.key, side: ev.side, date: ev.date, level: ev.level, K: ev.K, A: ev.A, relVol: ev.relVol, stratum: ev.stratum, verdict, note: note.value, at: new Date().toISOString() }); saved.textContent = 'saved'; } catch (e) { saved.textContent = 'not saved'; } };
-  c.querySelectorAll('button').forEach((b) => b.addEventListener('click', () => { state[ev.id] = Object.assign({}, state[ev.id], { verdict: b.dataset.v }); paint(); save(b.dataset.v); }));
+  c.querySelectorAll('.rate button').forEach((b) => b.addEventListener('click', () => { state[ev.id] = Object.assign({}, state[ev.id], { verdict: b.dataset.v }); paint(); save(b.dataset.v); }));
   note.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(() => save(null), 700); });
 });
-function paint() { let n = 0; visible().forEach((ev) => { const s = state[ev.id] || {}, c = document.getElementById(ev.id); c.querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.v === s.verdict)); const inp = c.querySelector('input'); if (s.note != null && document.activeElement !== inp) inp.value = s.note; c.classList.toggle('done', !!s.verdict); if (s.verdict) n++; }); document.getElementById('nDone').textContent = n; document.getElementById('meter').style.width = (100 * n / visible().length) + '%'; document.getElementById('nTot').textContent = visible().length; }
+function paint() { let n = 0; visible().forEach((ev) => { const s = state[ev.id] || {}, c = document.getElementById(ev.id); c.querySelectorAll('.rate button').forEach((b) => b.classList.toggle('on', b.dataset.v === s.verdict)); const inp = c.querySelector('input'); if (s.note != null && document.activeElement !== inp) inp.value = s.note; c.classList.toggle('done', !!s.verdict); if (s.verdict) n++; }); document.getElementById('nDone').textContent = n; document.getElementById('meter').style.width = (100 * n / visible().length) + '%'; document.getElementById('nTot').textContent = visible().length; }
 document.getElementById('more').addEventListener('click', () => { showAll = true; document.querySelectorAll('.card[hidden]').forEach((c) => { c.hidden = false; }); document.getElementById('moreP').hidden = true; paint(); });
 (async () => {
   const claude = window.claude; if (!claude || !claude.use) { document.getElementById('dbBanner').hidden = false; return; }
