@@ -1,0 +1,28 @@
+Sessions 536; usable 516; hold-out NOT extracted
+FUNNEL (V1): tell-true bars while armed 2112, skipped (no valid stop) 0, trades 1760 on 488 dates (3.41 per session); stops using the no-next-node fallback 324 (18%)
+  stop distance, points: p10 9.5 p25 14.8 median 26.2 p75 48.1 p90 80.3 max 338.2; dollars (1 MNQ) median 52 p90 161
+
+=== V1: stop at the 2nd LVN (behind n2), tell-fade exit after the break  [PRIMARY] ===
+  result: N=1760 WR 29.9% PF 1.05 mean $1.93/trade (+1.97 pts) avgW $133.42 avgL $-54.27 maxDD $4668 total $3400 | day-blocked 95% CI [-3.44, 7.62]
+     exits STOP 62%, FADE 18%, TIMEOUT 17%, EOD 3%, STOP_GAP 0%
+     broke the range 321 (18%): mean $120.40 | no break 1439: mean $-24.49 | long 897 short 863
+     tight stop third   N= 592 mean $+0.83 WR 14%
+     middle third       N= 587 mean $+0.54 WR 30%
+     wide stop third    N= 581 mean $+4.45 WR 47%
+
+=== V2: stop at the 1st LVN (behind n1) ===
+  result: N=2292 WR 21.6% PF 0.99 mean $-0.20/trade (+0.90 pts) avgW $130.22 avgL $-36.04 maxDD $5146 total $-464 | day-blocked 95% CI [-4.20, 4.10]
+     exits STOP 74%, FADE 14%, TIMEOUT 9%, EOD 2%, STOP_GAP 0%
+     broke the range 343 (15%): mean $114.60 | no break 1949: mean $-20.41 | long 1178 short 1114
+
+=== V3: stop as V1, hold to the 15:55 flatten after the break ===
+  result: N=1394 WR 26.0% PF 1.16 mean $7.29/trade (+4.64 pts) avgW $200.44 avgL $-60.72 maxDD $4542 total $10158 | day-blocked 95% CI [-2.19, 17.30]
+     exits STOP 66%, TIMEOUT 17%, EOD 17%, EOS 0%, STOP_GAP 0%
+     broke the range 306 (22%): mean $129.69 | no break 1088: mean $-27.14 | long 697 short 697
+
+RANDOM-ENTRY PLACEBO (stripped geometry, 100 trials): tell trades re-simulated on it $2.68/trade | placebo p5 -7.22 p50 -2.45 p95 1.97 | trials >= real 4.0%
+MOVING-ONLY CONTROL (stripped geometry, stop distance drawn from the tell trades): : N=2706 WR 26.6% PF 1.01 mean $0.51/trade (+1.25 pts) avgW $154.77 avgL $-55.52 maxDD $4858 total $1376 | day-blocked 95% CI [-4.35, 5.59]
+     exits ? 100%
+  tell re-simulated on the same stripped geometry $2.68/trade vs moving-only control $0.51/trade
+
+Reading is pre-registered (PREREG_TRADE.md): lead = V1 CI lower bound > 0 AND beats the placebo p95 on the stripped geometry AND beats the moving-only control. Under 150 trades = underpowered.
