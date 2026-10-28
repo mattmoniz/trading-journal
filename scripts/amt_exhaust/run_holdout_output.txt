@@ -1,0 +1,25 @@
+HOLD-OUT: 340 sessions (2025-05-19..2026-10-26) | E1 401 E2 151 C2 374 NR 246 | cuts: at-level 0.030821, sham 0.038765 ATR20
+
+=== CELL E1-AT-LEVEL ===
+  at-real-level: N=109 days=86 gross mean F15 -10.34 (95% CI -18.90..-1.49; 97.5% one-sided lower bound = -18.90) | net of 1.5 pts -11.84 | F15>0 40%
+  not at level: N=292 +2.44 (CI -4.16..+9.11) | near SHAM level: N=87 +0.75 (CI -10.07..+11.27)
+  DIFFERENCE-IN-DIFFERENCES vs sham: -15.06 (95% CI -30.31..+0.13)
+  RANDOM-ENTRY PLACEBO: p5 -8.73 p50 +0.80 p95 +8.13 | trials >= cell 96.0%
+  LEAD CRITERIA: lower bound > 0: False | beats placebo p95: False | DiD lower bound > 0: False  =>  NOT CONFIRMED
+  geometry (descriptive): N=109 WR 21% PF 0.44 mean $-16.82/trade (CI -26.19..-7.80) median risk 14.6 target 43.6 pts
+
+=== CELL E2-AT-LEVEL ===
+  at-real-level: N=47 days=40 gross mean F15 -14.08 (95% CI -30.84..+0.48; 97.5% one-sided lower bound = -30.84) | net of 1.5 pts -15.58 | F15>0 34%
+  not at level: N=104 -1.74 (CI -15.31..+12.00) | near SHAM level: N=36 -11.03 (CI -35.00..+10.40)
+  DIFFERENCE-IN-DIFFERENCES vs sham: -5.18 (95% CI -42.60..+30.39)
+  RANDOM-ENTRY PLACEBO: p5 -12.34 p50 -0.15 p95 +12.10 | trials >= cell 97.0%
+  LEAD CRITERIA: lower bound > 0: False | beats placebo p95: False | DiD lower bound > 0: False  =>  NOT CONFIRMED
+  geometry (descriptive): N=42 WR 38% PF 0.30 mean $-34.79/trade (CI -58.86..-9.89) median risk 32.1 target 23.6 pts
+
+--- context, not counted ---
+  E1 overall: N=401 gross mean F15 -1.03 (CI -6.72..+4.80)
+  E2 overall: N=151 gross mean F15 -5.58 (CI -16.87..+5.42)
+  C2 overall: N=374 gross mean F15 +1.74 (CI -3.80..+7.77)
+  NR overall: N=246 gross mean F15 -2.22 (CI -7.59..+3.19)
+
+Hold-out consumed for this question (holdout_exhaust.lock).
