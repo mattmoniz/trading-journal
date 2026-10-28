@@ -1,0 +1,37 @@
+Sessions with bars 536 (2023-03-07..2025-05-16); hold-out NOT extracted
+Decision points 41272 over 516 sessions; median Q 0.444, median R 4.0 (frozen cutoffs)
+L distribution: {0: 11804, 1: 9171, 2: 6490, 3: 4387, 4: 2910, 5: 2059, 6: 1187, 7: 808, 8: 674, 9: 435, 10: 319, 11: 317, 12: 150, 13: 137, 14: 84, 15: 111, 16: 52, 17: 31, 18: 51, 19: 17, 20: 39, 21: 6, 22: 8, 23: 10, 24: 3, 25: 1, 26: 2, 27: 2, 28: 3, 30: 2, 34: 2} | moving share 49% | strides share 36%
+
+ARM SIZES (events / dates):
+  TELL5                                     2591 / 442  up 1222 down 1369
+  TELL4                                    11260 / 508  up 5758 down 5502
+  TELL3                                    25417 / 514  up 13104 down 12313
+  TELL3-original (nodes+fast+flip+moving)   4532 / 467  up 2270 down 2262
+  MOVING-ONLY control: 20066 | single-component counts: {'nodes': 530, 'fast': 2093, 'flip': 488, 'osc': 1006, 'strides': 316}
+
+PRIMARY ARM by the counts rule: TELL5
+  TELL5        N= 2591 break  20.4%  signed 60-min move +0.0117 ATR20
+  TELL4        N=11260 break  16.3%  signed 60-min move -0.0001 ATR20
+  TELL3        N=25417 break  13.3%  signed 60-min move -0.0021 ATR20
+  moving-only  N=20066 break  14.4%  signed 60-min move +0.0012 ATR20
+  all points   N=41272 break  11.0%  signed 60-min move -0.0041 ATR20
+
+PRIMARY (signed 60-min move, arm minus MOVING-ONLY not in the arm):
+  TELL5                                  N= 2591 signed move +0.0104 ATR20 CI [-0.0024, +0.0229] (1-sided 97.5% lb -0.0024) | break +5.1 pts CI [+3.2, +7.1]
+
+DESCRIPTIVE (not counted): every arm and single components vs moving-only
+  TELL4                                  N=11260 signed move -0.0016 ATR20 CI [-0.0103, +0.0067] (1-sided 97.5% lb -0.0103) | break +2.8 pts CI [+1.5, +4.0]
+  TELL3                                  N=25417 signed move -0.0001 ATR20 CI [-0.0088, +0.0083] (1-sided 97.5% lb -0.0088) | break +2.7 pts CI [+1.6, +3.8]
+  TELL3-original                         N= 4532 signed move +0.0062 ATR20 CI [-0.0069, +0.0186] (1-sided 97.5% lb -0.0069) | break +5.6 pts CI [+3.8, +7.4]
+  only nodes                             N=  530 signed move -0.0156 ATR20 CI [-0.0331, +0.0015] (1-sided 97.5% lb -0.0331) | break -5.7 pts CI [-9.0, -2.6]
+  all but nodes                          N= 1755 signed move -0.0039 ATR20 CI [-0.0196, +0.0120] (1-sided 97.5% lb -0.0196) | break -2.7 pts CI [-4.0, -1.3]
+  only fast                              N= 2093 signed move -0.0162 ATR20 CI [-0.0318, -0.0003] (1-sided 97.5% lb -0.0318) | break -2.5 pts CI [-3.5, -1.6]
+  all but fast                           N= 1334 signed move +0.0005 ATR20 CI [-0.0145, +0.0154] (1-sided 97.5% lb -0.0145) | break -2.4 pts CI [-4.9, +0.1]
+  only flip                              N=  488 signed move -0.0064 ATR20 CI [-0.0254, +0.0123] (1-sided 97.5% lb -0.0254) | break -6.7 pts CI [-8.9, -4.5]
+  all but flip                           N= 1247 signed move -0.0067 ATR20 CI [-0.0221, +0.0084] (1-sided 97.5% lb -0.0221) | break +3.9 pts CI [+1.7, +6.1]
+  only osc                               N= 1006 signed move +0.0023 ATR20 CI [-0.0130, +0.0170] (1-sided 97.5% lb -0.0130) | break -6.4 pts CI [-8.1, -4.8]
+  all but osc                            N=  721 signed move +0.0004 ATR20 CI [-0.0211, +0.0231] (1-sided 97.5% lb -0.0211) | break +3.3 pts CI [+0.6, +6.2]
+  only strides                           N=  316 signed move +0.0193 ATR20 CI [-0.0072, +0.0458] (1-sided 97.5% lb -0.0072) | break -5.5 pts CI [-9.2, -1.5]
+  all but strides                        N= 3612 signed move -0.0092 ATR20 CI [-0.0226, +0.0037] (1-sided 97.5% lb -0.0226) | break +1.5 pts CI [+0.0, +3.2]
+
+Reading is pre-registered (PREREG.md + Amendment 1): lead = primary lower bound > 0 AND the primary arm beats its single components on the signed move. Under 150 events / 60 dates = underpowered.

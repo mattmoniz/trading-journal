@@ -1,0 +1,22 @@
+by number of components met (0-5):
+  0: N=  691 dates=317 break   4.2% signed60 -0.0133
+  1: N= 4433 dates=508 break   5.4% signed60 -0.0119
+  2: N=10731 dates=516 break   8.4% signed60 -0.0051
+  3: N=14157 dates=514 break  10.9% signed60 -0.0038
+  4: N= 8669 dates=508 break  15.1% signed60 -0.0036
+  5: N= 2591 dates=442 break  20.4% signed60 +0.0117
+
+within distance strata (break rate):
+  stratum 0: TELL5 N=1150 break  40.7% | moving-only N= 6962 break  31.8% | signed60 +0.0229 vs +0.0150
+  stratum 1: TELL5 N= 819 break   6.5% | moving-only N= 5804 break   3.4% | signed60 +0.0190 vs -0.0018
+  stratum 2: TELL5 N= 622 break   1.1% | moving-only N= 5212 break   0.4% | signed60 -0.0187 vs -0.0201
+
+TELL5 by direction:
+  dir -1: N=1369 break 23.4% signed60 +0.0196
+  dir +1: N=1222 break 16.9% signed60 +0.0028
+TELL5 by decision hour (ET):
+  10h: N=966 break 26.6% signed60 +0.0182
+  11h: N=699 break 18.6% signed60 +0.0082
+  12h: N=464 break 14.2% signed60 +0.0040
+  13h: N=302 break 13.9% signed60 -0.0010
+  14h: N=160 break 20.6% signed60 +0.0341
