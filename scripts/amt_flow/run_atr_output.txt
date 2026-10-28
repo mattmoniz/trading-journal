@@ -1,0 +1,29 @@
+Explore sessions 529; hold-outs sealed. Stop = 2.0 x ATR14 (1-minute) from the entry; targets unchanged (A 15, B 20).
+
+##### VOLUME-PROFILE ZONES with 2 x ATR14 stop
+ Setup A
+  signal : N=781 WR 48.0% PF 0.85 mean $-2.31/trade (-0.16 pts) avgW $27.87 avgL $-30.19 maxDD $2285 total $-1805 | day-blocked 95% CI [-4.32, -0.15] | exits TGT 48%, STRUCT 27%, STOP 25%
+  control: N=1351 WR 40.3% PF 0.79 mean $-2.83/trade (-0.42 pts) avgW $26.05 avgL $-22.31 maxDD $4329 total $-3829 | day-blocked 95% CI [-4.15, -1.54] | exits STRUCT 49%, TGT 37%, STOP 14%
+     median risk 18.7 pts (mean 21.3); zero-drift win prob about 55% vs target hits 47.8%
+  RANDOM-ENTRY PLACEBO (100 trials): real-stripped $-1.59 | placebo p5 -5.31 p50 -3.01 p95 -1.00 | trials >= real 12.0%
+  sensitivity: stop 2xATR beyond the setup extreme: N=734 WR 50.0% PF 0.84 mean $-2.58/trade (-0.29 pts) avgW $27.87 avgL $-33.03 maxDD $2421 total $-1894 | day-blocked 95% CI [-5.00, -0.04] | exits TGT 50%, STRUCT 39%, STOP 11%, EOD 0%
+ Setup B
+  signal : N=815 WR 48.3% PF 0.88 mean $-2.55/trade (-0.28 pts) avgW $37.91 avgL $-40.42 maxDD $2937 total $-2081 | day-blocked 95% CI [-5.20, 0.43] | exits STOP 52%, TGT 48%, EOD 0%
+  control: N=428 WR 44.2% PF 0.70 mean $-7.15/trade (-2.58 pts) avgW $37.80 avgL $-42.70 maxDD $3429 total $-3062 | day-blocked 95% CI [-11.11, -3.09] | exits STOP 56%, TGT 44%, EOD 0%
+     median risk 18.8 pts (mean 22.1); zero-drift win prob about 48% vs target hits 48.2%
+  RANDOM-ENTRY PLACEBO (100 trials): real-stripped $-2.55 | placebo p5 -5.95 p50 -3.45 p95 -0.94 | trials >= real 28.0%
+
+##### TPO ZONES (1.0-pt rows) with 2 x ATR14 stop
+ Setup A
+  signal : N=771 WR 45.4% PF 0.81 mean $-2.92/trade (-0.46 pts) avgW $27.79 avgL $-28.45 maxDD $2361 total $-2248 | day-blocked 95% CI [-4.87, -0.94] | exits TGT 45%, STRUCT 31%, STOP 24%, STOP_GAP 0%, EOD 0%
+  control: N=1254 WR 37.3% PF 0.72 mean $-3.85/trade (-0.92 pts) avgW $26.39 avgL $-21.85 maxDD $5146 total $-4828 | day-blocked 95% CI [-5.36, -2.34] | exits STRUCT 51%, TGT 34%, STOP 14%, STOP_GAP 0%, EOD 0%
+     median risk 18.1 pts (mean 20.9); zero-drift win prob about 55% vs target hits 45.0%
+  RANDOM-ENTRY PLACEBO (100 trials): real-stripped $-2.52 | placebo p5 -4.88 p50 -2.83 p95 -0.98 | trials >= real 35.0%
+  sensitivity: stop 2xATR beyond the setup extreme: N=720 WR 48.3% PF 0.84 mean $-2.64/trade (-0.32 pts) avgW $27.79 avgL $-31.12 maxDD $2287 total $-1903 | day-blocked 95% CI [-4.92, -0.34] | exits TGT 48%, STRUCT 42%, STOP 9%, EOD 0%
+ Setup B
+  signal : N=833 WR 46.0% PF 0.79 mean $-4.66/trade (-1.33 pts) avgW $37.86 avgL $-40.84 maxDD $4084 total $-3879 | day-blocked 95% CI [-7.54, -1.78] | exits STOP 54%, TGT 46%, EOD 0%
+  control: N=434 WR 42.4% PF 0.68 mean $-7.51/trade (-2.76 pts) avgW $37.91 avgL $-40.95 maxDD $3318 total $-3261 | day-blocked 95% CI [-11.14, -3.58] | exits STOP 58%, TGT 42%, EOD 0%
+     median risk 18.2 pts (mean 21.1); zero-drift win prob about 48% vs target hits 45.7%
+  RANDOM-ENTRY PLACEBO (100 trials): real-stripped $-4.66 | placebo p5 -5.13 p50 -3.18 p95 -1.09 | trials >= real 90.0%
+
+Reading is pre-registered (PREREG_ATR.md): a lead needs CI lower bound > 0, beat placebo p95 and beat its own control. Otherwise not shown.
