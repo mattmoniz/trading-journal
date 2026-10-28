@@ -1,0 +1,41 @@
+Explore sessions with a 20-session trailing history: 509 | exhaustion signals (E1) 323 | counter-side response within 5 bars (E2) 127 (40% of faded signals respond) | C2 (response, no exhaustion) 373 | NR (exhaustion, no response) 193
+  E1: events 323, days 223, per session 0.63; segments {'MORNING': np.int64(164), 'MIDDAY': np.int64(100), 'AFTERNOON': np.int64(59)}; long 112 short 211; median lag -
+  E2: events 127, days 117, per session 0.25; segments {'MORNING': np.int64(69), 'MIDDAY': np.int64(38), 'AFTERNOON': np.int64(20)}; long 50 short 77; median lag 3.0
+  C2: events 373, days 251, per session 0.73; segments {'MIDDAY': np.int64(136), 'AFTERNOON': np.int64(126), 'MORNING': np.int64(111)}; long 195 short 178; median lag 3.0
+  NR: events 193, days 157, per session 0.38; segments {'MORNING': np.int64(91), 'MIDDAY': np.int64(62), 'AFTERNOON': np.int64(40)}; long 60 short 133; median lag -
+
+=== UNCENSORED FORWARD RETURN F15 (points, gross; trade direction = the reversal) ===
+  E1: N=323 gross mean +2.20 (95% CI -2.21..+6.73) | net of 1.5 pts +0.70 | F15>0 48% | MFE30 40.7 MAE30 38.5
+  E2: N=127 gross mean -0.23 (95% CI -7.11..+7.12) | net of 1.5 pts -1.73 | F15>0 44% | MFE30 39.5 MAE30 40.6
+  C2: N=373 gross mean +1.62 (95% CI -2.04..+5.33) | net of 1.5 pts +0.12 | F15>0 51% | MFE30 35.1 MAE30 34.9
+  NR: N=193 gross mean -1.65 (95% CI -7.03..+4.22) | net of 1.5 pts -3.15 | F15>0 42% | MFE30 37.8 MAE30 40.8
+    F5 -0.65 F15 -0.23 F30 -2.65 F60 -1.93
+  RANDOM-ENTRY PLACEBO (E2 times, random direction, 100 trials): placebo mean p5 -5.97 p50 -0.75 p95 +6.22 | trials >= E2: 46.0%
+  E2 minus C2: -1.85 pts (day-blocked 95% CI -9.39..+5.93)
+  E2 minus NR: +1.42 pts (day-blocked 95% CI -7.82..+10.28)
+
+  Descriptive splits of E2 (gross F15):
+    MORNING: N=69 +5.08 (CI -5.85..+16.37)
+    MIDDAY: N=38 -2.89 (CI -12.74..+6.45)
+    AFTERNOON: N=20 -13.53 (CI -31.34..+3.07)
+    long reversals: N=50 +6.54 (CI -6.04..+19.37)
+    short reversals: N=77 -4.64 (CI -13.26..+3.96)
+
+=== MGI INTERACTION (difference-in-differences vs sham levels; descriptive) ===
+  E2: near-real quartile (d <= 0.03 ATR20, N=32) mean +15.27 vs rest -5.46; near-sham quartile mean +6.52 vs rest -2.51; DiD +11.71 (95% CI -9.02..+33.69)
+  E1: near-real quartile (d <= 0.04 ATR20, N=81) mean +10.98 vs rest -0.74; near-sham quartile mean -0.01 vs rest +2.93; DiD +14.67 (95% CI +1.08..+28.95)
+
+=== GEOMETRY STAGE (descriptive): stop beyond the extreme by 1 tick + 0.5 x ATR14, target 50% retracement of the push, 30-bar time stop, flatten 15:55 ===
+  E2: N=126 WR 44% PF 0.67 mean $-9.81/trade (CI -19.27..0.00) avgW $45.36 avgL $-52.55 maxDD $1510 | median risk 24.6 target 25.1 pts | exits STOP 53%, TGT 40%, TIME 6%
+  C2: N=357 WR 59% PF 0.79 mean $-4.50/trade (CI -9.95..0.79) avgW $28.58 avgL $-52.86 maxDD $1958 | median risk 25.5 target 15.8 pts | exits TGT 60%, STOP 37%, TIME 3%
+  NR: N=140 WR 9% PF 0.29 mean $-15.53/trade (CI -21.01..-9.69) avgW $68.73 avgL $-24.16 maxDD $2153 | median risk 8.9 target 41.6 pts | exits STOP 91%, TGT 8%, TIME 1%
+  E1: N=323 WR 19% PF 0.74 mean $-5.63/trade (CI -10.75..-0.17) avgW $85.73 avgL $-26.90 maxDD $2346 | median risk 10.1 target 40.9 pts | exits STOP 80%, TGT 17%, TIME 3%
+  RANDOM-ENTRY PLACEBO geometry (E2): real $-9.81 | placebo p5 -10.44 p50 -2.65 p95 5.81 | trials >= real 91.0%
+
+=== DESCRIPTIVE SENSITIVITIES (never selected): E2 gross F15 ===
+  exhaustion quantile 10: E2 N=75 -3.29 (CI -13.58..+7.63)
+  exhaustion quantile 40: E2 N=179 -2.02 (CI -7.71..+3.74)
+  response window 3: E2 N=101 -3.71 (CI -11.82..+4.50)
+  response window 8: E2 N=151 -1.18 (CI -7.31..+5.01)
+
+Reading is pre-registered (PREREG.md): E2 is a lead only if gross F15 CI lower bound > 0, it beats the placebo p95, and E2-C2 and E2-NR have CI lower bounds > 0. Otherwise not shown.
