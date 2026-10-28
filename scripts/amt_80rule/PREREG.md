@@ -1,0 +1,42 @@
+# AMT 80%-rule mechanical strategy: baseline, Phase 1 diagnostics, Phase 2 matrix (frozen 2026-10-28)
+
+Committed BEFORE any outcome of this strategy is read. Source: the user's pasted mechanical specification (the "80% rule / value-area acceptance" strategy with a scale-out and a structural runner). The specification is reproduced in the engine; this file records (a) how each ambiguity was resolved, (b) the deviations from the pasted text and why, and (c) the evaluation protocol. Nothing here was chosen after seeing results.
+
+## Deviations from the pasted specification (stated up front)
+1. **Instrument economics: MNQ, not NQ.** The pasted text uses NQ ($20/pt, $5/tick, $4.50 round turn). This journal trades MNQ ($2/pt, $2 round trip per contract, `server/config/instruments.js`). Prices are NQ bars (same points). Dollars are reported for 2 MNQ contracts (leg A + leg B) and per contract; the pasted $4.50 round-turn is run as a sensitivity. Everything is also reported in points.
+2. **Data split (project rule, not in the pasted text).** The sessions are cut chronologically: EXPLORE = trade dates up to 2025-05-16 (the same cut as the other AMT studies), HOLD-OUT = after, **sealed**. The baseline, Phase 1 and the whole Phase 2 matrix run on EXPLORE only. The hold-out is looked at once, only with the user's explicit approval, for ONE pre-named configuration.
+3. **Breakeven move timing.** The text says "immediately" move the runner's stop after Target 1 fills. Within a one-minute bar the order of events is unknown, so the new stop is effective from the NEXT bar (same rule as the project's exit audit); a stop that takes effect when the market is already beyond it fills at that bar's open.
+4. **Axis D (initiative flip) is NOT run:** the pasted text gives no targets or exit rule for it (targets at the prior POC no longer apply to a breakout). It is a different hypothesis and needs its own specification.
+5. **No ACSIL / Sierra Chart code is written** until the user approves a configuration (the pasted text says the same).
+6. **Multiplicity:** the Phase 2 matrix is 27 configurations; the best of 27 is selected on the same data, so its number is biased upward. Reported with the baseline CI and the matched placebo; only the hold-out can confirm.
+
+## Data and sessions
+RTH 1-minute bars 09:30-15:59 ET from `price_bars_primary` (NQ), with bid and ask volume (complete and consistent with total volume for 2023-03 to 2026-10, checked). Eligible session: full RTH (>= 385 bars, first 09:30, last 15:59), previous loaded session also full and at most 5 calendar days earlier. Reference levels from the PRIOR session's RTH bars: 70% value area by the volume-spread profile (`loader.compute_va_fn`; the engine's own VAH/VAL/POC routine is asserted equal to it on every session), `pdPOC` = the first maximum-volume price. Window 2023-03-01 to 2026-10-26 (pinned).
+
+## Baseline rules (exactly as pasted, with resolutions)
+- Evaluation at bar close; market entries and exits at the NEXT bar's open; times are ET (the text says EST).
+- New entries only when the entry bar (the bar after the trigger bar) opens between 09:35 and 15:15 inclusive; force flatten all at the 15:55 bar's open; one position at a time; at most 2 trades per session; skip the session if VA_Width < 40 points.
+- ARMED_LONG once any bar in the session so far has close < pdVAL; ARMED_SHORT once any bar has close > pdVAH. Both flags stay set for the session.
+- Long trigger (A1 baseline, N = 2): ARMED_LONG; the last N bars all close inside the zone (pdVAL < close < pdPOC); pdPOC - close[t] >= 15.0; bar delta (ask volume minus bid volume) of bar t > 0 OR the sum of the last 3 bars' delta > 0; buy 2 contracts at the open of t+1 with 1 tick adverse slippage. Short is the mirror (pdPOC < close < pdVAH, close[t] - pdPOC >= 15, delta < 0 or 3-bar sum < 0).
+- Setup bars = the N acceptance bars. Hard stop long = min(pdVAL - 7.5, lowest low of the setup bars - 2.0), capped so risk from the entry price is at most 15.0 points (stop = max(that, entry - 15)); short mirrored. A bar whose range touches the stop fills at the stop minus (plus for shorts) 1 tick; a bar that OPENS beyond the stop fills at the open minus 1 tick.
+- Structural invalidation: any bar closing beyond the value area by more than 2.0 points (long: close < pdVAL - 2; short: close > pdVAH + 2) exits all remaining contracts at the next bar's open (market, 1 tick).
+- Time bailout: Bars_In_Trade counts completed bars starting with the entry bar as bar 1. At the close of bar 15, if MFE (points, highs/lows through that bar) < 8.0 AND the close's unrealized P&L <= +2.0 points, exit all remaining at the next bar's open.
+- Target 1 (leg A, 1 contract): resting limit at pdPOC, filled when the bar trades 1 tick THROUGH it (long: high >= pdPOC + 0.25), at pdPOC, no slippage. Then (effective the next bar) the runner's stop = entry + 1.0 (long) / entry - 1.0 (short) if that improves it.
+- Target 2 (leg B, 1 contract): resting limit at pdVAH (long) / pdVAL (short), same through-by-1-tick fill, at the level. After Target 1 fills, trail the runner's stop behind the confirmed 5-bar pivot (a pivot low = a bar whose low is strictly below the 5 bars before it and not above the 5 bars after it; confirmed at the close of the 5th bar after it, effective the next bar), minus 3.0 points (plus for shorts); only pivots formed on or after the entry bar and confirmed after Target 1 filled; the stop only ever improves.
+- Same-bar conflicts: stop before the limits (pessimistic); a pending market exit from the previous close fills at the open before anything else.
+- Costs per contract: 1 tick slippage on market and stop orders, none on limits; commission $1 per side ($2 round trip) headline, $4.50 round trip sensitivity. MNQ $2/point.
+
+## Metrics
+Total trades, win rate (leg A, leg B, whole trade), profit factor (gross winning trades / gross losing trades, after friction), max drawdown (trade-sequence equity, dollars), average winner / loser, expectancy per trade in points per contract and dollars for 2 MNQ, day-blocked bootstrap 95% CI of mean dollars per trade (3000 iterations, seed 20261028).
+
+## Phase 1 (on the baseline trade log, explore only)
+(1) MAE/MFE: among losing trades the shares with MFE in [6,10) points, and >= 10; among stop-type exits, the share where price later traded through pdPOC + 0.25 (long) before 15:55 (rotated after the stop); (2) entry-time buckets 09:35-11:00, 11:00-13:30, 13:30-15:15; (3) regime: open more than 30 points beyond the value area (above pdVAH + 30 or below pdVAL - 30) vs not.
+
+## Phase 2 (explore only; run if the baseline explore profit factor < 1.3)
+All 27 combinations of Axis A (A1 two consecutive 1-minute closes inside; A2 a single completed 5-minute bar closing inside, evaluated at 09:34, 09:39, ... with delta on that 5-minute bar or the last 3 five-minute bars; A3 a first cross into the zone followed by a retest within 2.0 points of the VA edge that closes back inside the zone, any close beyond the edge between them resets), Axis B (B1 pdVAL - 7.5 buffer; B2 1.5 x ATR14 of 1-minute true range as the buffer; B3 1.0 point beyond the extreme of the excursion run, the contiguous bars closing outside value immediately before acceptance), Axis C (C1 T1 at pdPOC and T2 at the opposite edge; C2 T1 at 1.0R, T2 at pdPOC; C3 T1 halfway from entry to pdPOC, T2 at pdPOC; a combination whose T1 is not strictly before T2 skips that trade). The 15-point risk cap, structural invalidation, bailout, breakeven and trail are unchanged in all combinations. Ranking: mean dollars per trade after friction with at least 30 trades; the top 3 are shown with CIs, N, win rates, PF, drawdown, alongside the baseline.
+
+## Placebo (explore, baseline entries)
+Same entry bars and prices, random direction, fixed geometry from the real trade (stop distance, T1 distance, T2 distance), no structural invalidation, bailout, breakeven or trail, flatten at 15:55; 200 trials; compared with the same stripped geometry in the real direction. Level-anchored exits cannot be mirrored, so the placebo isolates direction under a common simple exit.
+
+## Reading (frozen)
+A configuration is "a lead" only if its explore mean dollars per trade after friction has a day-blocked CI lower bound > 0 AND beats the placebo p95; even then it only earns a single hold-out look under the user's approval. A miss is "not shown", never "no effect". The study reports what the baseline did, not what a tuned version did.
