@@ -1,0 +1,21 @@
+Explore sessions 529 (2023-03-10..2025-05-16); hold-out 340 SEALED
+S (median absolute adjacent-bracket POC step, pooled over 6348 pairs) = 20.75 pts (frozen)
+Decision points 3628 over 513 sessions; distance terciles cut at 0.330 / 0.609 ATR20
+ARM SIZES: ladder 54 events (49 dates; up 40 down 14), price-momentum control 772 (392 dates), no-ladder 3574
+  ladder events per stratum: [39, 7, 8]  by bracket b=2..7: [9, 4, 10, 14, 7, 10]
+  ladder                   break rate  38.9%  break combined range  31.5%  mean 60-min move -0.0150 ATR20 (N=54)
+  price-momentum control   break rate  32.9%  break combined range  20.2%  mean 60-min move -0.0038 ATR20 (N=772)
+  no-ladder                break rate  17.5%  break combined range  11.7%  mean 60-min move -0.0071 ATR20 (N=3574)
+
+PRIMARY: break-rate difference, strata-weighted (day-blocked bootstrap)
+  ladder minus no-ladder: +7.86 pts, 95% CI [-4.58, +20.55], one-sided 97.5% lower bound -4.58
+  ladder minus price-momentum control: +0.53 pts, CI [-11.76, +13.91]
+  SIGNED 60-min move, ladder minus no-ladder: -0.0143 ATR20, CI [-0.0666, +0.0373]
+  SIGNED 60-min move, ladder minus price-momentum control: -0.0158 ATR20, CI [-0.0706, +0.0370]
+  break of the COMBINED range (IB + overnight), ladder minus no-ladder: +10.62 pts, CI [-1.47, +22.86]
+
+DESCRIPTIVE: break rate by direction, ladder vs no-ladder
+  dir +1: ladder 45.0% (N=40) vs no-ladder 18.7%  | 60-min move +0.0013 vs +0.0084
+  dir -1: ladder 21.4% (N=14) vs no-ladder 16.5%  | 60-min move -0.0613 vs -0.0210
+
+Reading is pre-registered (PREREG.md): lead = primary lower bound > 0 AND ladder beats the price-momentum control AND signed 60-min move difference positive. Under 150 ladder events or 60 dates = underpowered.

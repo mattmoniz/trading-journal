@@ -1,0 +1,20 @@
+Back-and-forth cutoff (median |net delta|/volume over 90 bars, pooled over 3628 decision points) = 0.0110 (frozen)
+Decision points 3628; ladder 54; F 20 (18 dates; up 13 down 7); ladder-not-F 34
+  F per stratum: [14, 3, 3]
+  F (flow ladder)          N=   20 break  25.0%  60-min signed move -0.0870 ATR20
+  ladder not F             N=   34 break  47.1%  60-min signed move +0.0274 ATR20
+  price-momentum control   N=  772 break  32.9%  60-min signed move -0.0038 ATR20
+  no-ladder                N= 3574 break  17.5%  60-min signed move -0.0071 ATR20
+
+COUNTED CELL 2: signed 60-min move, F minus no-ladder (one-sided 98.75% lower bound, Bonferroni over 2 cells)
+  -0.0860 ATR20, 95% CI [-0.1968, +0.0197], one-sided 98.75% lower bound -0.2113
+  F minus ladder-not-F (does flow add?): -0.1152, CI [-0.2367, +0.0109]
+  F minus price-momentum control: -0.0871, CI [-0.1958, +0.0218]
+  break rate (primary definition), F minus no-ladder: -5.34 pts, CI [-23.27, +14.63]
+  break rate, F minus ladder-not-F: -19.80 pts, CI [-43.67, +5.88]
+
+DESCRIPTIVE by direction (F vs no-ladder 60-min move):
+  dir +1: F -0.0733 (N=13) vs no-ladder +0.0084
+  dir -1: F -0.1123 (N=7) vs no-ladder -0.0210
+
+Reading is pre-registered (Amendment 1): lead = lower bound > 0 AND beats both price-momentum control and ladder-not-F. Under 150 F events or 60 dates = underpowered.
