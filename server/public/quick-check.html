@@ -3904,11 +3904,11 @@ function tellTradeRow(r) {
   return '<details style="border-top:1px solid var(--border);padding:4px 0"><summary style="cursor:pointer;font-size:13px;line-height:1.5"><span class="mono">' + tellT(r.fired_at) + '</span> <b style="color:' + col + '">' + (long ? 'LONG' : 'SHORT') + '</b> in <span class="mono">' + tellPx(r.entry_price) + '</span> · stop <span class="mono">' + tellPx(r.stop_price) + '</span> (' + Number(r.risk_points).toFixed(1) + ' pt' + (r.stop_fallback ? ', no 3rd node' : '') + ') → ' + res + ord + '</summary>'
     + '<div style="font-size:12px;color:var(--dim);padding:4px 0 2px 8px">' + comp + '<br>bar #' + monEsc(r.sig_idx) + ' · entry bar opened ' + tellT(r.entry_at) + (r.status === 'CLOSED' ? ' · exit bar ' + tellT(r.exit_bar_start) : '') + late + '</div></details>';
 }
-function tellBookBlock(title, sub, rows, sm) {
+function tellBookBlock(title, sub, rows, sm, boxId) {
   const s = sm || {};
   const head = '<div style="font-weight:700;margin-bottom:2px">' + title + '</div><div style="font-size:12px;color:var(--dim);margin-bottom:4px">' + sub + '</div>'
     + '<div style="font-size:13px;margin-bottom:4px">' + (s.n ? monEsc(s.n) + ' tell' + (s.n === 1 ? '' : 's') + ' · ▲' + monEsc(s.longs) + ' ▼' + monEsc(s.shorts) + ' · ' + monEsc(s.open) + ' open · ' + monEsc(s.closed) + ' closed' + (s.closed ? ' · net ' + monMoney(s.netClosed) + ' (' + monMoney(s.perTradeClosed) + '/trade)' : '') : '<span style="color:var(--dim)">no tell has fired this session</span>') + '</div>';
-  return '<div id="tell-' + title.slice(0, 2).toLowerCase() + '" style="border:1px solid var(--border);border-radius:8px;padding:10px 12px;margin-bottom:12px">' + head + rows.map(tellTradeRow).join('') + '</div>';
+  return '<div id="tell-' + (boxId || title.slice(0, 2).toLowerCase()) + '" style="border:1px solid var(--border);border-radius:8px;padding:10px 12px;margin-bottom:12px">' + head + rows.map(tellTradeRow).join('') + '</div>';
 }
 function renderTell(d, err) {
   const el = $('tell-body'); if (!el) return;
@@ -3930,6 +3930,7 @@ function renderTell(d, err) {
   const rows = (d.trades || []).filter(r => r.bar_rule === tellRule), sm = (d.summary || {})[tellRule] || {};
   h += tellBookBlock('V1 — tell-fade exit', 'Stop behind the 2nd node; after the range breaks, exit when the tell fades (the pre-registered primary).', rows.filter(r => r.book === 'V1'), sm.V1);
   h += tellBookBlock('V3 — hold to the close', 'Same entries and stops; after the break, hold until the 15:55 flatten (chosen after seeing the research results).', rows.filter(r => r.book === 'V3'), sm.V3);
+  h += tellBookBlock('V1P — 09:30–10:00 (watch only)', 'The V1 rule applied to signals 09:30–10:00, so the detector is warm at 10:00. Logged only, never ordered.', rows.filter(r => r.book === 'V1P'), sm.V1P, 'v1p');
   if ((d.alarms || []).length) h += monBox('tell-alarms', 'Integrity alarms (last 48h)', d.alarms.map(a => '<div style="font-size:12px;color:var(--amber-soft)">' + tellT(a.at) + ' ' + monEsc(a.kind) + ' <span style="color:var(--dim)">' + monEsc(JSON.stringify(a.detail)).slice(0, 160) + '</span></div>').join(''));
   h += '<div style="font-size:11.5px;color:var(--dim)">Updated ' + monEsc(d.generatedAt) + '. Tap a row for the five conditions. Research basis: explore data only, V1 +1.93/trade (CI -3.44..+7.62), V3 +7.29 (CI -2.19..+17.30) — not proven.</div>';
   el.innerHTML = h;

@@ -31,7 +31,11 @@ def research_result(root, d, prior_stats):
     if inp is None: return None, S
     ctx = T.prep(S, inp[0], inp[1])
     if ctx is None: return None, S
-    out = {b: T.simulate(ctx, b) for b in core.BOOKS}
+    out = {}
+    for b, variant, w in (('V1', 'V1', (V.DEC_FIRST, V.DEC_LAST)), ('V3', 'V3', (V.DEC_FIRST, V.DEC_LAST)), ('V1P', 'V1', (V.RTH_OPEN, V.DEC_FIRST))):      # reference side written out independently of core.BOOK_SPEC
+        saved = (T.ENTRY_FROM, T.ENTRY_TO); T.ENTRY_FROM, T.ENTRY_TO = w
+        try: out[b] = T.simulate(ctx, variant)
+        finally: T.ENTRY_FROM, T.ENTRY_TO = saved
     return out, S
 
 

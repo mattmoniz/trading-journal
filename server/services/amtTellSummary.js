@@ -3,7 +3,7 @@
 // text, never parsed with JS Date (CLAUDE.md naive-timestamp rule). Per-trade means are sum/N, not day-weighted.
 import { query } from '../db.js';
 
-const BOOKS = ['V1', 'V3'];
+const BOOKS = ['V1', 'V3', 'V1P'];
 
 function summarize(rows) {
   const out = {};

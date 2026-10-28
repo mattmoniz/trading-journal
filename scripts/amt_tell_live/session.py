@@ -62,7 +62,7 @@ class LiveSession:
         """Replay the research simulate on the session so far (final=True once the session's data has ended: a trade still running is booked closed at the last close, as the research does). Returns dict(books={V1:[..],V3:[..]}, rep=..., n_done=...) or None when no decision is possible yet (before the entry window, no baseline)."""
         le = self.last_complete_end()
         if le is None: return None
-        if not force and le < core.T.ENTRY_FROM: return None          # signals need a completed bar ending in the entry window; nothing can exist earlier
+        if not force and le < core.EARLIEST_ENTRY: return None          # signals need a completed bar ending in the entry window; nothing can exist earlier
         bars = self.sb.all_bars(); ctx = core.build_ctx(bars, self.d, self.prior)
         if ctx is None: return None
         books, rep = core.replay(ctx, final=final)

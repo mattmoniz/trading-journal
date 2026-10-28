@@ -15,7 +15,13 @@ from barbuilder import session_arrays
 
 MIN_PRIOR = 15           # run_trade.py: at least 15 usable prior ranges, and per clock hour at least 15 prior sessions
 PRIOR_N = 20
-BOOKS = ('V1', 'V3')
+RESEARCH_WINDOW = (T.ENTRY_FROM, T.ENTRY_TO)                       # 10:00-14:30 ET, the frozen research window (captured before anything modifies the module globals)
+PREOPEN_WINDOW = (V.RTH_OPEN, V.DEC_FIRST)                          # 09:30-10:00 ET: valid with the research code (the overnight range is complete at 09:30); WATCH ONLY, never ordered
+# book -> (research variant, entry window). V1P = the V1 rule applied to signal bars ending 09:30-10:00 (2026-10-28, user request: watch from the open so the system is warm at 10:00). Before 09:30 the research code
+# looks ahead (overnight range over the whole night), so Globex-hours windows are NOT available until a causal variant exists (decision amt_tell_globex_arm_untested_20261028).
+BOOK_SPEC = {'V1': ('V1', RESEARCH_WINDOW), 'V3': ('V3', RESEARCH_WINDOW), 'V1P': ('V1', PREOPEN_WINDOW)}
+BOOKS = tuple(BOOK_SPEC)
+EARLIEST_ENTRY = min(w[0] for _, w in BOOK_SPEC.values())
 
 
 def code_version():
@@ -51,7 +57,9 @@ def replay(ctx, books=BOOKS, final=False):
     n = ctx['n']; out = {}; rep_all = {}
     for b in books:
         rep = dict(fires=0, skip=0, trades=0, fallback=0)
-        tr = T.simulate(ctx, b, rep)
+        variant, (w0, w1) = BOOK_SPEC[b]; saved = (T.ENTRY_FROM, T.ENTRY_TO); T.ENTRY_FROM, T.ENTRY_TO = w0, w1
+        try: tr = T.simulate(ctx, variant, rep)
+        finally: T.ENTRY_FROM, T.ENTRY_TO = saved
         for t in tr: t['open'] = (not final) and (t['reason'] == 'EOS' and t['xj'] == n - 1)
         out[b] = tr; rep_all[b] = rep
     return out, rep_all
