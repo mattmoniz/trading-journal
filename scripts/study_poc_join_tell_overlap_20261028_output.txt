@@ -1,0 +1,19 @@
+sessions with bars 536; joins in range 1887 (blown through: 379); research tell trades 1760 on 488 days
+
+=== (1) share of tell fires with an OPPOSED join, vs the same clock minute on other sessions ===
+  o60    observed 16.5%  expected 14.7%  lift 1.12x  (n=1760)
+  o120   observed 27.8%  expected 22.8%  lift 1.22x  (n=1760)
+  blown  observed 3.6%  expected 4.8%  lift 0.76x  (n=1760)
+
+=== (2) reverse: blown-through joins followed by a same-direction tell within 120 min ===
+  blown-through joins with the blow-through at 10:00-14:30: 139; followed by a tell of the break direction within 120 min: 36 (25.9%); same-clock-minute expected 36.0%
+
+=== (3) V1 tell outcomes with vs without an opposed join (per-trade means; day-blocked CI of the difference) ===
+  flag o120: WITH n=490 (261 days), WITHOUT n=1270
+    broke WITH +0.147 WITHOUT +0.196 diff -0.049 CI [-0.087,-0.012]
+    pts   WITH +4.0 WITHOUT +1.2 diff +2.9 CI [-3.5,+9.5]
+    net   WITH +6.1 WITHOUT +0.3 diff +5.8 CI [-6.2,+18.5]
+  flag blown: WITH n=64 (38 days), WITHOUT n=1696
+    broke WITH +0.375 WITHOUT +0.175 diff +0.200 CI [+0.075,+0.351]
+    pts   WITH +24.8 WITHOUT +1.1 diff +23.6 CI [-1.5,+65.8]
+    net   WITH +47.5 WITHOUT +0.2 diff +47.3 CI [-1.0,+133.9]

@@ -33,6 +33,10 @@ function outAt(ei, ep, entryPx, sgn, h, se, A) { const k = ub(T, ep + h - 1) - 1
 // first close beyond `lvl` in direction dir in [i0,i1); held = HOLD further closes all beyond. Returns {b0, held}
 function firstBreak(lvl, dir, i0, i1) { for (let b = i0; b < i1; b++) { if (dir > 0 ? C[b] > lvl : C[b] < lvl) { if (b + HOLD + 1 >= T.length || T[b + HOLD] - T[b] !== HOLD) return { b0: b, held: false, gap: true }; let held = true; for (let k = b + 1; k <= b + HOLD; k++) if (dir > 0 ? C[k] <= lvl : C[k] >= lvl) { held = false; break; } return { b0: b, held }; } } return null; }
 
+// fresh breaks (Amendment 1): a close beyond lvl after >= REARM consecutive closes not beyond it (window start counts as armed); one event per excursion, held or not
+const REARM = 30;
+function freshBreaks(lvl, dir, i0, i1) { const out = []; let inside = REARM; for (let b = i0; b < i1; b++) { const beyond = dir > 0 ? C[b] > lvl : C[b] < lvl;
+  if (!beyond) { inside++; continue; } if (inside >= REARM) { if (b + HOLD + 1 >= T.length || T[b + HOLD] - T[b] !== HOLD) { inside = 0; continue; } let held = true; for (let k = b + 1; k <= b + HOLD; k++) if (dir > 0 ? C[k] <= lvl : C[k] >= lvl) { held = false; break; } out.push({ b0: b, held }); } inside = 0; } return out; }
 // ---- joins per arm (edge on the stop side) ----
 const arm = new Map(ARMS.map(a => [a.name, { a, joins: [], excl: 0 }]));
 for (let i = 0; i < events.length; i++) {
@@ -60,23 +64,24 @@ for (const [name, R] of arm) { const a = R.a, ds = R.joins.map(j => j.dist).sort
   for (const j of R.joins) { j.near = j.dist <= R.q33; j.far = j.dist > R.q67; }
   const nearJ = R.joins.filter(j => j.near);
   // held breaks of every arm level, one per level per day per side
-  const days = [...new Set(events.map(e => e.d))].sort(); R.breaks = [];
-  const seenDays = new Set(); for (const d of days) { const lv = levelsFor(d); if (!lv.A || seenDays.has(d)) continue; seenDays.add(d);
-    for (const dir of [1, -1]) { const lvl = dir > 0 ? lv[a.hiK] : lv[a.loK]; if (lvl == null) continue; const i0 = a.cs(d), i1 = a.ce(d); if (i1 - i0 < 30) continue; const fb = firstBreak(lvl, dir, i0, i1); if (!fb || !fb.held) continue;
-      const eb = fb.b0 + HOLD, ei = eb + 1; if (ei > a.se(d)) continue; const ep = T[ei], px = O[ei]; const out = {}; for (const h of HZ) out[h] = outAt(ei, ep, px, dir, h, a.se(d), lv.A);
-      const sig = nearJ.some(j => j.d === d && j.long === (dir < 0) && j.ei < fb.b0 && fb.b0 <= j.last && j.lvl === lvl);
-      R.breaks.push({ d, era: era(d), dir, b0: fb.b0, sig, out }); } } }
+  const days = [...new Set(events.map(e => e.d))].sort(); R.breaks = []; R.breaks0 = [];
+  const mk = (d, dir, fb, lvl, lv, into) => { if (!fb.held) return; const eb = fb.b0 + HOLD, ei = eb + 1; if (ei > a.se(d)) return; const ep = T[ei], px = O[ei]; const out = {}; for (const h of HZ) out[h] = outAt(ei, ep, px, dir, h, a.se(d), lv.A);
+    const sig = nearJ.some(j => j.d === d && j.long === (dir < 0) && j.ei < fb.b0 && fb.b0 <= j.last && j.lvl === lvl); into.push({ d, era: era(d), dir, b0: fb.b0, sig, out }); };
+  for (const d of days) { const lv = levelsFor(d); if (!lv.A) continue;
+    for (const dir of [1, -1]) { const lvl = dir > 0 ? lv[a.hiK] : lv[a.loK]; if (lvl == null) continue; const i0 = a.cs(d), i1 = a.ce(d); if (i1 - i0 < 30) continue;
+      const f0 = firstBreak(lvl, dir, i0, i1); if (f0) mk(d, dir, f0, lvl, lv, R.breaks0); for (const fb of freshBreaks(lvl, dir, i0, i1)) mk(d, dir, fb, lvl, lv, R.breaks); } } }
 
 console.log('\n=== CENSUS (no outcomes) ===');
-console.log('arm            joins(valid) excl(dist<0)  q33(ATR20) q67   NEAR FAR | held breaks  SIGNAL(N,days)  CONTROL(N,days)');
+console.log('arm            joins(valid) excl(dist<0)  q33(ATR20) q67   NEAR FAR | FRESH held breaks  SIGNAL(N,days)  CONTROL(N,days) | day-first: SIGNAL N, all N');
 for (const [name, R] of arm) { const S = R.breaks.filter(b => b.sig), Cn = R.breaks.filter(b => !b.sig);
-  console.log(`${name.padEnd(14)} ${String(R.joins.length).padStart(6)} ${String(R.excl).padStart(10)}  ${R.q33.toFixed(3).padStart(9)} ${R.q67.toFixed(3)} ${String(R.joins.filter(j => j.near).length).padStart(5)} ${String(R.joins.filter(j => j.far).length).padStart(4)} | ${String(R.breaks.length).padStart(6)}   ${String(S.length).padStart(5)} ${String(new Set(S.map(b => b.d)).size).padStart(4)}    ${String(Cn.length).padStart(5)} ${String(new Set(Cn.map(b => b.d)).size).padStart(4)}`); }
+  console.log(`${name.padEnd(14)} ${String(R.joins.length).padStart(6)} ${String(R.excl).padStart(10)}  ${R.q33.toFixed(3).padStart(9)} ${R.q67.toFixed(3)} ${String(R.joins.filter(j => j.near).length).padStart(5)} ${String(R.joins.filter(j => j.far).length).padStart(4)} | ${String(R.breaks.length).padStart(6)}   ${String(S.length).padStart(5)} ${String(new Set(S.map(b => b.d)).size).padStart(4)}    ${String(Cn.length).padStart(5)} ${String(new Set(Cn.map(b => b.d)).size).padStart(4)} | ${R.breaks0.filter(b => b.sig).length}, ${R.breaks0.length}`); }
 if (CENSUS) process.exit(0);
 
 // ---- Test 2 (primary) ----
-console.log('\n=== TEST 2 (PRIMARY): held break after a NEAR join blown through (SIGNAL) minus other held breaks of the same edge (CONTROL), signed move in ATR20 ===');
 const verdicts = [];
-for (const [name, R] of arm) { const S = R.breaks.filter(b => b.sig), Cn = R.breaks.filter(b => !b.sig); console.log(`\n-- ${name}: SIGNAL N=${S.length} (${new Set(S.map(b => b.d)).size} days), CONTROL N=${Cn.length}`);
+for (const [setKey, setLab] of [['breaks', 'TEST 2 (PRIMARY, Amendment 1 fresh breaks)'], ['breaks0', 'TEST 2-orig (day-first breaks, expected UNDERPOWERED, not counted)']]) {
+console.log(`\n=== ${setLab}: held break after a NEAR join blown through (SIGNAL) minus other held breaks of the same edge (CONTROL), signed move in ATR20 ===`);
+for (const [name, R] of arm) { const S = R[setKey].filter(b => b.sig), Cn = R[setKey].filter(b => !b.sig); console.log(`\n-- ${name}: SIGNAL N=${S.length} (${new Set(S.map(b => b.d)).size} days), CONTROL N=${Cn.length}`);
   const res = {};
   for (const h of HZ) { const k = r => r.out[h]; const s = S.filter(r => k(r) != null), c = Cn.filter(r => k(r) != null); const diff = pm(S, k) - pm(Cn, k); const ci = dayBoot(S, Cn, k, name + 'D' + h), ciS = dayBoot(S, null, k, name + 'S' + h);
     const pre = pm(S.filter(r => r.era === 'PRE'), k) - pm(Cn.filter(r => r.era === 'PRE'), k), post = pm(S.filter(r => r.era === 'POST'), k) - pm(Cn.filter(r => r.era === 'POST'), k);
@@ -87,7 +92,7 @@ for (const [name, R] of arm) { const S = R.breaks.filter(b => b.sig), Cn = R.bre
   const c1 = S.length >= 40 && new Set(S.map(b => b.d)).size >= 30, ex = (x) => x.ci && x.ci[0] > 0, c2 = ex(res[60]) && ex(res[120]) && res[60].diff > 0 && res[120].diff > 0, c3 = res[60].ciS && res[60].ciS[0] > 0, c4 = [60, 120].every(h => res[h].pre > 0 && res[h].post > 0), c5 = tot > 0 && share < 0.5;
   const half = res[60].ci ? (res[60].ci[1] - res[60].ci[0]) / 2 : NaN;
   console.log(`  criteria: 1 N>=40&days>=30 ${c1} | 2 diff>0 CI>0 at +60,+120 ${c2} | 3 signal mean CI>0 ${!!c3} | 4 PRE&POST>0 ${c4} | 5 top5 share<50% ${c5} (share ${f(100 * share, 0)}%) | resolution of the +60 diff CI half-width ${half.toFixed(3)} ATR20`);
-  verdicts.push({ name, pass: c1 && c2 && c3 && c4 && c5, under: !c1, n: S.length, d60: res[60].diff, ci60: res[60].ci, half }); }
+  verdicts.push({ name, set: setKey, pass: c1 && c2 && c3 && c4 && c5, under: !c1, n: S.length, d60: res[60].diff, ci60: res[60].ci, half }); } }
 
 // ---- Test 1 (supporting): join works worse near the edge? ----
 console.log('\n=== TEST 1 (SUPPORTING): with-join signed move, NEAR minus FAR (negative = join weaker at the edge), ATR20 ===');
@@ -98,6 +103,6 @@ for (const [name, R] of arm) { console.log(`\n-- ${name}: NEAR ${R.joins.filter(
   const hb = (grp) => { let n = 0, c = 0; for (const j of R.joins.filter(grp)) { const dir = j.long ? -1 : 1, lv = levelsFor(j.d), lvl = j.lvl; const fb = firstBreak(lvl, dir, j.ei + 1, Math.min(j.last + 1, j.a.ce(j.d))); n++; if (fb && fb.held) c++; } return `${c}/${n} (${(100 * c / (n || 1)).toFixed(1)}%)`; };
   console.log(`  descriptive: held break of the edge inside the join's life: NEAR ${hb(j => j.near)} vs FAR ${hb(j => j.far)}`); }
 console.log('\n=== VERDICT ===');
-for (const v of verdicts) console.log(`${v.name}: ${v.pass ? 'SHOWS a blown-through-join breakout sign (lead for one frozen second look)' : v.under ? 'UNDERPOWERED (N=' + v.n + ')' : 'NOT SHOWN'}; +60 SIGNAL-CONTROL ${f(v.d60, 3)} ATR20 CI ${v.ci60 ? `[${f(v.ci60[0], 3)},${f(v.ci60[1], 3)}]` : 'n/a'}`);
-console.log(`passes ${verdicts.filter(v => v.pass).length} of ${verdicts.length}`);
+for (const v of verdicts) console.log(`[${v.set === 'breaks' ? 'primary' : 'orig'}] ${v.name}: ${v.pass ? 'SHOWS a blown-through-join breakout sign (lead for one frozen second look)' : v.under ? 'UNDERPOWERED (N=' + v.n + ')' : 'NOT SHOWN'}; +60 SIGNAL-CONTROL ${f(v.d60, 3)} ATR20 CI ${v.ci60 ? `[${f(v.ci60[0], 3)},${f(v.ci60[1], 3)}]` : 'n/a'}`);
+console.log(`primary passes ${verdicts.filter(v => v.set === 'breaks' && v.pass).length} of 5`);
 process.exit(0);

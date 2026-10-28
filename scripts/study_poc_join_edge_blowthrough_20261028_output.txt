@@ -1,0 +1,158 @@
+window 2023-03-06..2026-10-27; join events 3752; real POC_ROTATION_JOIN rows 2026-09-01..10-27: 219 distinct (minute,dir); replay events same window: 211; real rows matched by a replay event: 98 (45%), replay events matched by a real row: 98
+
+=== CENSUS (no outcomes) ===
+arm            joins(valid) excl(dist<0)  q33(ATR20) q67   NEAR FAR | FRESH held breaks  SIGNAL(N,days)  CONTROL(N,days) | day-first: SIGNAL N, all N
+RTH-ONH/ONL      1487         36      0.328 0.522   496  496 |    410      28   27      382  355 | 12, 309
+RTH-IB            965          5      0.287 0.459   322  322 |    330      15   15      315  302 | 6, 255
+RTH-PD           1309        214      0.477 0.915   437  436 |    485      28   28      457  435 | 8, 411
+GLX-PD           1938        158      0.425 0.814   646  646 |    394      27   25      367  341 | 7, 294
+GLX-GIB          1629        172      0.154 0.257   543  543 |    750      71   67      679  508 | 4, 372
+
+=== TEST 2 (PRIMARY, Amendment 1 fresh breaks): held break after a NEAR join blown through (SIGNAL) minus other held breaks of the same edge (CONTROL), signed move in ATR20 ===
+
+-- RTH-ONH/ONL: SIGNAL N=28 (27 days), CONTROL N=382
+  + 30m  SIGNAL n= 28 mean +0.042 CI [-0.026,+0.119] | CONTROL n= 377 mean -0.003 | diff +0.046 CI [-0.027,+0.132] | PRE +0.073 POST -0.018
+  + 60m  SIGNAL n= 26 mean +0.042 CI [-0.037,+0.118] | CONTROL n= 364 mean +0.024 | diff +0.018 CI [-0.069,+0.101] | PRE +0.024 POST +0.003
+  +120m  SIGNAL n= 21 mean +0.032 CI [-0.059,+0.120] | CONTROL n= 328 mean +0.016 | diff +0.016 CI [-0.089,+0.129] | PRE +0.062 POST -0.096
+  +240m  SIGNAL n=  9 mean -0.073 CI [-0.265,+0.124] | CONTROL n= 260 mean -0.000 | diff -0.073 CI [-0.286,+0.157] | PRE +0.020 POST -0.539
+  long join -> break DOWN: SIGNAL n=11 +60 +0.099 vs CONTROL n=181 +0.053
+  short join -> break UP: SIGNAL n=17 +60 +0.012 vs CONTROL n=201 -0.000
+  criteria: 1 N>=40&days>=30 false | 2 diff>0 CI>0 at +60,+120 false | 3 signal mean CI>0 false | 4 PRE&POST>0 false | 5 top5 share<50% false (share +145%) | resolution of the +60 diff CI half-width 0.085 ATR20
+
+-- RTH-IB: SIGNAL N=15 (15 days), CONTROL N=315
+  + 30m  SIGNAL n= 15 mean +0.060 CI [-0.014,+0.138] | CONTROL n= 313 mean +0.009 | diff +0.051 CI [-0.029,+0.138] | PRE +0.026 POST +0.087
+  + 60m  SIGNAL n= 13 mean +0.062 CI [-0.030,+0.150] | CONTROL n= 301 mean +0.024 | diff +0.038 CI [-0.068,+0.133] | PRE +0.038 POST +0.035
+  +120m  SIGNAL n= 11 mean -0.017 CI [-0.213,+0.176] | CONTROL n= 272 mean +0.014 | diff -0.030 CI [-0.240,+0.185] | PRE +0.016 POST -0.093
+  +240m  SIGNAL n=  2 mean +0.701 CI [+0.299,+1.103] | CONTROL n= 185 mean +0.008 | diff +0.693 CI [+0.246,+1.146] | PRE +1.122 POST +0.238
+  long join -> break DOWN: SIGNAL n=6 +60 +0.016 vs CONTROL n=148 +0.037
+  short join -> break UP: SIGNAL n=9 +60 +0.100 vs CONTROL n=167 +0.014
+  criteria: 1 N>=40&days>=30 false | 2 diff>0 CI>0 at +60,+120 false | 3 signal mean CI>0 false | 4 PRE&POST>0 false | 5 top5 share<50% false (share +142%) | resolution of the +60 diff CI half-width 0.101 ATR20
+
+-- RTH-PD: SIGNAL N=28 (28 days), CONTROL N=457
+  + 30m  SIGNAL n= 27 mean +0.031 CI [-0.016,+0.082] | CONTROL n= 454 mean -0.021 | diff +0.052 CI [-0.003,+0.111] | PRE +0.050 POST +0.054
+  + 60m  SIGNAL n= 21 mean +0.030 CI [-0.055,+0.118] | CONTROL n= 442 mean -0.025 | diff +0.056 CI [-0.038,+0.160] | PRE +0.033 POST +0.135
+  +120m  SIGNAL n= 18 mean +0.001 CI [-0.100,+0.107] | CONTROL n= 428 mean -0.034 | diff +0.035 CI [-0.084,+0.148] | PRE +0.034 POST +0.033
+  +240m  SIGNAL n= 12 mean -0.081 CI [-0.268,+0.119] | CONTROL n= 371 mean -0.042 | diff -0.039 CI [-0.241,+0.173] | PRE -0.048 POST +0.006
+  long join -> break DOWN: SIGNAL n=7 +60 +0.120 vs CONTROL n=194 -0.020
+  short join -> break UP: SIGNAL n=21 +60 -0.006 vs CONTROL n=263 -0.029
+  criteria: 1 N>=40&days>=30 false | 2 diff>0 CI>0 at +60,+120 false | 3 signal mean CI>0 false | 4 PRE&POST>0 true | 5 top5 share<50% false (share +241%) | resolution of the +60 diff CI half-width 0.099 ATR20
+
+-- GLX-PD: SIGNAL N=27 (25 days), CONTROL N=367
+  + 30m  SIGNAL n= 26 mean -0.042 CI [-0.150,+0.026] | CONTROL n= 360 mean -0.006 | diff -0.036 CI [-0.152,+0.034] | PRE -0.076 POST -0.006
+  + 60m  SIGNAL n= 20 mean -0.040 CI [-0.170,+0.043] | CONTROL n= 340 mean -0.001 | diff -0.039 CI [-0.172,+0.046] | PRE -0.096 POST +0.007
+  +120m  SIGNAL n= 18 mean -0.080 CI [-0.265,+0.049] | CONTROL n= 324 mean -0.000 | diff -0.080 CI [-0.260,+0.051] | PRE -0.129 POST -0.049
+  +240m  SIGNAL n= 16 mean -0.256 CI [-0.494,-0.052] | CONTROL n= 305 mean -0.014 | diff -0.242 CI [-0.491,-0.010] | PRE -0.464 POST -0.070
+  long join -> break DOWN: SIGNAL n=12 +60 -0.141 vs CONTROL n=142 -0.021
+  short join -> break UP: SIGNAL n=15 +60 +0.014 vs CONTROL n=225 +0.013
+  criteria: 1 N>=40&days>=30 false | 2 diff>0 CI>0 at +60,+120 false | 3 signal mean CI>0 false | 4 PRE&POST>0 false | 5 top5 share<50% false (share  n/a%) | resolution of the +60 diff CI half-width 0.109 ATR20
+
+-- GLX-GIB: SIGNAL N=71 (67 days), CONTROL N=679
+  + 30m  SIGNAL n= 64 mean +0.010 CI [-0.014,+0.033] | CONTROL n= 670 mean -0.006 | diff +0.015 CI [-0.010,+0.041] | PRE +0.007 POST +0.024
+  + 60m  SIGNAL n= 58 mean -0.008 CI [-0.044,+0.029] | CONTROL n= 629 mean -0.007 | diff -0.001 CI [-0.039,+0.036] | PRE +0.010 POST -0.013
+  +120m  SIGNAL n= 52 mean +0.010 CI [-0.034,+0.056] | CONTROL n= 607 mean -0.006 | diff +0.017 CI [-0.028,+0.064] | PRE -0.005 POST +0.043
+  +240m  SIGNAL n= 38 mean -0.001 CI [-0.091,+0.085] | CONTROL n= 565 mean -0.003 | diff +0.002 CI [-0.093,+0.095] | PRE -0.103 POST +0.070
+  long join -> break DOWN: SIGNAL n=31 +60 -0.029 vs CONTROL n=316 -0.005
+  short join -> break UP: SIGNAL n=40 +60 +0.008 vs CONTROL n=363 -0.007
+  criteria: 1 N>=40&days>=30 true | 2 diff>0 CI>0 at +60,+120 false | 3 signal mean CI>0 false | 4 PRE&POST>0 false | 5 top5 share<50% false (share  n/a%) | resolution of the +60 diff CI half-width 0.038 ATR20
+
+=== TEST 2-orig (day-first breaks, expected UNDERPOWERED, not counted): held break after a NEAR join blown through (SIGNAL) minus other held breaks of the same edge (CONTROL), signed move in ATR20 ===
+
+-- RTH-ONH/ONL: SIGNAL N=12 (12 days), CONTROL N=297
+  + 30m  SIGNAL n= 12 mean +0.060 CI [-0.052,+0.187] | CONTROL n= 296 mean -0.005 | diff +0.065 CI [-0.059,+0.207] | PRE +0.106 POST -0.048
+  + 60m  SIGNAL n= 12 mean +0.052 CI [-0.054,+0.152] | CONTROL n= 293 mean +0.015 | diff +0.037 CI [-0.077,+0.149] | PRE +0.059 POST -0.023
+  +120m  SIGNAL n= 11 mean +0.052 CI [-0.080,+0.178] | CONTROL n= 275 mean +0.007 | diff +0.045 CI [-0.104,+0.195] | PRE +0.099 POST -0.160
+  +240m  SIGNAL n=  6 mean -0.091 CI [-0.365,+0.191] | CONTROL n= 242 mean -0.003 | diff -0.088 CI [-0.385,+0.265] | PRE +0.026 POST -0.529
+  long join -> break DOWN: SIGNAL n=6 +60 +0.164 vs CONTROL n=137 +0.065
+  short join -> break UP: SIGNAL n=6 +60 -0.060 vs CONTROL n=160 -0.027
+  criteria: 1 N>=40&days>=30 false | 2 diff>0 CI>0 at +60,+120 false | 3 signal mean CI>0 false | 4 PRE&POST>0 false | 5 top5 share<50% false (share +193%) | resolution of the +60 diff CI half-width 0.113 ATR20
+
+-- RTH-IB: SIGNAL N=6 (6 days), CONTROL N=249
+  + 30m  SIGNAL n=  6 mean +0.160 CI [+0.027,+0.286] | CONTROL n= 248 mean +0.010 | diff +0.150 CI [-0.006,+0.289] | PRE +0.069 POST +0.230
+  + 60m  SIGNAL n=  6 mean +0.095 CI [-0.090,+0.263] | CONTROL n= 243 mean +0.033 | diff +0.062 CI [-0.160,+0.247] | PRE +0.064 POST +0.056
+  +120m  SIGNAL n=  6 mean +0.042 CI [-0.296,+0.377] | CONTROL n= 228 mean +0.024 | diff +0.019 CI [-0.340,+0.386] | PRE +0.009 POST +0.021
+  +240m  SIGNAL n=  2 mean +0.701 CI [+0.299,+1.103] | CONTROL n= 176 mean +0.010 | diff +0.690 CI [+0.235,+1.143] | PRE +1.116 POST +0.242
+  long join -> break DOWN: SIGNAL n=3 +60 -0.042 vs CONTROL n=110 +0.061
+  short join -> break UP: SIGNAL n=3 +60 +0.233 vs CONTROL n=139 +0.012
+  criteria: 1 N>=40&days>=30 false | 2 diff>0 CI>0 at +60,+120 false | 3 signal mean CI>0 false | 4 PRE&POST>0 true | 5 top5 share<50% false (share +151%) | resolution of the +60 diff CI half-width 0.204 ATR20
+
+-- RTH-PD: SIGNAL N=8 (8 days), CONTROL N=403
+  + 30m  SIGNAL n=  8 mean +0.074 CI [-0.007,+0.178] | CONTROL n= 403 mean -0.024 | diff +0.098 CI [+0.008,+0.225] | PRE +0.096 POST  n/a
+  + 60m  SIGNAL n=  7 mean +0.092 CI [-0.036,+0.203] | CONTROL n= 397 mean -0.028 | diff +0.120 CI [-0.028,+0.238] | PRE +0.117 POST  n/a
+  +120m  SIGNAL n=  7 mean +0.092 CI [-0.037,+0.223] | CONTROL n= 393 mean -0.037 | diff +0.129 CI [-0.032,+0.269] | PRE +0.128 POST  n/a
+  +240m  SIGNAL n=  7 mean -0.084 CI [-0.337,+0.141] | CONTROL n= 360 mean -0.046 | diff -0.038 CI [-0.294,+0.235] | PRE -0.029 POST  n/a
+  long join -> break DOWN: SIGNAL n=4 +60 +0.204 vs CONTROL n=168 -0.027
+  short join -> break UP: SIGNAL n=4 +60 -0.058 vs CONTROL n=235 -0.029
+  criteria: 1 N>=40&days>=30 false | 2 diff>0 CI>0 at +60,+120 false | 3 signal mean CI>0 false | 4 PRE&POST>0 false | 5 top5 share<50% false (share +133%) | resolution of the +60 diff CI half-width 0.133 ATR20
+
+-- GLX-PD: SIGNAL N=7 (7 days), CONTROL N=287
+  + 30m  SIGNAL n=  7 mean -0.041 CI [-0.088,+0.006] | CONTROL n= 283 mean -0.009 | diff -0.032 CI [-0.087,+0.023] | PRE -0.068 POST -0.026
+  + 60m  SIGNAL n=  3 mean -0.039 CI [-0.073,-0.008] | CONTROL n= 271 mean -0.003 | diff -0.036 CI [-0.077,+0.003] | PRE  n/a POST -0.036
+  +120m  SIGNAL n=  3 mean -0.174 CI [-0.660,+0.103] | CONTROL n= 264 mean -0.002 | diff -0.173 CI [-0.669,+0.110] | PRE  n/a POST -0.163
+  +240m  SIGNAL n=  3 mean -0.376 CI [-1.068,+0.173] | CONTROL n= 254 mean -0.018 | diff -0.358 CI [-1.059,+0.200] | PRE  n/a POST -0.347
+  long join -> break DOWN: SIGNAL n=5 +60 -0.008 vs CONTROL n=115 -0.033
+  short join -> break UP: SIGNAL n=2 +60 -0.055 vs CONTROL n=172 +0.017
+  criteria: 1 N>=40&days>=30 false | 2 diff>0 CI>0 at +60,+120 false | 3 signal mean CI>0 false | 4 PRE&POST>0 false | 5 top5 share<50% false (share  n/a%) | resolution of the +60 diff CI half-width 0.040 ATR20
+
+-- GLX-GIB: SIGNAL N=4 (4 days), CONTROL N=368
+  + 30m  SIGNAL n=  4 mean +0.023 CI [-0.040,+0.062] | CONTROL n= 365 mean -0.006 | diff +0.030 CI [-0.065,+0.072] | PRE +0.049 POST +0.026
+  + 60m  SIGNAL n=  3 mean +0.037 CI [-0.065,+0.152] | CONTROL n= 357 mean -0.005 | diff +0.042 CI [-0.065,+0.161] | PRE  n/a POST +0.045
+  +120m  SIGNAL n=  3 mean +0.040 CI [-0.020,+0.126] | CONTROL n= 355 mean -0.003 | diff +0.043 CI [-0.024,+0.135] | PRE  n/a POST +0.058
+  +240m  SIGNAL n=  3 mean +0.065 CI [-0.023,+0.203] | CONTROL n= 340 mean -0.013 | diff +0.078 CI [-0.019,+0.220] | PRE  n/a POST +0.089
+  long join -> break DOWN: SIGNAL n=1 +60 -0.065 vs CONTROL n=167 -0.010
+  short join -> break UP: SIGNAL n=3 +60 +0.087 vs CONTROL n=201 -0.001
+  criteria: 1 N>=40&days>=30 false | 2 diff>0 CI>0 at +60,+120 false | 3 signal mean CI>0 false | 4 PRE&POST>0 false | 5 top5 share<50% false (share +100%) | resolution of the +60 diff CI half-width 0.113 ATR20
+
+=== TEST 1 (SUPPORTING): with-join signed move, NEAR minus FAR (negative = join weaker at the edge), ATR20 ===
+
+-- RTH-ONH/ONL: NEAR 496, FAR 496
+  all         + 60m NEAR -0.007 (n=461) FAR +0.016 (n=442) diff -0.022 CI [-0.059,+0.015]
+  all         +120m NEAR -0.020 (n=419) FAR -0.004 (n=383) diff -0.016 CI [-0.069,+0.039]
+  all         +240m NEAR -0.011 (n=318) FAR -0.020 (n=287) diff +0.009 CI [-0.062,+0.082]
+  long joins  + 60m NEAR -0.004 (n=200) FAR +0.021 (n=238) diff -0.025 CI [-0.073,+0.026]
+  short joins + 60m NEAR -0.009 (n=261) FAR +0.009 (n=204) diff -0.018 CI [-0.071,+0.040]
+  descriptive: held break of the edge inside the join's life: NEAR 31/496 (6.3%) vs FAR 4/496 (0.8%)
+
+-- RTH-IB: NEAR 322, FAR 322
+  all         + 60m NEAR +0.006 (n=272) FAR +0.015 (n=267) diff -0.009 CI [-0.049,+0.027]
+  all         +120m NEAR -0.005 (n=230) FAR +0.019 (n=205) diff -0.023 CI [-0.083,+0.039]
+  all         +240m NEAR -0.008 (n=128) FAR +0.010 (n=115) diff -0.018 CI [-0.161,+0.130]
+  long joins  + 60m NEAR +0.026 (n=136) FAR +0.003 (n=133) diff +0.023 CI [-0.026,+0.072]
+  short joins + 60m NEAR -0.015 (n=136) FAR +0.026 (n=134) diff -0.041 CI [-0.104,+0.024]
+  descriptive: held break of the edge inside the join's life: NEAR 19/322 (5.9%) vs FAR 2/322 (0.6%)
+
+-- RTH-PD: NEAR 437, FAR 436
+  all         + 60m NEAR -0.004 (n=404) FAR -0.001 (n=388) diff -0.004 CI [-0.042,+0.038]
+  all         +120m NEAR -0.015 (n=366) FAR -0.015 (n=338) diff -0.001 CI [-0.062,+0.058]
+  all         +240m NEAR -0.025 (n=291) FAR -0.022 (n=256) diff -0.003 CI [-0.094,+0.083]
+  long joins  + 60m NEAR +0.016 (n=170) FAR +0.025 (n=229) diff -0.009 CI [-0.064,+0.047]
+  short joins + 60m NEAR -0.019 (n=234) FAR -0.037 (n=159) diff +0.018 CI [-0.043,+0.080]
+  descriptive: held break of the edge inside the join's life: NEAR 38/437 (8.7%) vs FAR 0/436 (0.0%)
+
+-- GLX-PD: NEAR 646, FAR 646
+  all         + 60m NEAR +0.006 (n=584) FAR +0.006 (n=591) diff -0.001 CI [-0.018,+0.019]
+  all         +120m NEAR -0.001 (n=538) FAR +0.013 (n=562) diff -0.014 CI [-0.037,+0.010]
+  all         +240m NEAR +0.007 (n=485) FAR -0.002 (n=503) diff +0.009 CI [-0.028,+0.046]
+  long joins  + 60m NEAR +0.015 (n=271) FAR +0.013 (n=319) diff +0.002 CI [-0.021,+0.027]
+  short joins + 60m NEAR -0.002 (n=313) FAR -0.001 (n=272) diff -0.001 CI [-0.024,+0.024]
+  descriptive: held break of the edge inside the join's life: NEAR 29/646 (4.5%) vs FAR 2/646 (0.3%)
+
+-- GLX-GIB: NEAR 543, FAR 543
+  all         + 60m NEAR +0.010 (n=492) FAR +0.005 (n=488) diff +0.004 CI [-0.015,+0.024]
+  all         +120m NEAR +0.003 (n=454) FAR +0.014 (n=459) diff -0.010 CI [-0.036,+0.013]
+  all         +240m NEAR +0.001 (n=392) FAR +0.010 (n=394) diff -0.009 CI [-0.047,+0.029]
+  long joins  + 60m NEAR +0.016 (n=248) FAR +0.012 (n=248) diff +0.004 CI [-0.020,+0.030]
+  short joins + 60m NEAR +0.003 (n=244) FAR -0.002 (n=240) diff +0.004 CI [-0.024,+0.034]
+  descriptive: held break of the edge inside the join's life: NEAR 64/543 (11.8%) vs FAR 11/543 (2.0%)
+
+=== VERDICT ===
+[primary] RTH-ONH/ONL: UNDERPOWERED (N=28); +60 SIGNAL-CONTROL +0.018 ATR20 CI [-0.069,+0.101]
+[primary] RTH-IB: UNDERPOWERED (N=15); +60 SIGNAL-CONTROL +0.038 ATR20 CI [-0.068,+0.133]
+[primary] RTH-PD: UNDERPOWERED (N=28); +60 SIGNAL-CONTROL +0.056 ATR20 CI [-0.038,+0.160]
+[primary] GLX-PD: UNDERPOWERED (N=27); +60 SIGNAL-CONTROL -0.039 ATR20 CI [-0.172,+0.046]
+[primary] GLX-GIB: NOT SHOWN; +60 SIGNAL-CONTROL -0.001 ATR20 CI [-0.039,+0.036]
+[orig] RTH-ONH/ONL: UNDERPOWERED (N=12); +60 SIGNAL-CONTROL +0.037 ATR20 CI [-0.077,+0.149]
+[orig] RTH-IB: UNDERPOWERED (N=6); +60 SIGNAL-CONTROL +0.062 ATR20 CI [-0.160,+0.247]
+[orig] RTH-PD: UNDERPOWERED (N=8); +60 SIGNAL-CONTROL +0.120 ATR20 CI [-0.028,+0.238]
+[orig] GLX-PD: UNDERPOWERED (N=7); +60 SIGNAL-CONTROL -0.036 ATR20 CI [-0.077,+0.003]
+[orig] GLX-GIB: UNDERPOWERED (N=4); +60 SIGNAL-CONTROL +0.042 ATR20 CI [-0.065,+0.161]
+primary passes 0 of 5
