@@ -1,0 +1,18 @@
+ALL strata
+  TELL5       N= 2591 MFE 0.2300 MAE 0.2191 (pts~ 66.7/63.5) MFE>MAE 51.5% in profit at 60m 50.4% break 20.4%
+  moving-only N=17978 MFE 0.1922 MAE 0.1905 (pts~ 55.7/55.2) MFE>MAE 50.0% in profit at 60m 49.7% break 13.5%
+stratum 0 (0 = nearest the boundary)
+  TELL5       N= 1150 MFE 0.2175 MAE 0.1967 (pts~ 63.1/57.0) MFE>MAE 52.9% in profit at 60m 51.3% break 40.7%
+  moving-only N= 6962 MFE 0.1812 MAE 0.1694 (pts~ 52.6/49.1) MFE>MAE 51.1% in profit at 60m 52.1% break 31.8%
+stratum 1 (0 = nearest the boundary)
+  TELL5       N=  819 MFE 0.2276 MAE 0.2114 (pts~ 66.0/61.3) MFE>MAE 51.9% in profit at 60m 51.4% break  6.5%
+  moving-only N= 5804 MFE 0.1912 MAE 0.1893 (pts~ 55.4/54.9) MFE>MAE 50.5% in profit at 60m 49.4% break  3.4%
+stratum 2 (0 = nearest the boundary)
+  TELL5       N=  622 MFE 0.2562 MAE 0.2708 (pts~ 74.3/78.5) MFE>MAE 48.4% in profit at 60m 47.4% break  1.1%
+  moving-only N= 5212 MFE 0.2080 MAE 0.2198 (pts~ 60.3/63.7) MFE>MAE 48.2% in profit at 60m 46.7% break  0.4%
+
+GIVEN A BREAK (extension beyond the range edge within 60 minutes, ATR20 units):
+  ALL        TELL5 breaks N= 528 mean ext 0.2128 (~61.7 pts) median 0.1545 fwd60 +0.2511 | moving-only breaks N= 2430 mean ext 0.1777 (~51.5 pts) median 0.1232 fwd60 +0.2317
+  stratum 0  TELL5 breaks N= 468 mean ext 0.2105 (~61.1 pts) median 0.1504 fwd60 +0.2091 | moving-only breaks N= 2215 mean ext 0.1739 (~50.4 pts) median 0.1221 fwd60 +0.1998
+  stratum 1  TELL5 breaks N=  53 mean ext 0.2189 (~63.5 pts) median 0.1730 fwd60 +0.5547 | moving-only breaks N=  195 mean ext 0.2168 (~62.9 pts) median 0.1418 fwd60 +0.5298
+  stratum 2  TELL5 breaks N=   7 mean ext 0.3149 (~91.3 pts) median 0.3295 fwd60 +0.7592 | moving-only breaks N=   20 mean ext 0.2158 (~62.6 pts) median 0.1565 fwd60 +0.8568

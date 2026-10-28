@@ -89,6 +89,8 @@ def points(S, atr, base_hour):
             hz = (end > end[i]) & (end <= end[i] + HORIZON) & comp
             if not hz.any(): continue
             j = np.where(hz)[0][-1]; fwd = d * (c[j] - cur) / atr
+            hi_ = d * ((h[hz] if d == 1 else l[hz]) - cur) / atr; adv_ = d * ((l[hz] if d == 1 else h[hz]) - cur) / atr
+            mfe = float(np.max(hi_)); mae = float(-np.min(adv_)); ext = float(max(0.0, np.max(d * ((h[hz] if d == 1 else l[hz]) - bd)) / atr))
             brk = bool(np.any(c[hz] > bd) if d == 1 else np.any(c[hz] < bd))
             left = []
             for a, b in nds:
@@ -99,5 +101,5 @@ def points(S, atr, base_hour):
             strides = bool((not np.isnan(S1)) and (not np.isnan(S0)) and S1 > 0 and S1 > S0)
             cd = dur[i - FLOW_N + 1:i + 1].mean(); bh = base_hour.get(clock_hour(end[i]), np.nan); A = bh / cd if cd > 0 else np.nan
             dl = delta[i - FLOW_N + 1:i + 1]; Q = float(np.mean(dl[1:] * dl[:-1] < 0))
-            out.append(dict(date=S['d'], i=int(i), t=float(end[i]), dir=d, dist=float(dist), brk=brk, fwd=float(fwd), nnodes=len(nds), nleft=len(left), L=int(L), moving=bool(moving), A=float(A), Q=Q, R=R, strides=strides))
+            out.append(dict(date=S['d'], i=int(i), t=float(end[i]), dir=d, dist=float(dist), brk=brk, fwd=float(fwd), nnodes=len(nds), nleft=len(left), L=int(L), moving=bool(moving), A=float(A), Q=Q, R=R, strides=strides, mfe=mfe, mae=mae, ext=ext))
     return out
