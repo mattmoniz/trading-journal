@@ -1,0 +1,8 @@
+import { recordClaim } from '../record_claim.mjs';
+await recordClaim({
+  slug: 'amt_s1_open_location_vs_prior_va_not_shown_20261028',
+  claimText: 'AMT S1 (scripts/amt_s1, PREREG.md committed 2861516 before any outcome): does the 09:30 open location vs the prior-session 70% value area (ABOVE/BELOW/INSIDE) predict that day open-to-close, in ATR20 units, signed so positive = continuation. 850 eligible sessions 2023-04-06..2026-10-26; EXPLORE = first 510 (to 2025-05-16), HOLD-OUT = last 340 left UNOPENED. EXPLORE: ABOVE N=185 excess -0.054 ATR20 (95% CI -0.161..+0.048); BELOW N=135 excess +0.007 (CI -0.139..+0.152). Matched pre-open control (gap, overnight range, prior-day range; Mahalanobis K=5, support-trimmed, 73%/56% retained, evaluable): ABOVE -0.079 (CI -0.308..+0.141), BELOW -0.004 (CI -0.276..+0.248); IB-range-matched sensitivity the same. No explore signal on either side, so per the frozen rule the idea is CLOSED at explore and the hold-out was not opened. WHAT WAS SHOWN: ABOVE continuation larger than about +0.05 ATR20 (about 14 points) is excluded at the 97.5% level. WHAT WAS NOT SHOWN: BELOW continuation up to about +0.15 ATR20 is not excluded; a reversal on ABOVE days of up to about 0.16 ATR20 is not excluded (point estimate -0.054, all three chronological thirds negative, CI includes zero) - this is an observation, not a hypothesis to chase on this data. Resolution at this N is about 0.10-0.15 ATR20 (30-45 points). Not shown does not mean no effect.',
+  sourceFile: 'scripts/amt_s1/explore_output.txt', sourceDate: '2026-10-28', sampleSize: 320,
+  rigorStatus: 'explore_only_bootstrap_ci_matched_control_holdout_unopened', status: 'PROVISIONAL',
+});
+process.exit(0);

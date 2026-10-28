@@ -1,0 +1,14 @@
+Eligible sessions: 850 (2023-04-06..2026-10-26); EXPLORE 510 / HOLDOUT 340
+
+EXPLORE (one-sided 97.5% lower bound = lower end of the 95% CI)
+  ABOVE  N=185 excess E=-0.054 ATR20 (95% CI -0.161..+0.048) thirds=[-0.067, -0.044, -0.052]
+         matched control excess=-0.079 (95% CI -0.308..+0.141) retained=73%
+         [sensitivity IB-range-matched]   ABOVE  N=185 excess E=-0.054 ATR20 (95% CI -0.161..+0.050) thirds=[-0.067, -0.044, -0.052]
+         matched control excess=-0.124 (95% CI -0.303..+0.086) retained=75%
+  BELOW  N=135 excess E=+0.007 ATR20 (95% CI -0.139..+0.152) thirds=[-0.004, 0.056, -0.031]
+         matched control excess=-0.004 (95% CI -0.276..+0.248) retained=56%
+         [sensitivity IB-range-matched]   BELOW  N=135 excess E=+0.007 ATR20 (95% CI -0.132..+0.146) thirds=[-0.004, 0.056, -0.031]
+         matched control excess=+0.014 (95% CI -0.196..+0.226) retained=66%
+
+Explore signal: {'ABOVE': False, 'BELOW': False}
+CLOSED at explore; hold-out NOT opened.
