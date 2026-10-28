@@ -1,0 +1,16 @@
+Explore sessions 529 (2023-03-10..2025-05-16); hold-out 340 SEALED. Sessions with ON levels: 529
+Confluence zones: sessions with >= 1 zone 61.2% (median zones among those 1); sessions with none are skipped
+
+=== SETUP A: sweep + CVD absorption ===
+  signal  : N=878 WR 44.0% PF 0.86 mean $-2.02/trade (-0.01 pts) avgW $27.88 avgL $-25.48 maxDD $2330 total $-1776 | day-blocked 95% CI [-3.86, -0.10] | exits TGT 44%, STOP 42%, STRUCT 14%
+     trades per session with a zone: 2.71; long 425 short 453
+  control (no absorption): N=1740 WR 33.6% PF 0.72 mean $-3.33/trade (-0.66 pts) avgW $25.84 avgL $-18.10 maxDD $6132 total $-5786 | day-blocked 95% CI [-4.33, -2.33] | exits STOP 44%, TGT 30%, STRUCT 25%
+  RANDOM-ENTRY PLACEBO (stripped geometry, 100 trials): real-stripped mean $-1.99/trade | placebo p5 -5.07 p50 -3.17 p95 -1.66 | trials >= real: 11.0%
+
+=== SETUP B: build and go ===
+  signal  : N=868 WR 32.1% PF 0.80 mean $-3.09/trade (-0.55 pts) avgW $37.88 avgL $-22.50 maxDD $3032 total $-2684 | day-blocked 95% CI [-4.96, -1.19] | exits STOP 68%, TGT 32%, EOD 0%
+     trades per session with a zone: 2.68; long 483 short 385
+  control (no acceptance): N=442 WR 29.4% PF 0.70 mean $-4.71/trade (-1.35 pts) avgW $38.00 avgL $-22.50 maxDD $2439 total $-2080 | day-blocked 95% CI [-7.24, -2.10] | exits STOP 70%, TGT 29%, STOP_GAP 0%
+  RANDOM-ENTRY PLACEBO (stripped geometry, 100 trials): real-stripped mean $-3.09/trade | placebo p5 -4.84 p50 -3.37 p95 -1.73 | trials >= real: 39.0%
+
+Reading is pre-registered (PREREG.md): a lead needs CI lower bound > 0, beat placebo p95, AND beat its own same-selection control. Otherwise not shown.
