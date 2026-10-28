@@ -1,0 +1,22 @@
+Explore sessions 529 (2023-03-10..2025-05-16); hold-out 340 SEALED. Sessions with ON levels: 529
+Sessions with a long line at some point (09:59 or 11:10 bar): 143; short line: 128
+
+=== IGNITION + LIMIT RETEST (the spec) ===
+  signals 58, filled 22 (37.9%), unfilled 36
+  unfilled orders where price ran >= 24 pts from the line within 30 bars (descriptive): 32 of 36
+  result: N=22 WR 27.3% PF 0.89 mean $-1.48/trade (+0.26 pts) avgW $46.00 avgL $-19.28 maxDD $130 total $-32 | day-blocked 95% CI [-12.71, 11.41] | exits STRUCT 45%, STOP 27%, TGT 27%
+     long 10 short 12; trades per session 0.042
+
+=== PLAIN BREAK control (cross + clear, fails >= 1 initiative condition), same retest and management ===
+  signals 220, filled 128 (58.2%), unfilled 92
+  unfilled orders where price ran >= 24 pts from the line within 30 bars (descriptive): 76 of 92
+  result: N=128 WR 27.3% PF 0.86 mean $-2.07/trade (-0.03 pts) avgW $46.00 avgL $-20.16 maxDD $448 total $-264 | day-blocked 95% CI [-7.28, 3.40] | exits STRUCT 41%, STOP 32%, TGT 27%
+     long 66 short 62; trades per session 0.242
+
+=== DIAGNOSTIC: ignition signals entered at market at the next open ===
+  result: N=58 WR 43.1% PF 1.32 mean $4.75/trade (+3.38 pts) avgW $46.00 avgL $-26.50 maxDD $252 total $276 | day-blocked 95% CI [-4.75, 14.05] | exits STOP 57%, TGT 43%
+     long 32 short 26; trades per session 0.110
+
+  RANDOM-ENTRY PLACEBO (stripped 12/24 geometry, 100 trials): real-stripped mean $-16.61/trade | placebo p5 -16.61 p50 -3.43 p95 9.91 | trials >= real: 98.0%
+
+Reading is pre-registered (PREREG.md): a lead needs CI lower bound > 0, beat placebo p95, AND beat the plain-break control. Under 150 trades = underpowered.

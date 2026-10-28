@@ -1,0 +1,3 @@
+market-entry ignition N=58 real mean $4.75
+random time+direction placebo: p5 -10.32 p50 -3.75 p95 3.75 | trials >= real 3.8%
+random time, real direction:   p5 -10.00 p50 -2.50 p95 5.00 | trials >= real 6.3%
