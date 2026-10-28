@@ -1,0 +1,18 @@
+Events used: 12298 (2023-04-06..2026-10-16) | EXPLORE 5367 / HOLDOUT 6931
+
+EXPLORE (one-sided 97.5% lower bound = lower end of the 95% CI)
+  RTH    TOWARD       n= 1565 days=443 E=+0.0221 ATR20 (95% CI -0.0183..+0.0662) thirds=[0.009, 0.03, 0.027]
+         matched control +0.0554 (95% CI +0.0143..+0.1021) retained=66%
+   subtypeRTH    TOWARD /HIGH n=  711 days=286 E=+0.0173 ATR20 (95% CI -0.0506..+0.0758) thirds=[0.021, 0.04, -0.009]
+   subtypeRTH    TOWARD /LOW  n=  854 days=256 E=+0.0262 ATR20 (95% CI -0.0431..+0.0928) thirds=[-0.018, 0.037, 0.06]
+  RTH    AWAY         n=  895 days=246 E=-0.0258 ATR20 (95% CI -0.1070..+0.0473) thirds=[-0.027, -0.02, -0.031]
+  RTH    INSIDE       n= 1177 days=313 E=-0.0098 ATR20 (95% CI -0.0303..+0.0077) thirds=[-0.008, -0.004, -0.018]
+  GLOBEX TOWARD       n=  744 days=298 E=+0.0048 ATR20 (95% CI -0.0066..+0.0174) thirds=[0.018, 0.008, -0.011]
+         matched control +0.0105 (95% CI -0.0039..+0.0255) retained=71%
+   subtypeGLOBEX TOWARD /HIGH n=  286 days=165 E=+0.0042 ATR20 (95% CI -0.0146..+0.0227) thirds=[0.001, 0.002, 0.009]
+   subtypeGLOBEX TOWARD /LOW  n=  458 days=165 E=+0.0052 ATR20 (95% CI -0.0088..+0.0220) thirds=[0.023, -0.009, 0.001]
+  GLOBEX AWAY         n=  427 days=121 E=-0.0071 ATR20 (95% CI -0.0344..+0.0181) thirds=[-0.021, -0.009, 0.009]
+  GLOBEX INSIDE       n=  559 days=282 E=-0.0010 ATR20 (95% CI -0.0095..+0.0081) thirds=[-0.003, -0.001, 0.001]
+
+Explore signal (TOWARD, per session): {'RTH': False, 'GLOBEX': False}
+CLOSED at explore; hold-out NOT opened.
