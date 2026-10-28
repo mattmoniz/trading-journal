@@ -1,0 +1,32 @@
+{
+  "config": {
+    "lookback_window": 120,
+    "min_window": 40,
+    "pre_commitment_gates": {
+      "bc_pct_proceed": 20.0,
+      "bc_pct_underpowered": 12.0,
+      "min_confirmatory_holdout_n": 80,
+      "policy_under_80": "DESCRIPTIVE_ONLY_NOT_CONFIRMATORY"
+    },
+    "thresholds": {
+      "regime_a": {
+        "ib_percentile": 50,
+        "vol_ratio_max": 1.0
+      },
+      "regime_b": {
+        "ib_percentile": 65,
+        "vol_ratio_min": 1.5
+      },
+      "regime_c": {
+        "ib_percentile": 75,
+        "vol_ratio_max": 0.8
+      }
+    },
+    "timezone_contract": "US/Eastern or America/New_York (or tz-naive strictly representing US/Eastern wall clock)",
+    "train_ratio": 0.6,
+    "va_pct": 0.7,
+    "volume_assignment": "close"
+  },
+  "hash": "becad7fc28a2cb1d08e72c1a7e84f93810035693db32f174b3e3a118ba5b1397",
+  "locked_at_utc": "2026-10-28T00:15:25.124195+00:00"
+}
