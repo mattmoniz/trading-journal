@@ -1,0 +1,14 @@
+
+signal: distance terciles cut at 54.5 / 129.1 pts beyond the zone
+  far   N=  377 WR 63.4% mean $-5.54 (-0.39 pts/contract) fwd15 +1.63  days 119
+  mid   N=  376 WR 65.4% mean $-1.73 (+0.57 pts/contract) fwd15 +0.05  days 159
+  near  N=  378 WR 69.0% mean $-0.74 (+0.82 pts/contract) fwd15 +0.59  days 138
+  dir -1 N=705 mean $-4.23 fwd15 +0.50
+  dir +1 N=426 mean $-0.08 fwd15 +1.19
+
+control: distance terciles cut at 51.2 / 119.6 pts beyond the zone
+  far   N= 1337 WR 62.6% mean $-5.71 (-0.43 pts/contract) fwd15 -0.67  days 167
+  mid   N= 1337 WR 63.9% mean $-4.09 (-0.02 pts/contract) fwd15 +0.83  days 215
+  near  N= 1337 WR 67.6% mean $-1.01 (+0.75 pts/contract) fwd15 +1.78  days 192
+  dir -1 N=2336 mean $-5.18 fwd15 -0.16
+  dir +1 N=1675 mean $-1.40 fwd15 +1.77

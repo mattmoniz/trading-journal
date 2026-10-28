@@ -1,0 +1,18 @@
+Explore sessions 529 (2023-03-10..2025-05-16); hold-out 340 SEALED
+Sessions with >= 1 confluence zone: 61.2%
+
+=== REVISED SWEEP & ABSORB (the spec) ===
+  qualifying signals 3429, aborted by the 25-pt risk cap 2298, traded 1131; median distance of the signal bar beyond the zone 95.8 pts
+  result: N=1131 WR 66.0% PF 0.90 mean $-2.67/trade (+0.33 pts/contract) avgW $37.52 avgL $-80.54 maxDD $3429 total $-3020 | day-blocked 95% CI [-6.37, 1.09]
+     exits T1+STOP 43%, STOP 34%, T1+T2F 12%, T1+T2V 9%, T1+EOD 2%, T1+STOP_GAP 1%
+     long 426 short 705; trades per session with a zone 3.49; runner in VWAP mode 59%; mean 15-bar forward move +0.76 pts
+
+=== SAME-SELECTION CONTROL (delta opposite: no absorption) ===
+  qualifying signals 11089, aborted by the 25-pt risk cap 7078, traded 4011; median distance of the signal bar beyond the zone 97.8 pts
+  result: N=4011 WR 64.7% PF 0.87 mean $-3.60/trade (+0.10 pts/contract) avgW $36.91 avgL $-77.92 maxDD $15290 total $-14449 | day-blocked 95% CI [-5.69, -1.56]
+     exits T1+STOP 43%, STOP 35%, T1+T2F 12%, T1+T2V 8%, T1+EOD 1%, T1+STOP_GAP 1%, EOD 0%
+     long 1675 short 2336; trades per session with a zone 12.38; runner in VWAP mode 58%; mean 15-bar forward move +0.65 pts
+
+  RANDOM-ENTRY PLACEBO (same management, 100 trials): real mean $-2.67/trade | placebo p5 -8.93 p50 -5.95 p95 -2.92 | trials >= real: 4.0% | placebo mean 15-bar forward -0.19 pts
+
+Reading is pre-registered (PREREG.md): a lead needs CI lower bound > 0, beat placebo p95, AND beat its own same-selection control. Under 150 trades = underpowered.
