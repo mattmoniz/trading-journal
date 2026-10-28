@@ -130,6 +130,51 @@ def _raw_records(filepath, start_date=None):
                 yield dt_utc, o, h, l, c, numtr, totvol, bidvol, askvol
 
 
+class TradeMerger:
+    """Stateful, incremental form of the merge read_ticks performs (added 2026-10-28 for the live tell tailer so the live path and every batch reader share ONE merge rule).
+    feed() takes one raw record and returns the list of logical Trades it completes (0, 1 or 2 -- two when a stray unmatched FIRST_SUB_TRADE is flushed ahead of an ordinary record);
+    flush() returns a dangling unmatched FIRST_SUB_TRADE (end of file, or a tailer that decides it is stale); unknown_open_count counts records with a non-tick Open."""
+
+    def __init__(self):
+        self.pending_unbundled = None
+        self.unknown_open_count = 0
+
+    def feed(self, dt_utc, o, h, l, c, numtr, totvol, bidvol, askvol):
+        out = []
+        aggressor = 'BUY' if askvol > bidvol else ('SELL' if bidvol > askvol else 'UNKNOWN')
+        ts_et = _to_et(dt_utc)
+        if o == 0.0:
+            # Ordinary single trade -- Close is the trade price.
+            if self.pending_unbundled is not None:
+                # A FIRST_SUB_TRADE with no matching LAST_SUB_TRADE before a normal
+                # record is itself an anomaly -- flush what we have rather than drop it.
+                out.append(self.pending_unbundled)
+                self.pending_unbundled = None
+            out.append(Trade(dt_utc, ts_et, c / SCID_PRICE_SCALE, totvol, 1, aggressor))
+        elif abs(o - FIRST_SUB_TRADE) < _SENTINEL_TOL:
+            self.pending_unbundled = Trade(dt_utc, ts_et, c / SCID_PRICE_SCALE, totvol, 1, aggressor)
+        elif abs(o - LAST_SUB_TRADE) < _SENTINEL_TOL:
+            if self.pending_unbundled is not None:
+                self.pending_unbundled.size += totvol
+                self.pending_unbundled.num_sub_trades += 1
+                # Aggressor/price of the merged logical trade: keep the FIRST sub-trade's
+                # price/side (the trade that actually initiated it), matching the
+                # convention this codebase already uses elsewhere for "which side started
+                # this" rather than re-deriving a new rule here.
+                out.append(self.pending_unbundled)
+                self.pending_unbundled = None
+            else:
+                # LAST with no FIRST seen -- anomaly, emit standalone rather than drop.
+                out.append(Trade(dt_utc, ts_et, c / SCID_PRICE_SCALE, totvol, 1, aggressor))
+        else:
+            self.unknown_open_count += 1
+        return out
+
+    def flush(self):
+        t, self.pending_unbundled = self.pending_unbundled, None
+        return t
+
+
 def read_ticks(filepath, start_date=None, end_date=None):
     """Yields Trade objects, one per real logical trade -- unbundled sub-trades already
     merged, timestamps already ET-converted. start_date/end_date (datetime.date, ET-based)
@@ -140,8 +185,7 @@ def read_ticks(filepath, start_date=None, end_date=None):
     counted and raised at the end rather than silently skipped, per the standing
     "do not guess/do not silently swallow anomalies" discipline.
     """
-    pending_unbundled = None  # accumulates size across FIRST_SUB_TRADE...LAST_SUB_TRADE
-    unknown_open_count = 0
+    merger = TradeMerger()
 
     for dt_utc, o, h, l, c, numtr, totvol, bidvol, askvol in _raw_records(filepath, start_date=start_date):
         ts_et = _to_et(dt_utc)
@@ -149,43 +193,15 @@ def read_ticks(filepath, start_date=None, end_date=None):
             continue
         if end_date is not None and ts_et.date() > end_date:
             break
+        yield from merger.feed(dt_utc, o, h, l, c, numtr, totvol, bidvol, askvol)
 
-        aggressor = 'BUY' if askvol > bidvol else ('SELL' if bidvol > askvol else 'UNKNOWN')
+    last = merger.flush()
+    if last is not None:
+        yield last
 
-        if o == 0.0:
-            # Ordinary single trade -- Close is the trade price.
-            if pending_unbundled is not None:
-                # A FIRST_SUB_TRADE with no matching LAST_SUB_TRADE before a normal
-                # record is itself an anomaly -- flush what we have rather than drop it.
-                yield pending_unbundled
-                pending_unbundled = None
-            yield Trade(dt_utc, ts_et, c / SCID_PRICE_SCALE, totvol, 1, aggressor)
-
-        elif abs(o - FIRST_SUB_TRADE) < _SENTINEL_TOL:
-            pending_unbundled = Trade(dt_utc, ts_et, c / SCID_PRICE_SCALE, totvol, 1, aggressor)
-
-        elif abs(o - LAST_SUB_TRADE) < _SENTINEL_TOL:
-            if pending_unbundled is not None:
-                pending_unbundled.size += totvol
-                pending_unbundled.num_sub_trades += 1
-                # Aggressor/price of the merged logical trade: keep the FIRST sub-trade's
-                # price/side (the trade that actually initiated it), matching the
-                # convention this codebase already uses elsewhere for "which side started
-                # this" rather than re-deriving a new rule here.
-                yield pending_unbundled
-                pending_unbundled = None
-            else:
-                # LAST with no FIRST seen -- anomaly, emit standalone rather than drop.
-                yield Trade(dt_utc, ts_et, c / SCID_PRICE_SCALE, totvol, 1, aggressor)
-        else:
-            unknown_open_count += 1
-
-    if pending_unbundled is not None:
-        yield pending_unbundled
-
-    if unknown_open_count > 0:
+    if merger.unknown_open_count > 0:
         raise ValueError(
-            f"{filepath}: {unknown_open_count} records had an Open value that was "
+            f"{filepath}: {merger.unknown_open_count} records had an Open value that was "
             f"neither 0.0 nor a known unbundled-trade sentinel -- this data was assumed "
             f"tick-level throughout; investigate before trusting any output from this file."
         )

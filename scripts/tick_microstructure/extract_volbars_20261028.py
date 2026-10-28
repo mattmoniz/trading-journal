@@ -8,7 +8,8 @@ from multiprocessing import Pool
 sys.path.insert(0, os.path.dirname(__file__))
 import extract_cells_20261020 as X
 sr = X.sr
-VB = 500
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'amt_tell_live'))
+from barbuilder import SessionBars, session_sec, VB
 OVERFLOW = os.environ.get('VB_OVERFLOW', 'split')       # 'split' (research default: a trade that overflows 500 is split, remainder opens the next bar) or 'whole' (Stage-0 sensitivity: the whole trade stays in the bar, which closes at >= 500)
 OUT = os.environ.get('VB_OUT') or os.path.join(X.ROOT, 'scratch', 'volbars500_full_20261028'); os.makedirs(OUT, exist_ok=True)
 LAST_EXPLORE = '2025-05-16'
@@ -33,32 +34,16 @@ def bars_for_path(p, d):
             pr.append(t0.price)
             if k >= 300: break
         if pr and statistics.median(pr) < 1000: sc = 100.0
-    prev = dd - datetime.timedelta(days=1); bars = []; vaps = []; tot = 0
-    cur = None
-    def new_bar(t0):
-        return dict(start=t0, end=t0, o=None, h=-1e18, l=1e18, c=None, v=0, bid=0.0, ask=0.0, n=0, vap=collections.defaultdict(lambda: [0, 0.0, 0.0]))
+    prev = dd - datetime.timedelta(days=1); tot = 0
+    sb = SessionBars(OVERFLOW)                      # the bar rule lives in scripts/amt_tell_live/barbuilder.py, shared with the live tell detector
     for t in (sr.read_ticks(p, start_date=prev, end_date=dd) if lay == 'std' else _legacy_range(p, prev, dd)):
         m = t.ts_et.hour * 60 + t.ts_et.minute
         if sc != 1.0: t.price = t.price * sc
-        dts = t.ts_et.date()
-        if not ((dts == prev and m >= 1080) or (dts == dd and m < 1020)): continue
-        sec = (t.ts_et.hour * 3600 + t.ts_et.minute * 60 + t.ts_et.second + t.ts_et.microsecond / 1e6) - 64800 if dts == prev else 86400 - 64800 + t.ts_et.hour * 3600 + t.ts_et.minute * 60 + t.ts_et.second + t.ts_et.microsecond / 1e6
-        size = int(t.size); px = round(t.price, 2); first = True
-        if dts == dd and 570 <= m < 960: tot += size
-        while size > 0:
-            if cur is None: cur = new_bar(sec)
-            take = size if OVERFLOW == 'whole' else min(size, VB - cur['v'])
-            if cur['o'] is None: cur['o'] = px
-            cur['h'] = max(cur['h'], px); cur['l'] = min(cur['l'], px); cur['c'] = px; cur['end'] = sec; cur['v'] += take
-            b = a = 0.0
-            if t.aggressor == 'SELL': b = take
-            elif t.aggressor == 'BUY': a = take
-            cur['bid'] += b; cur['ask'] += a; cur['n'] += 1 if first else 0; first = False
-            c = cur['vap'][px]; c[0] += take; c[1] += b; c[2] += a
-            size -= take
-            if cur['v'] >= VB: bars.append((cur, True)); cur = None
-    if cur is not None and cur['v'] > 0: bars.append((cur, False))
-    return bars, tot
+        sec = session_sec(t.ts_et, dd)
+        if sec is None: continue
+        if t.ts_et.date() == dd and 570 <= m < 960: tot += int(t.size)
+        sb.feed(sec, t.price, t.size, t.aggressor)
+    return sb.all_bars(), tot
 
 def bars_for(d):
     best = None

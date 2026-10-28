@@ -21,6 +21,8 @@ import { getBrokerAttention } from '../services/sierraChart/brokerAttention.js';
 import { getMlScoringStatus } from '../services/mlScoringServiceManager.js';
 import { getPerfAttention } from '../services/perfTelemetry.js';
 import { getMlGateFailClosedStatus } from '../services/mlLiveVetoGate.js';
+import { getAmtTellStatus } from '../services/amtTellServiceManager.js';
+import { getAmtTellSummary } from '../services/amtTellSummary.js';
 
 const router = express.Router();
 
@@ -64,6 +66,17 @@ router.get('/setups/roster-scoreboard', async (req, res) => {
 router.get('/setups/monitor-summary', async (req, res) => {
   try { res.json(await getMonitorSummary()); }
   catch (err) { console.error('[setups/monitor-summary]', err.message); res.status(500).json({ error: err.message }); }
+});
+
+// GET /api/setups/amt-tell?date= -- read-only; feeds quick-check.html's Tell tab: the live node-ladder tell detector (Stage 1, watch only, no orders) -- virtual trades of the V1/V3 books under both bar readings,
+// session integrity facts, recent integrity alarms, and the sidecar's live status. Needs its own ~/.cloudflared/config.yml line.
+router.get('/setups/amt-tell', async (req, res) => {
+  try {
+    const nowET = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
+    const body = await getAmtTellSummary(req.query.date);
+    body.sidecar = getAmtTellStatus({ expectedRunning: !isGlobexWeekClosed(nowET) });
+    res.json(body);
+  } catch (err) { console.error('[setups/amt-tell]', err.message); res.status(500).json({ error: err.message }); }
 });
 
 router.get('/setups/live-flags', async (req, res) => {
@@ -149,6 +162,8 @@ router.get('/setups/live-flags', async (req, res) => {
     mlScorerSecondsSinceHealthy: getMlScoringStatus().secondsSinceHealthy,
     mlGateFailClosedSecondsAgo: getMlGateFailClosedStatus().secondsAgo,
     mlGateFailClosedReason: getMlGateFailClosedStatus().reason,
+    // Live tell detector sidecar (2026-10-28, Stage 1 watch-only): a plain-English problem string while the market is open and the detector should be logging, else null. Never gates anything.
+    amtTellProblem: getAmtTellStatus({ expectedRunning: !isGlobexWeekClosed(new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }))) }).problem,
   });
 });
 

@@ -4518,6 +4518,132 @@ CREATE TABLE public.amt_daily_state (
 
 
 --
+-- Name: amt_tell_alarms; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.amt_tell_alarms (
+    id bigint NOT NULL,
+    at timestamp without time zone NOT NULL,
+    kind character varying(30) NOT NULL,
+    detail jsonb NOT NULL
+);
+
+
+--
+-- Name: amt_tell_alarms_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.amt_tell_alarms_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: amt_tell_alarms_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.amt_tell_alarms_id_seq OWNED BY public.amt_tell_alarms.id;
+
+
+--
+-- Name: amt_tell_session_stats; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.amt_tell_session_stats (
+    trade_date date NOT NULL,
+    bar_rule character varying(8) NOT NULL,
+    rth_range double precision,
+    hour_mean jsonb NOT NULL,
+    n_bars integer NOT NULL,
+    validated boolean NOT NULL,
+    built_at timestamp without time zone NOT NULL
+);
+
+
+--
+-- Name: amt_tell_sessions; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.amt_tell_sessions (
+    trade_date date NOT NULL,
+    bar_rule character varying(8) NOT NULL,
+    contract character varying(10),
+    tick_file text,
+    state character varying(12) NOT NULL,
+    n_bars integer,
+    last_tick_at timestamp without time zone,
+    n_trades bigint,
+    contracts bigint,
+    rth_contracts bigint,
+    db_rth_contracts bigint,
+    vol_diff_pct numeric(7,2),
+    tail_backwards integer,
+    baseline_n integer,
+    bars_sha256 character varying(64),
+    eval_ms integer,
+    updated_at timestamp without time zone NOT NULL
+);
+
+
+--
+-- Name: amt_tell_trades; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.amt_tell_trades (
+    id bigint NOT NULL,
+    trade_date date NOT NULL,
+    bar_rule character varying(8) NOT NULL,
+    book character varying(4) NOT NULL,
+    sig_idx integer NOT NULL,
+    direction smallint NOT NULL,
+    fired_at timestamp without time zone NOT NULL,
+    entry_idx integer NOT NULL,
+    entry_at timestamp without time zone,
+    entry_price numeric(10,2) NOT NULL,
+    stop_price numeric(10,2) NOT NULL,
+    risk_points numeric(8,2) NOT NULL,
+    stop_fallback boolean NOT NULL,
+    details jsonb NOT NULL,
+    decision_hash character varying(16) NOT NULL,
+    code_version jsonb NOT NULL,
+    status character varying(8) NOT NULL,
+    exit_idx integer,
+    exit_bar_start timestamp without time zone,
+    exit_reason character varying(12),
+    exit_points numeric(8,2),
+    net_dollars numeric(9,2),
+    broke boolean,
+    mfe_points numeric(8,2),
+    path jsonb,
+    detected_at timestamp without time zone NOT NULL,
+    late_min numeric(8,1),
+    updated_at timestamp without time zone NOT NULL
+);
+
+
+--
+-- Name: amt_tell_trades_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.amt_tell_trades_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: amt_tell_trades_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.amt_tell_trades_id_seq OWNED BY public.amt_tell_trades.id;
+
+
+--
 -- Name: auction_history; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -10635,6 +10761,20 @@ ALTER TABLE ONLY public.ai_cost_log ALTER COLUMN id SET DEFAULT nextval('public.
 
 
 --
+-- Name: amt_tell_alarms id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.amt_tell_alarms ALTER COLUMN id SET DEFAULT nextval('public.amt_tell_alarms_id_seq'::regclass);
+
+
+--
+-- Name: amt_tell_trades id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.amt_tell_trades ALTER COLUMN id SET DEFAULT nextval('public.amt_tell_trades_id_seq'::regclass);
+
+
+--
 -- Name: auction_history id; Type: DEFAULT; Schema: public; Owner: -
 --
 
@@ -11196,6 +11336,46 @@ ALTER TABLE ONLY public.ai_cost_log
 
 ALTER TABLE ONLY public.amt_daily_state
     ADD CONSTRAINT amt_daily_state_pkey PRIMARY KEY (trade_date);
+
+
+--
+-- Name: amt_tell_alarms amt_tell_alarms_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.amt_tell_alarms
+    ADD CONSTRAINT amt_tell_alarms_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: amt_tell_session_stats amt_tell_session_stats_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.amt_tell_session_stats
+    ADD CONSTRAINT amt_tell_session_stats_pkey PRIMARY KEY (trade_date, bar_rule);
+
+
+--
+-- Name: amt_tell_sessions amt_tell_sessions_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.amt_tell_sessions
+    ADD CONSTRAINT amt_tell_sessions_pkey PRIMARY KEY (trade_date, bar_rule);
+
+
+--
+-- Name: amt_tell_trades amt_tell_trades_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.amt_tell_trades
+    ADD CONSTRAINT amt_tell_trades_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: amt_tell_trades amt_tell_trades_uq; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.amt_tell_trades
+    ADD CONSTRAINT amt_tell_trades_uq UNIQUE (trade_date, bar_rule, book, sig_idx);
 
 
 --
@@ -12714,6 +12894,20 @@ CREATE INDEX idx_acd_setup_events_type ON public.acd_setup_events USING btree (s
 --
 
 CREATE INDEX idx_amt_daily_state_fwd ON public.amt_daily_state USING btree (is_forward, trade_date);
+
+
+--
+-- Name: idx_amt_tell_alarms_at; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_amt_tell_alarms_at ON public.amt_tell_alarms USING btree (at DESC);
+
+
+--
+-- Name: idx_amt_tell_trades_date; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_amt_tell_trades_date ON public.amt_tell_trades USING btree (trade_date DESC, bar_rule, book);
 
 
 --

@@ -82,6 +82,7 @@ import researchRouter from './routes/research.js';
 import sierraChartRouter from './routes/sierraChart.js';
 import { startConnectionManager } from './services/sierraChart/connectionManager.js';
 import { startMlScoringService } from './services/mlScoringServiceManager.js';
+import { startAmtTellService } from './services/amtTellServiceManager.js';
 import volatilityRegimeRouter from './routes/volatilityRegime.js';
 import { runTripwireCheck } from './services/overnightTripwire.js';
 import { sendAlert } from './services/alertNotifier.js';
@@ -770,6 +771,10 @@ httpServer.listen(PORT, () => {
   // it fails to start, the gate fails closed (force-SHADOW) on every candidate rather than
   // silently firing everything live unscored. See mlScoringServiceManager.js.
   try { startMlScoringService(); } catch (err) { console.error('[mlScoringServiceManager] startMlScoringService failed:', err); }
+
+  // Live node-ladder tell detector sidecar (2026-10-28, Stage 1 watch-only, no orders): tails the live Sierra tick file and logs tells to amt_tell_trades. Fire-and-forget; a failure only means no tells are
+  // logged and is shown on quick-check.html (live-flags amtTellProblem). See amtTellServiceManager.js and docs/AMT_TELL_LIVE_PROJECT_SPEC_20261028.md.
+  try { startAmtTellService(); } catch (err) { console.error('[amtTellServiceManager] startAmtTellService failed:', err); }
 
   // Performance/health telemetry (2026-10-19): deploy marker now, a perf_snapshots row every 5 min, regression detection against its own history.
   startPerfTelemetry({ requestProfile: () => getRequestProfile(500) }).catch((err) => console.error('[perf] startPerfTelemetry failed:', err));
