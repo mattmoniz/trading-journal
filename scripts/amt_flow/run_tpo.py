@@ -1,7 +1,9 @@
 """TPO-zone variant of the order-flow branch, EXPLORE ONLY (PREREG_TPO.md frozen). Usage: ../../venv/bin/python run_tpo.py"""
 import numpy as np, pandas as pd, pathlib
 import flow as F, engine as E, tpo
-from run import metrics, ci, line, placebo, SPLIT, SEED
+import importlib.util
+_sp = importlib.util.spec_from_file_location('flow_run', str(pathlib.Path(__file__).parent / 'run.py')); _m = importlib.util.module_from_spec(_sp); _sp.loader.exec_module(_m)   # this branch's run.py (a bare `import run` collides with scripts/amt_80rule/run.py on sys.path)
+metrics, ci, line, placebo, SPLIT, SEED = _m.metrics, _m.ci, _m.line, _m.placebo, _m.SPLIT, _m.SEED
 from amt_s1 import overnight_ranges
 HERE = pathlib.Path(__file__).parent
 
