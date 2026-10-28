@@ -2034,10 +2034,25 @@ async function main() {
       } else {
         ok("[26] resolveSetups.js's POC_ROTATION_JOIN branch still writes TIMEOUT_EXIT");
       }
-      if (!/if \(row\.setup_type\.startsWith\('IB_LOW_PNR'\)\) \{[\s\S]{0,2000}?method = 'TIMEOUT_EXIT'/.test(resolveSetupsSrc)) {
+      // 2026-10-28: the branch also serves AMT_TELL_ (live tell detector Stage 2), so the opening line may carry that alternative.
+      if (!/if \(row\.setup_type\.startsWith\('IB_LOW_PNR'\)(?: \|\| row\.setup_type\.startsWith\('AMT_TELL_'\))?\) \{[\s\S]{0,2000}?method = 'TIMEOUT_EXIT'/.test(resolveSetupsSrc)) {
         fail("[26] resolveSetups.js's IB_LOW_PNR branch no longer writes method = 'TIMEOUT_EXIT' within ~2000 chars of its own 'if (row.setup_type.startsWith(...)) {' line -- confirm the branch wasn't refactored back to MARK_TO_MARKET or moved far enough that this check's proximity window needs updating.");
       } else {
         ok("[26] resolveSetups.js's IB_LOW_PNR branch still writes TIMEOUT_EXIT");
+      }
+      // AMT_TELL_ (2026-10-28) must stay wired in all four places or its rows are resolved/entered/expired by the wrong machinery (DeepSeek design review of Stage 2).
+      {
+        const orderSweepSrc = fs.readFileSync(path.resolve('server/services/sierraChart/orderSweep.js'), 'utf8');
+        const setupExpirySrc = fs.readFileSync(path.resolve('server/services/setupExpiry.js'), 'utf8');
+        const stSrc = fs.readFileSync(path.resolve('server/config/setupTypes.js'), 'utf8');
+        const wired = /startsWith\('IB_LOW_PNR'\) \|\| row\.setup_type\.startsWith\('AMT_TELL_'\)\) \{/.test(resolveSetupsSrc) && /startsWith\('AMT_TELL_'\)\) continue;/.test(setupExpirySrc)
+          && /'AMT_TELL_',\s+\/\/ 2026-10-28/.test(orderSweepSrc) && /DESIGNED_TIMEOUT_EXIT_PREFIXES = Object\.freeze\(\[[^\]]*'AMT_TELL_'/.test(stSrc);
+        if (!wired) fail("[26] AMT_TELL_ is no longer wired in resolveSetups.js (IB_LOW_PNR branch), setupExpiry.js (structural-invalidation skip), orderSweep.js (MARKET_ENTRY_PREFIXES) and setupTypes.js (DESIGNED_TIMEOUT_EXIT_PREFIXES) -- all four are required");
+        else ok('[26] AMT_TELL_ wired in resolver branch, invalidation skip, market-entry prefixes, designed-timeout prefixes');
+        // The resolver's real-order FILL GATE (an ACTIVE-origin primary with no filled entry waits, then resolves NOT_FILLED with no P&L) must stay ahead of the shared target-less branch, or an unfilled AMT row could be resolved with a fabricated P&L.
+        const gateAt = resolveSetupsSrc.indexOf('const realOrderFilled = orderInfo'), branchAt = resolveSetupsSrc.indexOf("startsWith('IB_LOW_PNR') || row.setup_type.startsWith('AMT_TELL_')) {");
+        if (!(gateAt > 0 && branchAt > gateAt)) fail('[26] the resolver fill gate (realOrderFilled) is no longer ahead of the IB_LOW_PNR/AMT_TELL_ branch in resolveSetups.js -- an unfilled AMT row could be resolved with a fabricated P&L');
+        else ok('[26] resolver fill gate precedes the AMT_TELL_ branch');
       }
     }
 

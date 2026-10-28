@@ -4620,7 +4620,9 @@ CREATE TABLE public.amt_tell_trades (
     path jsonb,
     detected_at timestamp without time zone NOT NULL,
     late_min numeric(8,1),
-    updated_at timestamp without time zone NOT NULL
+    updated_at timestamp without time zone NOT NULL,
+    active_setup_id integer,
+    order_state character varying(16)
 );
 
 
@@ -12901,6 +12903,13 @@ CREATE INDEX idx_amt_daily_state_fwd ON public.amt_daily_state USING btree (is_f
 --
 
 CREATE INDEX idx_amt_tell_alarms_at ON public.amt_tell_alarms USING btree (at DESC);
+
+
+--
+-- Name: idx_amt_tell_trades_active_setup; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX idx_amt_tell_trades_active_setup ON public.amt_tell_trades USING btree (active_setup_id) WHERE (active_setup_id IS NOT NULL);
 
 
 --

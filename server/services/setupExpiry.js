@@ -210,6 +210,8 @@ export async function structurallyInvalidateSetups(io) {
 
   let count = 0;
   for (const row of activeWithTime.rows) {
+    // AMT_TELL_ rows trade THROUGH the opening-range break by design (the V1 rule's exits are the detector's, written by amtTellOrders.js): the universal OR-break rule below would invalidate them on exactly that break.
+    if (row.setup_type.startsWith('AMT_TELL_')) continue;
     const isBracket = row.setup_type.includes('BRACKET_BREAKOUT');
     let shouldInvalidate = false;
     // Hoisted: one resolveDirection(row) call per row, reused below for both the

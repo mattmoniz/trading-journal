@@ -23,6 +23,7 @@ import { getPerfAttention } from '../services/perfTelemetry.js';
 import { getMlGateFailClosedStatus } from '../services/mlLiveVetoGate.js';
 import { getAmtTellStatus } from '../services/amtTellServiceManager.js';
 import { getAmtTellSummary } from '../services/amtTellSummary.js';
+import { getAmtTellOrdersStatus } from '../services/amtTellOrders.js';
 
 const router = express.Router();
 
@@ -75,6 +76,7 @@ router.get('/setups/amt-tell', async (req, res) => {
     const nowET = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
     const body = await getAmtTellSummary(req.query.date);
     body.sidecar = getAmtTellStatus({ expectedRunning: !isGlobexWeekClosed(nowET) });
+    body.orders = getAmtTellOrdersStatus();
     res.json(body);
   } catch (err) { console.error('[setups/amt-tell]', err.message); res.status(500).json({ error: err.message }); }
 });
@@ -163,7 +165,7 @@ router.get('/setups/live-flags', async (req, res) => {
     mlGateFailClosedSecondsAgo: getMlGateFailClosedStatus().secondsAgo,
     mlGateFailClosedReason: getMlGateFailClosedStatus().reason,
     // Live tell detector sidecar (2026-10-28, Stage 1 watch-only): a plain-English problem string while the market is open and the detector should be logging, else null. Never gates anything.
-    amtTellProblem: getAmtTellStatus({ expectedRunning: !isGlobexWeekClosed(new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }))) }).problem,
+    amtTellProblem: getAmtTellStatus({ expectedRunning: !isGlobexWeekClosed(new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }))) }).problem || getAmtTellOrdersStatus().problem,
   });
 });
 

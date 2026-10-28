@@ -1,5 +1,6 @@
 import { query } from '../db.js';
 import { REAL_TRADE_FILTER } from '../../scripts/backtest_setup_status.mjs';
+import { isAmtTellSimExempt } from '../config/setupTypes.js';
 
 // Stop/target calibration methods that carry NO per-type validated information -- a
 // placeholder default, not a real computed optimum. Shared with scripts/update_optimal_stops.mjs
@@ -263,6 +264,8 @@ export async function computeSuppressionSets(todayDowInt, setupStatusRows = null
     const roster = await getLiveRoster();
     for (const t of knownTypes) if (roster.state !== 'OK' || !roster.types.has(t)) { suppressedSetups.add(t); rosterBlocked.add(t); }
   }
+  // AMT_TELL_ sim-only exemption (setupTypes.js isAmtTellSimExempt): removed from every blocking set so it can neither be roster-blocked nor swept up by a weekly SETUP_STATUS row it will acquire.
+  for (const set of [suppressedSetups, dowSuppressToday, rosterBlocked]) for (const t of [...set]) if (isAmtTellSimExempt(t)) set.delete(t);
   return { suppressedSetups, dowSuppressToday, knownTypes, rosterBlocked };
 }
 

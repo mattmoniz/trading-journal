@@ -118,7 +118,7 @@ export async function resolveSetupsByPrice(io) {
   // where this function reads fired_at, since string comparison here needs to match
   // Postgres's own timestamp-text ordering, not JS's local-timezone Date parsing.
   const needsBars = active.rows.filter(row => {
-    if (row.setup_type === 'ABSORPTION_LONG' || row.setup_type.startsWith('COIL_SURGE') || row.setup_type.startsWith('POC_ROTATION_JOIN') || row.setup_type.startsWith('IB_LOW_PNR')) return false;
+    if (row.setup_type === 'ABSORPTION_LONG' || row.setup_type.startsWith('COIL_SURGE') || row.setup_type.startsWith('POC_ROTATION_JOIN') || row.setup_type.startsWith('IB_LOW_PNR') || row.setup_type.startsWith('AMT_TELL_')) return false;
     const entry = row.entry_zone_high ?? row.entry_zone_low;
     const { stop_level: stop, t1_level: t1 } = row;
     if (entry == null || stop == null || t1 == null) return false;
@@ -428,7 +428,9 @@ export async function resolveSetupsByPrice(io) {
   // is "hold the position for the rest of the session," per the trade-simulation
   // finding that no-target/hold-to-close beat every tested fixed target). t1_level is
   // an unreachable informational placeholder, never checked.
-    if (row.setup_type.startsWith('IB_LOW_PNR')) {
+    // AMT_TELL_LONG/SHORT (2026-10-28) share this branch: a real bar-walk stop check and a TIMEOUT_EXIT backstop at expires_at (the session's 15:57 ET flatten backstop). The tell-driven exits
+    // (tell fades after the range breaks, 120-minute no-break exit, 15:55 flatten) are written by server/services/amtTellOrders.js from the detector's own V1 book, never by this resolver.
+    if (row.setup_type.startsWith('IB_LOW_PNR') || row.setup_type.startsWith('AMT_TELL_')) {
       const stop = row.stop_level;
       if (entry == null || stop == null) continue;
       const long = row.setup_type.endsWith('_LONG'); // always false today -- SHORT only, see spec

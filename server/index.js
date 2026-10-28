@@ -83,6 +83,7 @@ import sierraChartRouter from './routes/sierraChart.js';
 import { startConnectionManager } from './services/sierraChart/connectionManager.js';
 import { startMlScoringService } from './services/mlScoringServiceManager.js';
 import { startAmtTellService } from './services/amtTellServiceManager.js';
+import { startAmtTellOrders } from './services/amtTellOrders.js';
 import volatilityRegimeRouter from './routes/volatilityRegime.js';
 import { runTripwireCheck } from './services/overnightTripwire.js';
 import { sendAlert } from './services/alertNotifier.js';
@@ -775,6 +776,8 @@ httpServer.listen(PORT, () => {
   // Live node-ladder tell detector sidecar (2026-10-28, Stage 1 watch-only, no orders): tails the live Sierra tick file and logs tells to amt_tell_trades. Fire-and-forget; a failure only means no tells are
   // logged and is shown on quick-check.html (live-flags amtTellProblem). See amtTellServiceManager.js and docs/AMT_TELL_LIVE_PROJECT_SPEC_20261028.md.
   try { startAmtTellService(); } catch (err) { console.error('[amtTellServiceManager] startAmtTellService failed:', err); }
+  // Stage 2 (2026-10-28): the tell's V1 book -> real orders on the SIMULATED account via ordinary active_setups rows. Ships DISABLED in code (AMT_TELL_ORDERS.enabled), pauses itself on a reconciliation misfire.
+  try { startAmtTellOrders(); } catch (err) { console.error('[amtTellOrders] startAmtTellOrders failed:', err); }
 
   // Performance/health telemetry (2026-10-19): deploy marker now, a perf_snapshots row every 5 min, regression detection against its own history.
   startPerfTelemetry({ requestProfile: () => getRequestProfile(500) }).catch((err) => console.error('[perf] startPerfTelemetry failed:', err));

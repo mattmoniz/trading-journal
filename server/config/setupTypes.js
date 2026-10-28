@@ -726,4 +726,13 @@ export function resolveSetupType(rawType, lv, { sessionOpenPrice, prevRthClose }
 // and the backstop won ~1 in 5 times (7 of 36 POC_ROTATION_JOIN timeouts since 2026-09-15),
 // mislabeling real designed-exit wins as MARK_TO_MARKET -- which REAL_TRADE_FILTER excludes,
 // silently undercounting real N/EV (test_invariants.mjs check [26]).
-export const DESIGNED_TIMEOUT_EXIT_PREFIXES = Object.freeze(['POC_ROTATION_JOIN', 'IB_LOW_PNR', 'OVERNIGHT_ORDERFLOW_']);
+export const DESIGNED_TIMEOUT_EXIT_PREFIXES = Object.freeze(['POC_ROTATION_JOIN', 'IB_LOW_PNR', 'OVERNIGHT_ORDERFLOW_', 'AMT_TELL_']);
+
+// AMT_TELL_LONG/SHORT (2026-10-28, Stage 2 of the live node-ladder tell detector, docs/AMT_TELL_LIVE_PROJECT_SPEC_20261028.md section 11): rows written by server/services/amtTellOrders.js from
+// amt_tell_trades (V1 book, split bar reading). Explicit, sim-only exemption from the LIVE_ROSTER / SETUP_STATUS suppression sets (user authorisation 2026-10-28, decision
+// amt_tell_user_authorisations_20261028): the type is NOT demonstrated, it is a forward test on the SIMULATED account. Exempt only while the active DTC profile is flagged simulation-safe
+// (DTC_AUTO_REARM_SAFE=true, the same explicit per-profile opt-in the auto-rearm uses); on any other profile the exemption is off and the roster gate applies as for every other type.
+// An unknown type used to pass the gates only by accident (it has no SETUP_STATUS row); the first weekly calibration would have written one and silently blocked it.
+export const AMT_TELL_PREFIX = 'AMT_TELL_';
+export const isAmtTellType = (setupType) => typeof setupType === 'string' && setupType.startsWith(AMT_TELL_PREFIX);
+export const isAmtTellSimExempt = (setupType) => isAmtTellType(setupType) && String(process.env.DTC_AUTO_REARM_SAFE).toLowerCase() === 'true';
