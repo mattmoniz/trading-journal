@@ -53,6 +53,17 @@ def decision_hash(tr):
     return hashlib.sha1(json.dumps(basis, sort_keys=True).encode()).hexdigest()[:16]
 
 
+def level_context(conn, d, px):
+    """CONTEXT ONLY (user question 2026-10-28: does the tell behave differently near the app's named levels?): the three nearest rows of level_prices for trade date d to the entry price, as [name, level price, entry minus level in points]
+    (positive = entry above the level). Stored under details['level_ctx']; deliberately NOT part of decision_hash and never read by the tell, which uses only its own volume profile. None when the date has no levels yet."""
+    with conn.cursor() as cur:
+        cur.execute("SELECT level_name, price::float FROM level_prices WHERE trade_date = %s AND price IS NOT NULL", (d,))
+        rows = cur.fetchall()
+    if not rows: return None
+    near = sorted(rows, key=lambda r: abs(r[1] - px))[:3]
+    return dict(n_levels=len(rows), nearest=[[n, round(p, 2), round(px - p, 2)] for n, p in near])
+
+
 def alarm(conn, kind, detail):
     with conn.cursor() as cur: cur.execute("INSERT INTO amt_tell_alarms (at, kind, detail) VALUES (%s,%s,%s)", (now_et(), kind[:30], json.dumps(_clean(detail), default=str)))
 
@@ -117,12 +128,15 @@ def persist_result(conn, ls, res, code_version):
             xj = int(tr['xj']); exit_start = et_naive(ls.bar_start_utc[xj]) if (not tr['open'] and xj < len(ls.bar_start_utc)) else None
             if ex is None:
                 late = round((now - fired).total_seconds() / 60.0, 1) if fired else None
+                try: lc = level_context(conn, d, float(tr['entry']))
+                except Exception: lc = None      # context must never block a tell from being logged
+                details_out = dict(tr['details'], level_ctx=lc)
                 with conn.cursor() as cur:
                     cur.execute("""INSERT INTO amt_tell_trades (trade_date, bar_rule, book, sig_idx, direction, fired_at, entry_idx, entry_at, entry_price, stop_price, risk_points, stop_fallback, details, decision_hash, code_version,
                                    status, exit_idx, exit_bar_start, exit_reason, exit_points, net_dollars, broke, mfe_points, path, detected_at, late_min, updated_at)
                                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT DO NOTHING""",
                                 (d, rule, book, int(tr['sig']), int(tr['dir']), fired, ei, entry_at, round(float(tr['entry']), 2), round(float(tr['stop']), 2), round(float(tr['risk']), 2), bool(tr['fb']),
-                                 json.dumps(_clean(tr['details'])), h, json.dumps(code_version), status, None if tr['open'] else xj, exit_start, None if tr['open'] else tr['reason'],
+                                 json.dumps(_clean(details_out)), h, json.dumps(code_version), status, None if tr['open'] else xj, exit_start, None if tr['open'] else tr['reason'],
                                  None if tr['open'] else round(float(tr['pts']), 2), None if tr['open'] else round(float(tr['net']), 2), None if tr['open'] else bool(tr['broke']), round(float(tr['mfe']), 2),
                                  json.dumps(_path(S, ei, xj)), now, late, now))
                 stat['new'] += 1; continue
