@@ -1,5 +1,5 @@
 """Exhaustion reversal, EXPLORE ONLY (PREREG.md frozen). Usage: ../../venv/bin/python run.py census|explore"""
-import sys, pathlib, numpy as np, pandas as pd
+import sys, os, pathlib, numpy as np, pandas as pd
 sys.path.insert(0, '/home/mmoniz/trading-journal/scripts/amt_s1')
 import exhaust as X, engine as E
 from amt_s1 import overnight_ranges
@@ -36,7 +36,7 @@ def prepare():
     stats = [X.push_stats(s['a']) for s in ex]; rngs = [float(np.nanmax(s['a']['h']) - np.nanmin(s['a']['l'])) for s in ex]
     sess = []
     for si, s in enumerate(ex):
-        thr = X.trailing_thresholds(stats, si)
+        thr = X.trailing_thresholds(stats, si, q_mv=int(os.environ.get('EXH_QMV', 90)), q_er=int(os.environ.get('EXH_QER', 75)))   # defaults = PREREG.md; PREREG_WIDE.md sets 80 / 60
         if thr is None: continue
         r = on.loc[s['d']] if s['d'] in on.index else None; pv = raw[ks[ks.index(s['d']) - 1]]
         s = dict(s); s['thr'], s['st'] = thr, stats[si]; s['atr20'] = float(np.mean(rngs[si - 20:si])); s['atr14'] = E.atr14(s['a'])
@@ -136,7 +136,7 @@ def main(stage):
     print('\n=== DESCRIPTIVE SENSITIVITIES (never selected): E2 gross F15 ===')
     for lbl, kw in (('exhaustion quantile 10', dict(exh_q=10)), ('exhaustion quantile 40', dict(exh_q=40)), ('response window 3', dict(window=3)), ('response window 8', dict(window=8))):
         o2, _ = events_for(sess, **kw); enrich(sess, o2); v = [e['F15'] for e in o2['E2']]; m, lo, hi = boot_mean(v, [e['date'] for e in o2['E2']], rng, 1500); print(f"  {lbl}: E2 N={len(v)} {m:+.2f} (CI {lo:+.2f}..{hi:+.2f})")
-    rows = [dict(grp=k, **{kk: vv for kk, vv in e.items() if kk not in ('geo',)}) for k in out for e in out[k]]; pd.DataFrame(rows).to_csv(HERE / 'events_explore.csv', index=False)
+    rows = [dict(grp=k, **{kk: vv for kk, vv in e.items() if kk not in ('geo',)}) for k in out for e in out[k]]; pd.DataFrame(rows).to_csv(HERE / f"events_explore{os.environ.get('EXH_TAG', '')}.csv", index=False)
     print('\nReading is pre-registered (PREREG.md): E2 is a lead only if gross F15 CI lower bound > 0, it beats the placebo p95, and E2-C2 and E2-NR have CI lower bounds > 0. Otherwise not shown.')
 
 if __name__ == '__main__':
