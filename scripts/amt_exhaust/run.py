@@ -4,6 +4,7 @@ sys.path.insert(0, '/home/mmoniz/trading-journal/scripts/amt_s1')
 import exhaust as X, engine as E
 from amt_s1 import overnight_ranges
 SPLIT, SEED, BOOT, TRIALS, COST_PTS = '2025-05-16', 20261028, 3000, 100, 1.5
+CUT_REAL, CUT_SHAM = 0.030821, 0.038765    # PREREG_HOLDOUT.md: 25th percentiles of d_real / d_sham over the EXPLORE wide-push E1 events (outcome-blind), frozen
 HERE = pathlib.Path(__file__).parent
 
 def segment(e): return 'MORNING' if e < 120 else ('MIDDAY' if e < 240 else 'AFTERNOON')
@@ -32,10 +33,11 @@ def boot_diff(v1, d1, v2, d2, rng, it=BOOT):
     return float(base), float(np.percentile(out, 2.5)), float(np.percentile(out, 97.5))
 
 def prepare():
-    raw = E.load_sessions(); allS = E.build_eligible(raw); ks = sorted(raw); on = overnight_ranges(end='2026-10-27'); ex = [s for s in allS if s['d'] <= SPLIT]
+    raw = E.load_sessions(); allS = E.build_eligible(raw); ks = sorted(raw); on = overnight_ranges(end='2026-10-27'); part = os.environ.get('EXH_PART', 'explore'); ex = allS if part == 'holdout' else [s for s in allS if s['d'] <= SPLIT]
     stats = [X.push_stats(s['a']) for s in ex]; rngs = [float(np.nanmax(s['a']['h']) - np.nanmin(s['a']['l'])) for s in ex]
     sess = []
     for si, s in enumerate(ex):
+        if part == 'holdout' and s['d'] <= SPLIT: continue          # stats/trailing windows use all earlier sessions; only post-split sessions are traded
         thr = X.trailing_thresholds(stats, si, q_mv=int(os.environ.get('EXH_QMV', 90)), q_er=int(os.environ.get('EXH_QER', 75)))   # defaults = PREREG.md; PREREG_WIDE.md sets 80 / 60
         if thr is None: continue
         r = on.loc[s['d']] if s['d'] in on.index else None; pv = raw[ks[ks.index(s['d']) - 1]]
@@ -65,7 +67,9 @@ def enrich(sess, out):
         for ev in evs:
             s = by[ev['date']]; ev.update(X.fwd(s['a'], ev)); ev['seg'] = segment(ev['e']); lv = dict(s['lv'])
             if ev['t'] >= 59: lv.update(IBH=s['ib'][0], IBL=s['ib'][1])
-            P = np.array(list(lv.values())); ev['d_real'] = float(np.min(np.abs(ev['ext'] - P)) / s['atr20']); ev['d_sham'] = float(np.min(np.abs(ev['ext'] - (P + 0.5 * s['atr20']))) / s['atr20'])
+            P = np.array(list(lv.values())); ev['near'] = list(lv.keys())[int(np.argmin(np.abs(ev['ext'] - P)))]; ev['n_conf'] = int(np.sum(np.abs(ev['ext'] - P) / s['atr20'] <= CUT_REAL))
+            for ln, lp in lv.items(): ev['dist_' + ln] = float(abs(ev['ext'] - lp) / s['atr20'])
+            ev['d_real'] = float(np.min(np.abs(ev['ext'] - P)) / s['atr20']); ev['d_sham'] = float(np.min(np.abs(ev['ext'] - (P + 0.5 * s['atr20']))) / s['atr20'])
             g = X.trade(s['a'], ev, s['atr14']); ev['geo'] = g
     return by
 
