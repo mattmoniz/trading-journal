@@ -35,12 +35,13 @@ def build_zones(S):
     return zones
 
 
-def simulate(S, kind, control=False, mv=None, zones=None):
+def simulate(S, kind, control=False, mv=None, zones=None, stop_mode='base'):
     a = S['a']; o, h, l, c, dl = a['o'], a['h'], a['l'], a['c'], a['dl']
     zones = build_zones(S) if zones is None else zones
     if not zones: return []
     mv = micro_vpoc(a) if (kind == 'B' and mv is None) else mv
     rng_lo, rng_hi = A_RANGE if kind == 'A' else B_RANGE
+    atr = E.atr14(a) if stop_mode != 'base' else None
     trades, pos, pend, pend_exit, fired = [], None, None, None, set()
     for i in range(390):
         if np.isnan(o[i]): continue
@@ -48,9 +49,12 @@ def simulate(S, kind, control=False, mv=None, zones=None):
             d, info = pend; pend = None
             if rng_lo <= i <= rng_hi:
                 entry = o[i] + d * SLIP
-                stop = info['ext'] - d * A_STOP if kind == 'A' else entry - d * B_STOP
+                if stop_mode == 'atr2' and not np.isnan(info.get('atr', np.nan)): stop = entry - d * 2.0 * info['atr']
+                elif stop_mode == 'atr2ext' and kind == 'A' and not np.isnan(info.get('atr', np.nan)): stop = info['ext'] - d * 2.0 * info['atr']
+                elif stop_mode != 'base': stop = None
+                else: stop = info['ext'] - d * A_STOP if kind == 'A' else entry - d * B_STOP
                 tgt = entry + d * (A_TGT if kind == 'A' else B_TGT)
-                if (d == 1 and stop < entry) or (d == -1 and stop > entry): pos = dict(d=d, ei=i, entry=entry, stop=stop, tgt=tgt, mfe=0.0, mae=0.0, zone=info.get('zone'))
+                if stop is not None and ((d == 1 and stop < entry) or (d == -1 and stop > entry)): pos = dict(d=d, ei=i, entry=entry, stop=stop, tgt=tgt, mfe=0.0, mae=0.0, zone=info.get('zone'))
         if pos is not None:
             d = pos['d']; done = False; open_exit = False; stop_exit = False; why = None; px = None
             if pend_exit is not None and i > pos['ei']: px, why, done, open_exit = o[i] - d * SLIP, pend_exit, True, True; pend_exit = None
@@ -75,7 +79,7 @@ def simulate(S, kind, control=False, mv=None, zones=None):
                 if c[i] >= zl: fired.discard((zi, -1))
         if pos is None and pend is None and i >= 1 and not np.isnan(c[i]):
             sig = detect_a(a, zones, i, control) if kind == 'A' else detect_b(a, zones, mv, i, control, fired)
-            if sig and rng_lo <= i + 1 <= rng_hi: pend = sig
+            if sig and rng_lo <= i + 1 <= rng_hi: pend = (sig[0], dict(sig[1], atr=(atr[i] if atr is not None else np.nan)))
     return trades
 
 

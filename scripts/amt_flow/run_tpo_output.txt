@@ -1,0 +1,41 @@
+Explore sessions 529; hold-out sealed. TPO (1.0-pt rows) vs volume value-area edges: median |VAH diff| 5.8 pts (p90 35.0), median |VAL diff| 7.0 pts (p90 30.6); TPO width median 101 vs volume 106
+
+##### VOLUME-PROFILE ZONES (reference, same code/data): sessions with >= 1 zone 61.2% (n zone-sessions 324)
+ Setup A
+  signal : N=878 WR 44.0% PF 0.86 mean $-2.02/trade (-0.01 pts) avgW $27.88 avgL $-25.48 maxDD $2330 total $-1776 | day-blocked 95% CI [-3.86, -0.10] | exits TGT 44%, STOP 42%, STRUCT 14%
+  control: N=1740 WR 33.6% PF 0.72 mean $-3.33/trade (-0.66 pts) avgW $25.84 avgL $-18.10 maxDD $6132 total $-5786 | day-blocked 95% CI [-4.33, -2.33] | exits STOP 44%, TGT 30%, STRUCT 25%
+  RANDOM-ENTRY PLACEBO (100 trials): real-stripped $-1.99 | placebo p5 -5.07 p50 -3.17 p95 -1.66 | trials >= real 11.0%
+ Setup B
+  signal : N=868 WR 32.1% PF 0.80 mean $-3.09/trade (-0.55 pts) avgW $37.88 avgL $-22.50 maxDD $3032 total $-2684 | day-blocked 95% CI [-4.96, -1.19] | exits STOP 68%, TGT 32%, EOD 0%
+  control: N=442 WR 29.4% PF 0.70 mean $-4.71/trade (-1.35 pts) avgW $38.00 avgL $-22.50 maxDD $2439 total $-2080 | day-blocked 95% CI [-7.24, -2.10] | exits STOP 70%, TGT 29%, STOP_GAP 0%
+  RANDOM-ENTRY PLACEBO (100 trials): real-stripped $-3.09 | placebo p5 -4.84 p50 -3.37 p95 -1.73 | trials >= real 39.0%
+
+##### TPO ZONES (1.0-point rows): sessions with >= 1 zone 61.2% (n zone-sessions 324)
+ Setup A
+  signal : N=848 WR 42.2% PF 0.81 mean $-2.71/trade (-0.35 pts) avgW $27.80 avgL $-25.00 maxDD $2516 total $-2297 | day-blocked 95% CI [-4.51, -0.86] | exits TGT 42%, STOP 42%, STRUCT 17%, EOD 0%
+  control: N=1582 WR 32.2% PF 0.70 mean $-3.67/trade (-0.83 pts) avgW $25.98 avgL $-17.73 maxDD $5922 total $-5798 | day-blocked 95% CI [-4.75, -2.64] | exits STOP 45%, TGT 29%, STRUCT 26%, EOD 0%
+  RANDOM-ENTRY PLACEBO (100 trials): real-stripped $-3.15 | placebo p5 -4.70 p50 -3.27 p95 -1.52 | trials >= real 48.0%
+ Setup B
+  signal : N=897 WR 31.8% PF 0.78 mean $-3.32/trade (-0.66 pts) avgW $37.88 avgL $-22.50 maxDD $3096 total $-2974 | day-blocked 95% CI [-5.09, -1.51] | exits STOP 68%, TGT 32%, EOD 0%
+  control: N=450 WR 26.9% PF 0.62 mean $-6.23/trade (-2.12 pts) avgW $38.00 avgL $-22.50 maxDD $2968 total $-2804 | day-blocked 95% CI [-8.65, -3.64] | exits STOP 73%, TGT 27%, STOP_GAP 0%
+  RANDOM-ENTRY PLACEBO (100 trials): real-stripped $-3.32 | placebo p5 -4.44 p50 -3.34 p95 -1.98 | trials >= real 49.0%
+
+Sessions whose zone set is identical between volume and TPO: 33.1%
+
+##### TPO ZONES sensitivity, 0.5-point rows (descriptive, never selected): sessions with >= 1 zone 61.6% (n zone-sessions 326)
+ Setup A
+  signal : N=871 WR 42.4% PF 0.82 mean $-2.63/trade (-0.31 pts) avgW $27.80 avgL $-24.99 maxDD $2595 total $-2287 | day-blocked 95% CI [-4.36, -0.80] | exits TGT 42%, STOP 42%, STRUCT 16%, EOD 0%
+  control: N=1619 WR 32.4% PF 0.70 mean $-3.61/trade (-0.80 pts) avgW $25.99 avgL $-17.77 maxDD $5961 total $-5838 | day-blocked 95% CI [-4.58, -2.59] | exits STOP 44%, TGT 29%, STRUCT 26%, EOD 0%
+ Setup B
+  signal : N=903 WR 31.9% PF 0.79 mean $-3.24/trade (-0.62 pts) avgW $37.88 avgL $-22.50 maxDD $3050 total $-2928 | day-blocked 95% CI [-4.89, -1.49] | exits STOP 68%, TGT 32%, EOD 0%
+  control: N=452 WR 27.0% PF 0.62 mean $-6.17/trade (-2.09 pts) avgW $38.00 avgL $-22.50 maxDD $2908 total $-2789 | day-blocked 95% CI [-8.59, -3.66] | exits STOP 73%, TGT 27%, STOP_GAP 0%
+
+##### TPO ZONES sensitivity, 2.0-point rows (descriptive, never selected): sessions with >= 1 zone 59.5% (n zone-sessions 315)
+ Setup A
+  signal : N=827 WR 43.2% PF 0.85 mean $-2.13/trade (-0.06 pts) avgW $27.93 avgL $-24.95 maxDD $2202 total $-1758 | day-blocked 95% CI [-4.10, -0.21] | exits TGT 43%, STOP 41%, STRUCT 16%, EOD 0%
+  control: N=1561 WR 33.2% PF 0.72 mean $-3.35/trade (-0.67 pts) avgW $25.66 avgL $-17.76 maxDD $5350 total $-5228 | day-blocked 95% CI [-4.38, -2.36] | exits STOP 44%, TGT 30%, STRUCT 26%, EOD 0%
+ Setup B
+  signal : N=887 WR 30.8% PF 0.75 mean $-3.92/trade (-0.96 pts) avgW $37.88 avgL $-22.50 maxDD $3594 total $-3475 | day-blocked 95% CI [-5.81, -1.99] | exits STOP 69%, TGT 31%, EOD 0%
+  control: N=443 WR 29.6% PF 0.71 mean $-4.61/trade (-1.30 pts) avgW $38.00 avgL $-22.50 maxDD $2372 total $-2042 | day-blocked 95% CI [-7.11, -2.01] | exits STOP 70%, TGT 30%, STOP_GAP 0%
+
+Reading is pre-registered (PREREG.md / PREREG_TPO.md): a lead needs CI lower bound > 0, beat placebo p95 and beat its own control. Otherwise not shown.
