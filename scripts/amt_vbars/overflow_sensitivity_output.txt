@@ -1,0 +1,17 @@
+Sessions in both: 536 (split-only 0, whole-only 0)
+Bars: split 643545, whole 642914 (-0.10%). Whole-mode bars holding > 500 contracts: 102865 (16.00% of bars)
+Sessions with an IDENTICAL bar sequence: 0; same bar count: 69
+Share of a session's bars before the first difference (median over sessions): 0.003; sessions whose first difference is before bar 50: 534
+Usable sessions with a 20-session baseline: split 516, whole 516
+
+[V1] split: N=1760 mean +1.93/trade total +3400 on 488 dates | whole: N=1785 mean +1.15/trade total +2056 on 491 dates
+   same date+direction+entry price in both: 54 (3% of split trades, 3% of whole trades)
+   dates traded in both 485; only split 3; only whole 6
+   on the 54 matched trades the net differs by mean +1.05, median +0.00, share exactly equal 54%
+
+[V3] split: N=1394 mean +7.29/trade total +10158 on 488 dates | whole: N=1398 mean +7.83/trade total +10940 on 491 dates
+   same date+direction+entry price in both: 30 (2% of split trades, 2% of whole trades)
+   dates traded in both 485; only split 3; only whole 6
+   on the 30 matched trades the net differs by mean -1.47, median +0.00, share exactly equal 57%
+
+Reading: if the whole-mode bar count, tell count and V1/V3 means are close to the split-mode figures, the overflow rule is immaterial for the project; if not, the user's exported Sierra bars decide (spec section 8, item 1).

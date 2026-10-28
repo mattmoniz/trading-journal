@@ -9,7 +9,8 @@ sys.path.insert(0, os.path.dirname(__file__))
 import extract_cells_20261020 as X
 sr = X.sr
 VB = 500
-OUT = os.path.join(X.ROOT, 'scratch', 'volbars500_full_20261028'); os.makedirs(OUT, exist_ok=True)
+OVERFLOW = os.environ.get('VB_OVERFLOW', 'split')       # 'split' (research default: a trade that overflows 500 is split, remainder opens the next bar) or 'whole' (Stage-0 sensitivity: the whole trade stays in the bar, which closes at >= 500)
+OUT = os.environ.get('VB_OUT') or os.path.join(X.ROOT, 'scratch', 'volbars500_full_20261028'); os.makedirs(OUT, exist_ok=True)
 LAST_EXPLORE = '2025-05-16'
 
 def _legacy_range(p, d0, d1):
@@ -46,7 +47,7 @@ def bars_for_path(p, d):
         if dts == dd and 570 <= m < 960: tot += size
         while size > 0:
             if cur is None: cur = new_bar(sec)
-            take = min(size, VB - cur['v'])
+            take = size if OVERFLOW == 'whole' else min(size, VB - cur['v'])
             if cur['o'] is None: cur['o'] = px
             cur['h'] = max(cur['h'], px); cur['l'] = min(cur['l'], px); cur['c'] = px; cur['end'] = sec; cur['v'] += take
             b = a = 0.0
@@ -86,7 +87,7 @@ if __name__ == '__main__':
     dates = [d for d in sorted(X.CAL) if '2023-03-06' <= d <= LAST_EXPLORE]
     if len(sys.argv) > 2 and sys.argv[1] == '--only':
         dates = sys.argv[2:]
-    with Pool(8) as pool:
+    with Pool(int(os.environ.get('VB_POOL', 8))) as pool:
         n = 0
         for d, s in pool.imap_unordered(work, dates):
             n += 1
