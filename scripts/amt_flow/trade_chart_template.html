@@ -50,11 +50,11 @@ td.w { color: var(--win); } td.l { color: var(--loss); }
   <div><h1>Order-Flow Trade Chart</h1>
   <p class="sub" id="sub"></p></div>
   <div class="panel controls">
-    <div class="ctl"><span class="lab">Strategy</span><div class="seg" id="mseg"><button data-v="of" aria-pressed="true">Order-flow setups</button><button data-v="ex" aria-pressed="false">Exhaustion reversal</button><button data-v="sw" aria-pressed="false">Sweep &amp; absorb (scale-out)</button></div></div>
+    <div class="ctl"><span class="lab">Strategy</span><div class="seg" id="mseg"><button data-v="bo" aria-pressed="true">Absorption + exhaustion</button><button data-v="of" aria-pressed="false">Order-flow setups</button><button data-v="ex" aria-pressed="false">Exhaustion reversal</button><button data-v="sw" aria-pressed="false">Sweep &amp; absorb (scale-out)</button></div></div>
     <div class="ctl"><label for="win">Window</label><select id="win"></select></div>
     <div class="ctl" id="zctl"><span class="lab">Zones</span><div class="seg" id="zseg"><button data-v="vol" aria-pressed="true">Volume profile</button><button data-v="tpo" aria-pressed="false">TPO</button></div></div>
-    <div class="ctl" id="sctl"><span class="lab">Stop</span><div class="seg" id="sseg"><button data-v="spec" aria-pressed="true">Spec (A 6 pts, B 10 pts)</button><button data-v="atr2" aria-pressed="false">2 x ATR14</button></div></div>
-    <div class="ctl"><span class="lab">Setups</span><div><label class="chk"><input type="checkbox" id="showA" checked> <span id="lblA">A absorption</span></label> <label class="chk"><input type="checkbox" id="showB" checked> <span id="lblB">B build-and-go</span></label></div></div>
+    <div class="ctl" id="sctl"><span class="lab">Stop</span><div class="seg" id="sseg"><button data-v="spec" aria-pressed="false">Spec (A 6 pts, B 10 pts)</button><button data-v="atr2" aria-pressed="true">2 x ATR14</button></div></div>
+    <div class="ctl"><span class="lab">Setups</span><div><label class="chk"><input type="checkbox" id="showA" checked> <span id="lblA">A absorption</span></label> <label class="chk"><input type="checkbox" id="showB" checked> <span id="lblB">B build-and-go</span></label> <label class="chk" id="cC" hidden><input type="checkbox" id="showC"> <span id="lblC">E1 exhaustion only</span></label></div></div>
     <div class="ctl"><span class="lab">Side</span><div class="seg" id="sideseg"><button data-v="all" aria-pressed="true">All</button><button data-v="long" aria-pressed="false">Long</button><button data-v="short" aria-pressed="false">Short</button></div></div>
     <div class="ctl"><span class="lab">Result</span><div class="seg" id="resseg"><button data-v="all" aria-pressed="true">All</button><button data-v="win" aria-pressed="false">Win</button><button data-v="loss" aria-pressed="false">Loss</button></div></div>
     <div class="ctl"><label for="why">Exit reason</label><select id="why"><option value="">All</option></select></div>
@@ -70,6 +70,7 @@ td.w { color: var(--win); } td.l { color: var(--loss); }
       <span><svg width="14" height="12" style="vertical-align:middle;margin-right:5px"><path d="M7 10.5 L12.5 1.5 L1.5 1.5 Z" fill="none" stroke="var(--loss)" stroke-width="2"/></svg>short, loss (hollow)</span>
       <span><svg width="26" height="8" style="vertical-align:middle;margin-right:5px"><path d="M1 4 H25" stroke="var(--candle)" stroke-width="2" stroke-dasharray="4 3"/></svg>entry to exit</span>
       <span id="lgZone"><i style="width:16px;height:10px;background:var(--zone);opacity:.28"></i>confluence zone</span>
+      <span id="lgEx"><svg width="22" height="16" style="vertical-align:middle;margin-right:5px"><circle cx="11" cy="9" r="7" fill="none" stroke="var(--ink)" stroke-width="1.5"/><path d="M11 4 L15 11 L7 11 Z" fill="var(--win)"/></svg>exhaustion trade (ring); plain triangle = absorption</span>
       <span id="lgPush"><svg width="30" height="12" style="vertical-align:middle;margin-right:5px"><path d="M1 11 L24 2" stroke="var(--muted)" stroke-width="2"/><path d="M26 2 l3 3 l-3 3 l-3 -3 Z" fill="none" stroke="var(--ink)" stroke-width="1.5"/></svg>push leg and exhaustion bar</span>
       <span style="color:var(--muted)">Candles: hollow = up, filled = down. Drag to pan, wheel to zoom, click a trade for its stop and target.</span>
     </div></div>
@@ -79,7 +80,7 @@ td.w { color: var(--win); } td.l { color: var(--loss); }
 <script>
 const DATA = /*DATA*/null;
 const $ = id => document.getElementById(id);
-const st = { side: 'all', res: 'all', why: '', mode: 'of', w: 0, z: 'vol', s: 'spec', A: true, B: true, L: true, sel: null, v0: 0, v1: 1 };
+const st = { side: 'all', res: 'all', why: '', mode: 'bo', w: 0, z: 'vol', s: 'atr2', A: true, B: true, C: false, L: true, sel: null, v0: 0, v1: 1 };
 let bars = [], days = [], cur = [];
 const cv = $('cv'), ctx = cv.getContext('2d'), tip = $('tip');
 const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
@@ -87,17 +88,17 @@ const hhmm = off => { const m = 570 + off; return String(Math.floor(m / 60)).pad
 const fmt = (x, d = 2) => (x == null ? '' : x.toFixed(d));
 const money = x => (x < 0 ? '-$' : '+$') + Math.abs(x).toFixed(2);
 const D = () => DATA[st.mode];
-const SUB = { of: 'The trades the two order-flow setups would have taken on NQ 1-minute bars (RTH only), five trading days at a time, on the explore sessions (March 2023 to May 2025). Each window is one of the eight busiest five-day stretches, picked for having many trades, so it is not representative: read the all-sessions line below. Simulated at 1 MNQ with $2 round-trip costs; these are research trades, not signals.',
+const SUB = { bo: 'Absorption and exhaustion on the same chart, so you can see where each fires. A (plain triangle, with the shaded confluence zone) is order-flow absorption at a zone. E2 (triangle inside a ring, with the grey push leg and a diamond on the exhaustion bar) is the full exhaustion rule: a one-way push to a new extreme, the leading side stops pressing, the other side steps in and price responds. E1 (optional) is exhaustion alone with no response. Use the Setups boxes to show one, the other or both; Side, Result and Exit reason filter both. Windows were picked for having the most exhaustion trades, so they look better than the whole sample: read the all-sessions lines. NQ 1-minute bars, RTH only, explore sessions, 1 MNQ; research trades, not signals.', of: 'The trades the two order-flow setups would have taken on NQ 1-minute bars (RTH only), five trading days at a time, on the explore sessions (March 2023 to May 2025). Each window is one of the eight busiest five-day stretches, picked for having many trades, so it is not representative: read the all-sessions line below. Simulated at 1 MNQ with $2 round-trip costs; these are research trades, not signals.',
   ex: 'Exhaustion reversals as you described them: a one-directional push to a new extreme while the leading side stops pressing (diamond), then the other side steps in and price responds, and only then the trade (triangle). Explore sessions, five days at a time. These eight windows were picked because they contain the most events, not at random, so they look better than the whole sample: read the all-sessions line below for the honest picture. Simulated at 1 MNQ; research trades, not signals.',
   sw: 'The revised Sweep and Absorb as you specified it: price sweeps beyond a confluence zone, absorption shows in the order flow, then the trade: 2 micro contracts, half off at +10 points, the stop moved just past breakeven, the runner to session VWAP (or +25 points if VWAP is too close). NQ 1-minute bars, RTH only, explore sessions, five days at a time. The windows are the busiest stretches, not random: read the all-sessions line for the honest picture. Research trades, not signals.' };
-const NOTE = { of: 'Wins are blue and losses orange; a hollow marker is a loss. Targets: setup A 15 points, setup B 20 points. Setup A also exits when a bar closes 5 points beyond the zone. Everything is flattened at 15:55. Net dollars include 1 tick slippage on market and stop exits and a $2 round trip.',
+const NOTE = { bo: 'Same chart, two ideas. A uses the zone and stop you pick under Zones and Stop (the exhaustion trades always use their own stop: 1 tick plus half the 1-minute ATR beyond the extreme, target half the push retraced, 30-bar time stop). A also exits at 15 points or when a bar closes 5 points beyond the zone. Everything is flattened at 15:55. Wins are blue, losses orange and hollow. Thin lines: value area, point of control, prior-day high/low, overnight and initial-balance levels. The two tabs next to this one have the detail for each idea on its own.', of: 'Wins are blue and losses orange; a hollow marker is a loss. Targets: setup A 15 points, setup B 20 points. Setup A also exits when a bar closes 5 points beyond the zone. Everything is flattened at 15:55. Net dollars include 1 tick slippage on market and stop exits and a $2 round trip.',
   ex: 'E2 is the full rule: exhaustion, then at least two counter-side bars with counter volume in control and a close beyond the extreme bar\'s far end, entered on the next open. E1 enters at the bar after the exhaustion bar with no response required. Stop = 1 tick + half the 1-minute ATR beyond the extreme; target = half the push retraced; 30-bar time stop; flatten 15:55. Wins are blue and losses orange (hollow). Net dollars include 1 tick slippage on market and stop exits and a $2 round trip. Thin lines: value area, point of control, prior-day high/low, overnight and initial-balance levels.',
   sw: 'Blue is a winning trade and orange a losing one (hollow). The exit marker is the average exit of the two contracts, because the first leg is taken at +10 and the runner exits later; the exit reason is in the table (T1+STOP = first leg taken, runner stopped near breakeven). The stop is the signal bar extreme with a 25-point cap; signals needing a wider stop were skipped. Dashed lines show stop and first target when a trade is selected. The control is the same setup with the delta pointing the other way (no absorption). On all explore sessions this setup wins often (66%) but earns about $-2.67 a trade after costs: the average gain per contract before the $2 round trip is smaller than the cost.' };
 function setMode() {
-  const ex = st.mode === 'ex', sw = st.mode === 'sw'; $('sub').textContent = SUB[st.mode]; $('note').textContent = NOTE[st.mode]; if (sw) st.z = 'vol';
-  $('zctl').hidden = ex || sw; $('sctl').hidden = ex || sw; $('lgZone').hidden = ex; $('lgPush').hidden = !ex;
-  $('lblA').textContent = ex ? 'E2 exhaustion + response' : sw ? 'Sweep and absorb' : 'A absorption'; $('lblB').textContent = ex ? 'E1 exhaustion only' : sw ? 'Control (no absorption)' : 'B build-and-go'; $('lblL').textContent = ex ? 'levels' : 'value area, ON, IB';
-  st.A = true; st.B = !ex && !sw; $('showA').checked = true; $('showB').checked = st.B;
+  const ex = st.mode === 'ex', sw = st.mode === 'sw', bo = st.mode === 'bo'; $('sub').textContent = SUB[st.mode]; $('note').textContent = NOTE[st.mode]; if (sw) st.z = 'vol';
+  $('zctl').hidden = ex || sw; $('sctl').hidden = ex || sw; $('lgZone').hidden = ex; $('lgPush').hidden = !(ex || bo); $('lgEx').hidden = !bo; $('cC').hidden = !bo;
+  $('lblA').textContent = ex ? 'E2 exhaustion + response' : sw ? 'Sweep and absorb' : 'A absorption'; $('lblB').textContent = bo ? 'E2 exhaustion + response' : ex ? 'E1 exhaustion only' : sw ? 'Control (no absorption)' : 'B build-and-go'; $('lblL').textContent = (ex || bo) ? 'levels' : 'value area, ON, IB';
+  st.A = true; st.B = !ex && !sw; st.C = false; $('showA').checked = true; $('showB').checked = st.B; $('showC').checked = false;
   const reasons = new Set(); Object.values(D().trades).forEach(arr => arr.forEach(t => reasons.add(t[6]))); const wy = $('why'); wy.innerHTML = '<option value="">All</option>'; [...reasons].sort().forEach(r => { const o = document.createElement('option'); o.value = r; o.textContent = r; wy.appendChild(o); }); st.why = '';
   const w = $('win'); w.innerHTML = ''; D().windows.forEach((x, i) => { const o = document.createElement('option'); o.value = i; o.textContent = `${x.label} (${x.ntr} trades)`; w.appendChild(o); }); st.w = 0;
   loadWindow();
@@ -108,11 +109,13 @@ function loadWindow() {
   st.v0 = 0; st.v1 = bars.length; st.sel = null; refresh();
 }
 function visibleTrades() {
-  const out = [], ex = st.mode === 'ex', sw = st.mode === 'sw';
-  [['A', ex ? 'ex|E2' : sw ? 'sw|S' : null], ['B', ex ? 'ex|E1' : sw ? 'sw|C' : null]].forEach(([k, exkey]) => { if (!st[k]) return; const key = (ex || sw) ? exkey : `${st.z}|${st.s}|${k}`, tag = ex ? (k === 'A' ? 'E2' : 'E1') : sw ? (k === 'A' ? 'S' : 'C') : k;
+  const out = [], ex = st.mode === 'ex', sw = st.mode === 'sw', bo = st.mode === 'bo';
+  const specs = bo ? [['A', `${st.z}|${st.s}|A`, 'A'], ['B', 'ex|E2', 'E2'], ['C', 'ex|E1', 'E1']]
+    : [['A', ex ? 'ex|E2' : sw ? 'sw|S' : `${st.z}|${st.s}|A`, ex ? 'E2' : sw ? 'S' : 'A'], ['B', ex ? 'ex|E1' : sw ? 'sw|C' : `${st.z}|${st.s}|B`, ex ? 'E1' : sw ? 'C' : 'B']];
+  specs.forEach(([k, key, tag]) => { if (!st[k]) return;
     (D().trades[key] || []).forEach(t => { const di = days.findIndex(d => d.d === t[0]); if (di < 0) return;
       const o = { k: tag, di, day: t[0], dir: t[1], ei: t[2], xi: t[3], entry: t[4], exit: t[5], why: t[6], net: t[7], pts: t[8], stop: t[9], tgt: t[10], sig: t[11] };
-      if (ex) { o.ext = t[12]; o.start = t[13]; o.pk = t[14]; o.f15 = t[15]; }
+      if (key.startsWith('ex|')) { o.ext = t[12]; o.start = t[13]; o.pk = t[14]; o.f15 = t[15]; }
       if ((st.side === 'long' && o.dir < 0) || (st.side === 'short' && o.dir > 0) || (st.res === 'win' && !(o.net > 0)) || (st.res === 'loss' && o.net > 0) || (st.why && o.why !== st.why)) return;
       out.push(o); }); });
   return out.sort((a, b) => (a.di - b.di) || (a.ei - b.ei));
@@ -120,7 +123,8 @@ function visibleTrades() {
 function refresh() {
   cur = visibleTrades(); const ex = st.mode === 'ex', sm = D().summary;
   const wn = cur.filter(t => t.net > 0).length, tot = cur.reduce((a, t) => a + t.net, 0);
-  const lines = ex ? [['E2', 'ex|E2', 'exhaustion + response'], ['E1', 'ex|E1', 'exhaustion only']].map(([n, k, nm]) => `<span>${n} (${nm}), all explore sessions: <b>${sm[k].n}</b> trades, win ${sm[k].wr}%, profit factor <b>${sm[k].pf.toFixed(2)}</b>, mean <b>${money(sm[k].mean)}</b>/trade, gross 15-minute move <b>${sm[k].f15 >= 0 ? '+' : ''}${sm[k].f15.toFixed(2)}</b> pts</span>`)
+  const boLine = (k, nm) => { const m = sm[k]; return `<span>${nm}, all explore sessions: <b>${m.n}</b> trades, win ${m.wr}%, profit factor <b>${m.pf.toFixed(2)}</b>, mean <b>${money(m.mean)}</b>/trade</span>`; };
+  const lines = st.mode === 'bo' ? [[`${st.z}|${st.s}|A`, 'A absorption'], ['ex|E2', 'E2 exhaustion + response'], ['ex|E1', 'E1 exhaustion only']].map(([k, nm]) => boLine(k, nm)) : ex ? [['E2', 'ex|E2', 'exhaustion + response'], ['E1', 'ex|E1', 'exhaustion only']].map(([n, k, nm]) => `<span>${n} (${nm}), all explore sessions: <b>${sm[k].n}</b> trades, win ${sm[k].wr}%, profit factor <b>${sm[k].pf.toFixed(2)}</b>, mean <b>${money(sm[k].mean)}</b>/trade, gross 15-minute move <b>${sm[k].f15 >= 0 ? '+' : ''}${sm[k].f15.toFixed(2)}</b> pts</span>`)
     : st.mode === 'sw' ? [['sw|S', 'Sweep and absorb'], ['sw|C', 'control, no absorption']].map(([k, nm]) => `<span>${nm}, all explore sessions: <b>${sm[k].n}</b> trades, win ${sm[k].wr}%, profit factor <b>${sm[k].pf.toFixed(2)}</b>, mean <b>${money(sm[k].mean)}</b>/trade</span>`)
     : ['A', 'B'].map(k => { const m = sm[`${st.z}|${st.s}|${k}`]; return `<span>Setup ${k}, all explore sessions: <b>${m.n}</b> trades, win ${m.wr}%, profit factor <b>${m.pf.toFixed(2)}</b>, mean <b>${money(m.mean)}</b>/trade</span>`; });
   const filt = [st.side !== 'all' ? st.side : '', st.res !== 'all' ? (st.res === 'win' ? 'wins' : 'losses') : '', st.why].filter(Boolean).join(', ');
@@ -148,7 +152,7 @@ function draw() {
   days.forEach((d, di) => { const a = di * 390, b = a + 389; if (b < st.v0 || a > st.v1) return; const xa = Math.max(padL, X(a) - bw / 2), xb = Math.min(Wd - padR, X(b) + bw / 2);
     ctx.save(); ctx.beginPath(); ctx.rect(padL, padT, pw, ph); ctx.clip();
     if (st.mode !== 'ex') d.zones[st.z].forEach(z => { ctx.globalAlpha = 0.2; ctx.fillStyle = zone; ctx.fillRect(xa, Y(z[1]), xb - xa, Math.max(2, Y(z[0]) - Y(z[1]))); ctx.globalAlpha = 1; });
-    if (st.L) { const L = d.lv, v = st.mode === 'ex' || st.z === 'vol' ? [['VAH', L.pdVAH], ['VAL', L.pdVAL]] : [['VAH', L.tVAH], ['VAL', L.tVAL]]; const all = v.concat(st.mode === 'ex' ? [['POC', L.POC], ['pdH', L.pdH], ['pdL', L.pdL]] : []).concat([['ONH', L.ONH], ['ONL', L.ONL], ['IBH', L.IBH], ['IBL', L.IBL]]); const nsolid = st.mode === 'ex' ? 3 : 2;
+    if (st.L) { const L = d.lv, v = st.mode === 'ex' || st.z === 'vol' ? [['VAH', L.pdVAH], ['VAL', L.pdVAL]] : [['VAH', L.tVAH], ['VAL', L.tVAL]]; const all = v.concat((st.mode === 'ex' || st.mode === 'bo') ? [['POC', L.POC], ['pdH', L.pdH], ['pdL', L.pdL]] : []).concat([['ONH', L.ONH], ['ONL', L.ONL], ['IBH', L.IBH], ['IBL', L.IBL]]); const nsolid = (st.mode === 'ex' || st.mode === 'bo') ? 3 : 2;
       all.forEach(([nm, p], k) => { if (p == null) return; ctx.strokeStyle = lvl; ctx.globalAlpha = 0.75; ctx.lineWidth = 1; ctx.setLineDash(k < nsolid ? [] : k < nsolid + 2 + (st.mode === 'ex' ? 0 : 0) ? [2, 3] : [6, 3]); ctx.beginPath(); ctx.moveTo(xa, Y(p)); ctx.lineTo(xb, Y(p)); ctx.stroke(); ctx.setLineDash([]); ctx.globalAlpha = 1; if (xb - xa > 90) { ctx.fillStyle = lvl; ctx.textAlign = 'left'; ctx.fillText(nm, xa + 3, Y(p) - 6); } }); }
     ctx.restore(); });
   // candles
@@ -164,11 +168,12 @@ function draw() {
   // trades
   ctx.save(); ctx.beginPath(); ctx.rect(padL, padT, pw, ph); ctx.clip(); st.marks = [];
   cur.forEach((t, idx) => { const g1 = t.di * 390 + t.ei, g2 = t.di * 390 + t.xi; if (g2 < st.v0 || g1 > st.v1) return; const x1 = X(g1), x2 = X(g2), y1 = Y(t.entry), y2 = Y(t.exit), col = t.net > 0 ? win : loss, sel = st.sel === idx;
-    if (st.mode === 'ex' && t.ext != null) { const gs = t.di * 390 + t.sig - t.pk, gt = t.di * 390 + t.sig; ctx.strokeStyle = muted; ctx.lineWidth = sel ? 2.4 : 1.6; ctx.setLineDash([]); ctx.beginPath(); ctx.moveTo(X(gs), Y(t.start)); ctx.lineTo(X(gt), Y(t.ext)); ctx.stroke(); const dx = X(gt), dy = Y(t.ext), r = sel ? 7 : 5.5; ctx.strokeStyle = ink; ctx.fillStyle = panel; ctx.lineWidth = 1.6; ctx.beginPath(); ctx.moveTo(dx, dy - r); ctx.lineTo(dx + r, dy); ctx.lineTo(dx, dy + r); ctx.lineTo(dx - r, dy); ctx.closePath(); ctx.fill(); ctx.stroke(); }
+    if (t.ext != null) { const gs = t.di * 390 + t.sig - t.pk, gt = t.di * 390 + t.sig; ctx.strokeStyle = muted; ctx.lineWidth = sel ? 2.4 : 1.6; ctx.setLineDash([]); ctx.beginPath(); ctx.moveTo(X(gs), Y(t.start)); ctx.lineTo(X(gt), Y(t.ext)); ctx.stroke(); const dx = X(gt), dy = Y(t.ext), r = sel ? 7 : 5.5; ctx.strokeStyle = ink; ctx.fillStyle = panel; ctx.lineWidth = 1.6; ctx.beginPath(); ctx.moveTo(dx, dy - r); ctx.lineTo(dx + r, dy); ctx.lineTo(dx, dy + r); ctx.lineTo(dx - r, dy); ctx.closePath(); ctx.fill(); ctx.stroke(); }
     ctx.strokeStyle = col; ctx.lineWidth = sel ? 2.4 : 1.4; ctx.setLineDash([5, 3]); ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke(); ctx.setLineDash([]);
     if (sel) { ctx.strokeStyle = ink2; ctx.lineWidth = 1; [[t.stop, 'stop'], [t.tgt, 'target']].forEach(([p, nm]) => { ctx.setLineDash([2, 3]); ctx.beginPath(); ctx.moveTo(x1, Y(p)); ctx.lineTo(Math.max(x2, x1 + 24), Y(p)); ctx.stroke(); ctx.setLineDash([]); ctx.fillStyle = ink2; ctx.textAlign = 'left'; ctx.textBaseline = 'bottom'; ctx.fillText(nm, x1 + 3, Y(p) - 2); }); }
     const s = sel ? 8 : 6.5; ctx.lineWidth = 2; ctx.beginPath(); if (t.dir > 0) { ctx.moveTo(x1, y1 - s * 1.2); ctx.lineTo(x1 + s, y1 + s * 0.6); ctx.lineTo(x1 - s, y1 + s * 0.6); } else { ctx.moveTo(x1, y1 + s * 1.2); ctx.lineTo(x1 + s, y1 - s * 0.6); ctx.lineTo(x1 - s, y1 - s * 0.6); } ctx.closePath();
     if (t.net > 0) { ctx.fillStyle = col; ctx.fill(); } else { ctx.fillStyle = panel; ctx.fill(); ctx.strokeStyle = col; ctx.stroke(); }
+    if (st.mode === 'bo') { if (t.k[0] === 'E') { ctx.strokeStyle = ink; ctx.lineWidth = 1.6; ctx.beginPath(); ctx.arc(x1, y1, s + 5, 0, 6.2832); ctx.stroke(); } ctx.fillStyle = ink; ctx.font = 'bold 10px ' + css('--font-num'); ctx.textAlign = 'left'; ctx.textBaseline = 'middle'; ctx.fillText(t.k, x1 + s + 7, y1); ctx.font = '11px ' + css('--font-num'); }
     ctx.strokeStyle = col; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(x2 - 4, y2 - 4); ctx.lineTo(x2 + 4, y2 + 4); ctx.moveTo(x2 + 4, y2 - 4); ctx.lineTo(x2 - 4, y2 + 4); ctx.stroke();
     st.marks.push({ x: x1, y: y1, idx }); });
   ctx.restore();
@@ -181,7 +186,7 @@ cv.addEventListener('pointerdown', e => { cv.setPointerCapture(e.pointerId); dra
 cv.addEventListener('pointermove', e => { const p = posOf(e);
   if (drag) { const dx = e.clientX - drag.x; if (Math.abs(dx) > 3) drag.moved = true; const shift = -dx / st.geo.bw; let a = drag.v0 + shift, b = drag.v1 + shift; if (a < 0) { b -= a; a = 0; } if (b > bars.length) { a -= b - bars.length; b = bars.length; } st.v0 = a; st.v1 = b; draw(); tip.style.display = 'none'; return; }
   const m = (st.marks || []).find(k => Math.hypot(k.x - p.x, k.y - p.y) < 12);
-  if (m) { const t = cur[m.idx]; tip.innerHTML = `<b>${st.mode === 'ex' ? '' : 'Setup '}${t.k} ${t.dir > 0 ? 'long' : 'short'}</b> ${t.day} ${hhmm(t.ei)}<br>${st.mode === 'ex' ? 'exhaustion bar ' + hhmm(t.sig) + ' at ' + fmt(t.ext) + '<br>' : ''}entry ${fmt(t.entry)} exit ${fmt(t.exit)}<br>stop ${fmt(t.stop)} target ${fmt(t.tgt)}<br>${t.why}, ${t.pts >= 0 ? '+' : ''}${fmt(t.pts)} pts, ${money(t.net)}${st.mode === 'ex' && t.f15 != null ? '<br>15-bar move ' + (t.f15 >= 0 ? '+' : '') + fmt(t.f15) + ' pts' : ''}`; }
+  if (m) { const t = cur[m.idx]; tip.innerHTML = `<b>${(st.mode === 'ex' || t.k[0] === 'E') ? '' : 'Setup '}${t.k} ${t.dir > 0 ? 'long' : 'short'}</b> ${t.day} ${hhmm(t.ei)}<br>${t.ext != null ? 'exhaustion bar ' + hhmm(t.sig) + ' at ' + fmt(t.ext) + '<br>' : ''}entry ${fmt(t.entry)} exit ${fmt(t.exit)}<br>stop ${fmt(t.stop)} target ${fmt(t.tgt)}<br>${t.why}, ${t.pts >= 0 ? '+' : ''}${fmt(t.pts)} pts, ${money(t.net)}${t.f15 != null ? '<br>15-bar move ' + (t.f15 >= 0 ? '+' : '') + fmt(t.f15) + ' pts' : ''}`; }
   else { const g = Math.round(st.v0 + (p.x - st.geo.padL) / st.geo.bw - 0.5), b = bars[g]; if (!b || b.o == null || p.x < st.geo.padL || p.x > st.geo.Wd - st.geo.padR) { tip.style.display = 'none'; return; } tip.innerHTML = `${days[b.di].d} ${hhmm(b.i)}<br>O ${fmt(b.o)} H ${fmt(b.h)}<br>L ${fmt(b.l)} C ${fmt(b.c)}`; }
   tip.style.display = 'block'; const bx = $('chartbox').getBoundingClientRect(); tip.style.left = Math.min(p.x + 14, bx.width - 190) + 'px'; tip.style.top = Math.max(4, p.y - 70) + 'px'; });
 cv.addEventListener('pointerup', e => { if (drag && !drag.moved) { const p = posOf(e), m = (st.marks || []).find(k => Math.hypot(k.x - p.x, k.y - p.y) < 12); if (m) { st.sel = st.sel === m.idx ? null : m.idx; refresh(); } } drag = null; });
@@ -194,7 +199,7 @@ function seg(id, key) { $(id).querySelectorAll('button').forEach(b => b.onclick 
 seg('zseg', 'z'); seg('sseg', 's'); seg('sideseg', 'side'); seg('resseg', 'res');
 $('why').onchange = e => { st.why = e.target.value; st.sel = null; refresh(); };
 $('mseg').querySelectorAll('button').forEach(b => b.onclick = () => { st.mode = b.dataset.v; $('mseg').querySelectorAll('button').forEach(x => x.setAttribute('aria-pressed', x === b)); setMode(); });
-[['showA', 'A'], ['showB', 'B'], ['showL', 'L']].forEach(([id, k]) => $(id).onchange = e => { st[k] = e.target.checked; st.sel = null; refresh(); });
+[['showA', 'A'], ['showB', 'B'], ['showC', 'C'], ['showL', 'L']].forEach(([id, k]) => $(id).onchange = e => { st[k] = e.target.checked; st.sel = null; refresh(); });
 window.addEventListener('resize', draw);
 window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', draw);
 new MutationObserver(draw).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });

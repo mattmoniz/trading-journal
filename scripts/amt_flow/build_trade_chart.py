@@ -81,10 +81,25 @@ def sw_data(raw, ex, ks):
         wins.append(dict(label=f"{pd.Timestamp(dates[i]).strftime('%b %d')} to {pd.Timestamp(dates[i + 4]).strftime('%b %d, %Y')}", ntr=sc, days=[day_payload(by[d], raw, ks) for d in dates[i:i + 5]]))
     return dict(windows=wins, trades=trades, summary=summary)
 
+def bo_data(raw, ex, ks, of, exx):
+    """Absorption (A, all four zone/stop variants) and exhaustion (E2, E1) on the SAME windows: windows are picked for the most exhaustion trades (weighted 12x) plus absorption trades, so both appear together."""
+    A = of['trades']['vol|atr2|A']; E2 = exx['trades']['ex|E2']; counts = {}
+    for r in A: counts[r[0]] = counts.get(r[0], 0) + 1
+    for r in E2: counts[r[0]] = counts.get(r[0], 0) + 12
+    dates = [s['d'] for s in ex][20:]; by = {s['d']: s for s in ex}; wins = []
+    for sc, i in pick_windows(dates, counts):
+        w = dates[i:i + 5]
+        wins.append(dict(label=f"{pd.Timestamp(dates[i]).strftime('%b %d')} to {pd.Timestamp(dates[i + 4]).strftime('%b %d, %Y')}", ntr=sum(1 for r in A if r[0] in w) + sum(1 for r in E2 if r[0] in w), days=[day_payload(by[d], raw, ks) for d in w]))
+    dset = {d['d'] for w in wins for d in w['days']}
+    trades = {k: [r for r in v if r[0] in dset] for k, v in of['trades'].items() if k.endswith('|A')}
+    trades.update({k: [r for r in v if r[0] in dset] for k, v in exx['trades'].items() if k in ('ex|E2', 'ex|E1')})
+    summary = {k: v for k, v in of['summary'].items() if k.endswith('|A')}; summary.update({k: v for k, v in exx['summary'].items() if k in ('ex|E2', 'ex|E1')})
+    return dict(windows=wins, trades=trades, summary=summary)
+
 def main(out):
-    raw, ex, ks = load_ctx(); data = dict(of=of_data(raw, ex, ks), ex=ex_data(raw, ex, ks), sw=sw_data(raw, ex, ks))
+    raw, ex, ks = load_ctx(); of = of_data(raw, ex, ks); exx = ex_data(raw, ex, ks); data = dict(bo=bo_data(raw, ex, ks, of, exx), of=of, ex=exx, sw=sw_data(raw, ex, ks))
     html = (H / 'trade_chart_template.html').read_text().replace('/*DATA*/null', json.dumps(data, separators=(',', ':')))
-    pathlib.Path(out).write_text(html); print(f'wrote {out} ({len(html) / 1e6:.2f} MB); of windows {len(data["of"]["windows"])}, ex windows {[w["label"] + " (" + str(w["ntr"]) + ")" for w in data["ex"]["windows"]]}')
+    pathlib.Path(out).write_text(html); print('bo windows', [(w['label'], w['ntr']) for w in data['bo']['windows']]); print(f'wrote {out} ({len(html) / 1e6:.2f} MB); of windows {len(data["of"]["windows"])}, ex windows {[w["label"] + " (" + str(w["ntr"]) + ")" for w in data["ex"]["windows"]]}')
 
 if __name__ == '__main__':
     main(sys.argv[1])
