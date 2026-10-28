@@ -1,0 +1,23 @@
+V1 tell trades N=1760: long 897 short 863; mean net long +3.39 short +0.41
+risk (pts) median 26.2; share of trades with risk > 50: 23%, > 100: 5%
+
+Target = k x stop distance (R-multiple), all trades:
+  k=0.5: reached 58.4% | mean net with target   -2.22 vs without   +1.93
+  k=1  : reached 39.4% | mean net with target   -2.01 vs without   +1.93
+  k=1.5: reached 29.7% | mean net with target   -0.20 vs without   +1.93
+  k=2  : reached 23.3% | mean net with target   +0.72 vs without   +1.93
+  k=3  : reached 13.3% | mean net with target   -0.09 vs without   +1.93
+  k=4  : reached  8.9% | mean net with target   -0.19 vs without   +1.93
+
+By stop-distance bucket (risk pts): no target / k=1 / k=2 / k=3
+  <=15    N= 458 WR 11.4% broke  6.3% no target   +0.86 | k=1   -5.93 (reach 41%) k=2   -4.99 (reach 28%) k=3   -5.59 (reach 19%)
+  15-30   N= 532 WR 24.8% broke 13.9% no target   -3.84 | k=1   -4.46 (reach 47%) k=2   -1.18 (reach 31%) k=3   -3.05 (reach 19%)
+  30-60   N= 467 WR 38.3% broke 23.1% no target   +0.63 | k=1   +0.60 (reach 42%) k=2   +2.35 (reach 21%) k=3   +0.06 (reach 9%)
+  60-100  N= 215 WR 49.8% broke 34.9% no target   +1.66 | k=1   -5.23 (reach 23%) k=2   -3.16 (reach 6%) k=3   -0.88 (reach 1%)
+  >100    N=  88 WR 64.8% broke 39.8% no target  +49.95 | k=1  +27.23 (reach 17%) k=2  +42.88 (reach 7%) k=3  +47.61 (reach 2%)
+
+Skipping wide stops (what the cap would remove), no target:
+  cap <=  50 pts: N=1352 mean  -0.41 total     -556 | removed N=408 mean   +9.70 total    +3956
+  cap <=  80 pts: N=1583 mean  -0.77 total    -1224 | removed N=177 mean  +26.12 total    +4623
+  cap <= 100 pts: N=1672 mean  -0.60 total     -996 | removed N= 88 mean  +49.95 total    +4396
+  cap <= 150 pts: N=1738 mean  +0.77 total    +1338 | removed N= 22 mean  +93.68 total    +2061
