@@ -392,7 +392,6 @@
     <button data-ptab="ml">ML</button>
     <button data-ptab="shadow">Shadow</button>
     <button data-ptab="monitor">Monitor</button>
-    <button data-ptab="tell">Tell</button>
   </div>
   <div id="shared-filter-row">
     <!-- POC Gate is a THIRD pill inside this same toggle (2026-10-14, user request: "the
@@ -462,7 +461,7 @@
   <!-- Tell tab (2026-10-28): the live node-ladder tell detector, Stage 1 = WATCH ONLY (no orders). Fed by GET /api/setups/amt-tell (server/services/amtTellSummary.js), written by the sidecar
        scripts/amt_tell_live/sidecar.py. Spec: docs/AMT_TELL_LIVE_PROJECT_SPEC_20261028.md. The bar-reading toggle and the date are in-session display state only (never persisted). -->
   <div id="tab-panel-tell" style="display:none">
-    <div class="tab-head"><h2>Tell &mdash; live node ladder (watch only, no orders)</h2></div>
+    <div class="tab-head"><h2>Tell &mdash; live node ladder</h2></div>
     <div id="tell-body"><div class="loading">loading…</div></div>
   </div>
 
@@ -3544,8 +3543,8 @@ function renderSharedFilters() {
   // filter like its two siblings, so its "current" state is read off pageTab, not
   // liveAllFilter. See onLiveAllOrPocPick() for the click handler that routes each pill to
   // the right place.
-  const liveAllPos = pageTab === 'poc' ? 'poc' : liveAllFilter;
-  renderToggle('liveall-toggle', [['live', 'Live'], ['all', 'All'], ['poc', 'POC Gate']], liveAllPos, onLiveAllOrPocPick);
+  const liveAllPos = pageTab === 'poc' ? 'poc' : pageTab === 'tell' ? 'tell' : liveAllFilter;
+  renderToggle('liveall-toggle', [['live', 'Live'], ['all', 'All'], ['poc', 'POC Gate'], ['tell', 'Tell']], liveAllPos, onLiveAllOrPocPick);
   // Label renamed 2026-09-25 (user request: "Collapsed vs Declustered isn't a clean pair,
   // Clustered vs Declustered reads better") -- display text only, the internal value ('collapsed')
   // and localStorage key are unchanged since nothing compares against it directly (only
@@ -3564,7 +3563,8 @@ function renderSharedFilters() {
 // does for every other tab.
 function onLiveAllOrPocPick(v) {
   if (v === 'poc') { switchPageTab('poc'); return; } // switchPageTab() re-renders this row itself
-  if (pageTab === 'poc') switchPageTab('timeline'); // leaving POC Gate needs a real tab to land on
+  if (v === 'tell') { switchPageTab('tell'); return; } // Tell (2026-10-28) is a 4th pill, same mechanism as POC Gate
+  if (pageTab === 'poc' || pageTab === 'tell') switchPageTab('timeline'); // leaving POC Gate / Tell needs a real tab to land on
   setLiveAllFilter(v);
 }
 
@@ -3892,23 +3892,32 @@ let tellRule = 'split', tellDate = null, tellLast = null, tellFetchedAt = 0;
 const TELL_EXIT = { STOP: 'stopped', STOP_GAP: 'stopped (gap)', TIMEOUT: '120-min no-break exit', FADE: 'tell faded after the break', EOD: '15:55 flatten', EOS: 'end of data' };
 const tellT = (ts) => ts ? String(ts).slice(11, 19) : '--';
 const tellPx = (v) => v == null ? '--' : Number(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+// Rows use the Session Timeline's own .row / .badge look (dot = direction, time, type, entry price, win/loss/open badge) so the Tell tab reads like Live and All. Tap a row for the stop, conditions and exit.
 function tellTradeRow(r) {
-  const long = r.direction === 1, col = long ? 'var(--green-soft)' : 'var(--red-soft)';
-  let res;
-  if (r.status === 'OPEN') res = '<span style="color:var(--amber-soft)">OPEN</span>' + (r.mfe_points != null ? ' <span style="color:var(--dim)">best ' + (r.mfe_points >= 0 ? '+' : '') + Number(r.mfe_points).toFixed(1) + ' pt</span>' : '');
-  else res = '<span style="color:' + (r.net_dollars >= 0 ? 'var(--green-soft)' : 'var(--red-soft)') + '">' + monEsc(TELL_EXIT[r.exit_reason] || r.exit_reason) + ' ' + (r.exit_points >= 0 ? '+' : '') + Number(r.exit_points).toFixed(1) + ' pt · ' + monMoney(r.net_dollars) + '</span>' + (r.broke ? ' <span style="color:var(--dim)">broke the range</span>' : '');
+  const long = r.direction === 1, open = r.status === 'OPEN', pnl = r.net_dollars;
+  const badgeClass = open ? 'open' : (pnl > 0 ? 'win' : pnl < 0 ? 'loss' : 'other');
+  const badgeText = open ? 'open' : (pnl >= 0 ? '+$' : '-$') + Math.abs(pnl).toFixed(0);
+  const dot = long ? 'var(--green-soft)' : 'var(--red-soft)';
+  const ord = (r.book === 'V1' && r.bar_rule === 'split') ? (r.active_setup_id ? '<span class="vb-tag mild sig-tag">ORDER #' + monEsc(r.active_setup_id) + '</span>' : (r.order_state ? '<span class="vb-tag mild sig-tag" title="Not ordered: ' + monEsc(String(r.order_state).replace('SKIPPED_', '').toLowerCase()) + '">no order</span>' : '')) : '';
+  const exit = '';   // the exit reason lives in the tap-open detail line so the row keeps the Timeline's one-line shape on a phone
   const d = r.details || {};
-  const comp = 'ladder of ' + monEsc(d.L) + ' nodes left behind · pace ' + (d.fast ? 'up' : 'no') + ' · flow flips ' + (d.flip ? 'yes' : 'no') + ' · oscillation ' + (d.osc ? 'yes' : 'no') + ' · strides ' + (d.strides ? 'yes' : 'no');
-  const late = r.late_min != null && r.late_min > 5 ? ' · <span style="color:var(--amber-soft)">logged ' + Math.round(r.late_min) + ' min after it fired (sidecar restart/catch-up)</span>' : '';
-  const ord = (r.book === 'V1' && r.bar_rule === 'split') ? (r.active_setup_id ? ' <span style="color:var(--green-soft);font-size:11.5px">ORDER #' + monEsc(r.active_setup_id) + '</span>' : (r.order_state ? ' <span style="color:var(--dim);font-size:11.5px">not ordered: ' + monEsc(String(r.order_state).replace('SKIPPED_', '').toLowerCase()) + '</span>' : '')) : '';
-  return '<details style="border-top:1px solid var(--border);padding:4px 0"><summary style="cursor:pointer;font-size:13px;line-height:1.5"><span class="mono">' + tellT(r.fired_at) + '</span> <b style="color:' + col + '">' + (long ? 'LONG' : 'SHORT') + '</b> in <span class="mono">' + tellPx(r.entry_price) + '</span> · stop <span class="mono">' + tellPx(r.stop_price) + '</span> (' + Number(r.risk_points).toFixed(1) + ' pt' + (r.stop_fallback ? ', no 3rd node' : '') + ') → ' + res + ord + '</summary>'
-    + '<div style="font-size:12px;color:var(--dim);padding:4px 0 2px 8px">' + comp + '<br>bar #' + monEsc(r.sig_idx) + ' · entry bar opened ' + tellT(r.entry_at) + (r.status === 'CLOSED' ? ' · exit bar ' + tellT(r.exit_bar_start) : '') + late + '</div></details>';
+  const late = r.late_min != null && r.late_min > 5 ? ' · logged ' + Math.round(r.late_min) + ' min after it fired (restart/catch-up)' : '';
+  const detail = 'stop ' + tellPx(r.stop_price) + ' (' + Number(r.risk_points).toFixed(1) + ' pt' + (r.stop_fallback ? ', no 3rd node' : '') + ') · entry bar ' + tellT(r.entry_at) + (r.order_state && !r.active_setup_id && r.book === 'V1' && r.bar_rule === 'split' ? ' · not ordered: ' + monEsc(String(r.order_state).replace('SKIPPED_', '').toLowerCase()) : '') + (open ? '' : ' · ' + monEsc(TELL_EXIT[r.exit_reason] || r.exit_reason) + ' · exit bar ' + tellT(r.exit_bar_start) + ' · ' + (r.exit_points >= 0 ? '+' : '') + Number(r.exit_points).toFixed(1) + ' pt' + (r.broke ? ' · broke the range' : '')) +
+    '<br>ladder of ' + monEsc(d.L) + ' nodes left behind · pace ' + (d.fast ? 'up' : 'no') + ' · flow flips ' + (d.flip ? 'yes' : 'no') + ' · oscillation ' + (d.osc ? 'yes' : 'no') + ' · strides ' + (d.strides ? 'yes' : 'no') + ' · bar #' + monEsc(r.sig_idx) + late;
+  return '<div class="row" onclick="var n=this.nextElementSibling; n.style.display = n.style.display === \'none\' ? \'block\' : \'none\'">' +
+    '<span class="rdot" style="background:' + dot + '"></span>' +
+    '<span class="time mono">' + String(r.entry_at || r.fired_at || '').slice(11, 16) + '</span>' +
+    '<span class="type">AMT TELL ' + (long ? 'LONG' : 'SHORT') + '</span>' + exit + ord +
+    '<span class="price mono">' + tellPx(r.entry_price) + '</span>' +
+    '<span class="badge ' + badgeClass + '">' + badgeText + '</span></div>' +
+    '<div style="display:none;font-size:12px;color:var(--dim);padding:4px 0 8px 14px;border-bottom:1px solid rgba(51,65,85,0.3)">' + detail + '</div>';
 }
 function tellBookBlock(title, sub, rows, sm, boxId) {
-  const s = sm || {};
-  const head = '<div style="font-weight:700;margin-bottom:2px">' + title + '</div><div style="font-size:12px;color:var(--dim);margin-bottom:4px">' + sub + '</div>'
-    + '<div style="font-size:13px;margin-bottom:4px">' + (s.n ? monEsc(s.n) + ' tell' + (s.n === 1 ? '' : 's') + ' · ▲' + monEsc(s.longs) + ' ▼' + monEsc(s.shorts) + ' · ' + monEsc(s.open) + ' open · ' + monEsc(s.closed) + ' closed' + (s.closed ? ' · net ' + monMoney(s.netClosed) + ' (' + monMoney(s.perTradeClosed) + '/trade)' : '') : '<span style="color:var(--dim)">no tell has fired this session</span>') + '</div>';
-  return '<div id="tell-' + (boxId || title.slice(0, 2).toLowerCase()) + '" style="border:1px solid var(--border);border-radius:8px;padding:10px 12px;margin-bottom:12px">' + head + rows.map(tellTradeRow).join('') + '</div>';
+  const s = sm || {}, sorted = rows.slice().sort((a, b) => String(b.fired_at).localeCompare(String(a.fired_at)));
+  const stats = s.n ? monEsc(s.n) + ' tell' + (s.n === 1 ? '' : 's') + ' · ▲' + monEsc(s.longs) + ' ▼' + monEsc(s.shorts) + ' · ' + monEsc(s.open) + ' open · ' + monEsc(s.closed) + ' closed' + (s.closed ? ' · net ' + monMoney(s.netClosed) + ' (' + monMoney(s.perTradeClosed) + '/trade)' : '') : 'no tell has fired this session';
+  return '<div id="tell-' + boxId + '" style="margin-bottom:18px"><div class="tab-head"><h2>' + title + ' (' + sorted.length + ')</h2></div>' +
+    '<div style="font-size:12px;color:var(--dim);margin-bottom:4px">' + sub + '</div><div style="font-size:13px;margin-bottom:6px">' + stats + '</div>' +
+    (sorted.length ? sorted.map(tellTradeRow).join('') : '<div class="loading">Not enough resolved trades yet</div>') + '</div>';
 }
 function renderTell(d, err) {
   const el = $('tell-body'); if (!el) return;
@@ -3924,12 +3933,12 @@ function renderTell(d, err) {
   const od = d.orders || {};
   const ordLine = od.configuredEnabled ? (od.selfPaused ? '<span style="color:var(--red-soft);font-weight:700">ORDERS SELF-PAUSED</span> ' + monEsc(od.selfPaused) : '<span style="color:var(--green-soft)">●</span> orders ON (simulated account, V1 book, 1 MNQ) · ' + monEsc(od.linked) + ' placed · ' + monEsc(od.resolved) + ' closed') : '<span style="color:var(--dim)">orders OFF (watch only)</span>';
   h += monBox('tell-status', 'Detector', '<div style="font-size:13px;margin-bottom:4px">' + st + '</div><div style="font-size:13px;margin-bottom:6px">' + ordLine + '</div><div id="tell-rule-toggle" class="perf-toggle" style="margin:6px 0"></div>' + facts
-    + '<div style="font-size:11.5px;color:var(--dim);margin-top:6px">Two readings of how Sierra closes a 500-contract bar (a trade that overflows is split into the next bar, or kept whole): which one matches your chart is pending your bar export. The research numbers are the split reading. Nothing here places an order.</div>');
+    + '<div style="font-size:11.5px;color:var(--dim);margin-top:6px">Two readings of how Sierra closes a 500-contract bar (a trade that overflows is split into the next bar, or kept whole): which one matches your chart is pending your bar export. The research numbers are the split reading. Only the V1 book (split reading) places orders, on the simulated account; V3, the 09:30–10:00 book and the whole reading are logged only.</div>');
   // date picker
   h += '<div style="margin:0 0 10px;font-size:13px">Session <select id="tell-date" style="background:var(--card);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:3px 6px">' + (d.dates || []).map(x => '<option value="' + monEsc(x) + '"' + (x === d.date ? ' selected' : '') + '>' + monEsc(x) + '</option>').join('') + '</select></div>';
   const rows = (d.trades || []).filter(r => r.bar_rule === tellRule), sm = (d.summary || {})[tellRule] || {};
-  h += tellBookBlock('V1 — tell-fade exit', 'Stop behind the 2nd node; after the range breaks, exit when the tell fades (the pre-registered primary).', rows.filter(r => r.book === 'V1'), sm.V1);
-  h += tellBookBlock('V3 — hold to the close', 'Same entries and stops; after the break, hold until the 15:55 flatten (chosen after seeing the research results).', rows.filter(r => r.book === 'V3'), sm.V3);
+  h += tellBookBlock('V1 — tell-fade exit', 'Stop behind the 2nd node; after the range breaks, exit when the tell fades (the pre-registered primary).', rows.filter(r => r.book === 'V1'), sm.V1, 'v1');
+  h += tellBookBlock('V3 — hold to the close', 'Same entries and stops; after the break, hold until the 15:55 flatten (chosen after seeing the research results).', rows.filter(r => r.book === 'V3'), sm.V3, 'v3');
   h += tellBookBlock('V1P — 09:30–10:00 (watch only)', 'The V1 rule applied to signals 09:30–10:00, so the detector is warm at 10:00. Logged only, never ordered.', rows.filter(r => r.book === 'V1P'), sm.V1P, 'v1p');
   if ((d.alarms || []).length) h += monBox('tell-alarms', 'Integrity alarms (last 48h)', d.alarms.map(a => '<div style="font-size:12px;color:var(--amber-soft)">' + tellT(a.at) + ' ' + monEsc(a.kind) + ' <span style="color:var(--dim)">' + monEsc(JSON.stringify(a.detail)).slice(0, 160) + '</span></div>').join(''));
   h += '<div style="font-size:11.5px;color:var(--dim)">Updated ' + monEsc(d.generatedAt) + '. Tap a row for the five conditions. Research basis: explore data only, V1 +1.93/trade (CI -3.44..+7.62), V3 +7.29 (CI -2.19..+17.30) — not proven.</div>';
@@ -3999,7 +4008,7 @@ function applyPageTab() {
   // let me miss one" -- a Live/All toggle wouldn't mean anything on a tab that's already
   // SHADOW-only, and forcing clusterView on top would silently hide the exact sibling rows
   // that feature exists to surface.
-  $('shared-filter-row').style.display = (pageTab === 'timeline' || pageTab === 'performance' || pageTab === 'poc') ? '' : 'none';
+  $('shared-filter-row').style.display = (pageTab === 'timeline' || pageTab === 'performance' || pageTab === 'poc' || pageTab === 'tell') ? '' : 'none';
   document.querySelectorAll('[data-ptab]').forEach(b => b.classList.toggle('active', b.dataset.ptab === pageTab));
 }
 function switchPageTab(tab) {
