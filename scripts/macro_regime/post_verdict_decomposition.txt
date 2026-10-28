@@ -1,0 +1,8 @@
+POST-VERDICT STRUCTURAL FINDING (train only; pooled headline above is unchanged)
+  Headline: B+C = 100/516 = 19.38%  |  verdict: PROCEED WITH UNDERPOWERED CAVEAT — DESCRIPTIVE_ONLY_NOT_CONFIRMATORY
+  Note: 90/100 B+C sessions are Regime C; Regime B = 10 sessions (1.94%).
+  Regime B's vol-ratio floor (1.5) is above the train p90 of ib_vol_ratio (1.261); 4.3% of train sessions reach it.
+  B condition marginals (train): vol>=1.5 4.3% | ib_range>=p65 42.2% | open_location!=0 64.0%  | independence product 1.15% vs observed 1.94%
+  Among ib_range>=p65 sessions (N=218), vol>=1.5 reached by 7.3%.
+  B is structurally under-armed as specified: a null result by construction, not an empirical outcome.
+  The pooled gate passed on C's sample alone; it is a false positive for B. See prereg_retrospective_20261027.md.

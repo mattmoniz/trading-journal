@@ -67,7 +67,38 @@ def main(node_json: str):
     df_all, verdict = run_full_pipeline_audit(
         sessions_dict=sessions, prior_va_dict=prior_va, compute_va_fn=compute_va_fn,
         enable_log_tee=True, strict_mode=False)
+    post_verdict_decomposition(df_all, verdict)
+    df_all.to_csv('regime_labels.csv', index=False)   # consumed by phase3_c.py; hold-out rows are NOT printed anywhere
     return df_all, verdict
+
+
+def post_verdict_decomposition(df_all, verdict):
+    """Printed immediately under the pooled verdict (train-only; computed, never hand-typed).
+    The pooled B+C headline stands; this is the structural finding that qualifies it."""
+    tr = df_all[(df_all['split'] == 'TRAIN') & (df_all['regime'] != 'UNCLASSIFIED_WARMUP')]
+    n = len(tr)
+    nb = int((tr['regime'] == 'REGIME_B_TREND').sum())
+    nc = int((tr['regime'] == 'REGIME_C_MID_CONCENTRATION').sum())
+    vr = tr['ib_vol_ratio'].replace([np.inf, -np.inf], np.nan).dropna()
+    p90 = float(np.percentile(vr, 90))
+    p_vol = float((tr['ib_vol_ratio'] >= 1.5).mean())
+    p_rng = float((tr['ib_range'] >= tr['p65_at_class']).mean())
+    p_loc = float((tr['open_location'] != 0).mean())
+    hist = tr[(tr['ib_range'] >= tr['p65_at_class'])]
+    lines = [
+        "POST-VERDICT STRUCTURAL FINDING (train only; pooled headline above is unchanged)",
+        f"  Headline: B+C = {nb + nc}/{n} = {100.0 * (nb + nc) / n:.2f}%  |  verdict: {verdict['verdict']}",
+        f"  Note: {nc}/{nb + nc} B+C sessions are Regime C; Regime B = {nb} sessions ({100.0 * nb / n:.2f}%).",
+        f"  Regime B's vol-ratio floor (1.5) is above the train p90 of ib_vol_ratio ({p90:.3f}); {100.0 * p_vol:.1f}% of train sessions reach it.",
+        f"  B condition marginals (train): vol>=1.5 {100.0 * p_vol:.1f}% | ib_range>=p65 {100.0 * p_rng:.1f}% | open_location!=0 {100.0 * p_loc:.1f}%"
+        f"  | independence product {100.0 * p_vol * p_rng * p_loc:.2f}% vs observed {100.0 * nb / n:.2f}%",
+        f"  Among ib_range>=p65 sessions (N={len(hist)}), vol>=1.5 reached by {100.0 * float((hist['ib_vol_ratio'] >= 1.5).mean()):.1f}%.",
+        "  B is structurally under-armed as specified: a null result by construction, not an empirical outcome.",
+        "  The pooled gate passed on C's sample alone; it is a false positive for B. See prereg_retrospective_20261027.md.",
+    ]
+    txt = "\n".join(lines)
+    print("\n" + txt)
+    open('post_verdict_decomposition.txt', 'w').write(txt + "\n")
 
 
 if __name__ == '__main__':
