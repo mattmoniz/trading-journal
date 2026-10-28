@@ -15,14 +15,14 @@ def push_stats(a):
         mv[t] = abs(net); sg[t] = np.sign(net); er[t] = abs(net) / path if path > 0 else np.nan
     return mv, er, sg
 
-def trailing_thresholds(stats, si, lo_back=20, win=15):
+def trailing_thresholds(stats, si, lo_back=20, win=15, q_mv=90, q_er=75):
     """thr90 of |move| and thr75 of ER from the prior 20 sessions at the same bar +/- win. stats: list of (mv, er, sg) per session."""
     if si < lo_back: return None
     MV = np.array([stats[j][0] for j in range(si - lo_back, si)]); ER = np.array([stats[j][1] for j in range(si - lo_back, si)])
     t90 = np.full(390, np.nan); t75 = np.full(390, np.nan)
     for t in range(FIRST_T, 390):
         a, b = max(0, t - win), min(390, t + win + 1)
-        t90[t] = np.nanpercentile(MV[:, a:b], 90); t75[t] = np.nanpercentile(ER[:, a:b], 75)
+        t90[t] = np.nanpercentile(MV[:, a:b], q_mv); t75[t] = np.nanpercentile(ER[:, a:b], q_er)
     return t90, t75
 
 def base_signals(a, st, thr, exh_q=Q_EXH, k_max=K):
@@ -98,7 +98,7 @@ def trade(a, ev, atr, stop_atr_mult=0.5, max_bars=30):
         elif (d == 1 and l[i] <= stop) or (d == -1 and h[i] >= stop): px, why = stop - d * SLIP, 'STOP'
         elif (d == 1 and h[i] >= tgt + TICK) or (d == -1 and l[i] <= tgt - TICK): px, why = tgt, 'TGT'
         if px is not None:
-            pts = (px - entry) * d; return dict(pts=pts, net=pts * DPP - COMM, reason=why, risk=abs(entry - stop), tdist=abs(tgt - entry), xi=i, ei=e, dir=d)
+            pts = (px - entry) * d; return dict(pts=pts, net=pts * DPP - COMM, reason=why, risk=abs(entry - stop), tdist=abs(tgt - entry), xi=i, ei=e, dir=d, stop=stop, tgt=tgt, entry=entry, exit=px)
         if n == max_bars: pend = 'TIME'
     return None
 

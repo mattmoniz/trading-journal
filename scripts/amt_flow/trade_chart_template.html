@@ -22,6 +22,7 @@ h1 { font-size: 22px; font-weight: 600; margin: 0; letter-spacing: -0.01em; text
 .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px; min-width: 0; }
 .controls { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: end; }
 .ctl { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.ctl[hidden], span[hidden] { display: none !important; }
 .ctl label, .lab { font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
 select, button { font: inherit; font-size: 13px; color: var(--ink); background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 6px 9px; }
 button { cursor: pointer; } button:hover, select:hover { border-color: var(--muted); }
@@ -47,13 +48,14 @@ td.w { color: var(--win); } td.l { color: var(--loss); }
 </style>
 <div class="wrap">
   <div><h1>Order-Flow Trade Chart</h1>
-  <p class="sub">The trades the two order-flow setups would have taken on NQ 1-minute bars (RTH only), five trading days at a time, on the explore sessions (March 2023 to May 2025). Each window is one of the eight busiest five-day stretches. Simulated at 1 MNQ with $2 round-trip costs; these are research trades, not signals.</p></div>
+  <p class="sub" id="sub"></p></div>
   <div class="panel controls">
+    <div class="ctl"><span class="lab">Strategy</span><div class="seg" id="mseg"><button data-v="of" aria-pressed="true">Order-flow setups</button><button data-v="ex" aria-pressed="false">Exhaustion reversal</button></div></div>
     <div class="ctl"><label for="win">Window</label><select id="win"></select></div>
-    <div class="ctl"><span class="lab">Zones</span><div class="seg" id="zseg"><button data-v="vol" aria-pressed="true">Volume profile</button><button data-v="tpo" aria-pressed="false">TPO</button></div></div>
-    <div class="ctl"><span class="lab">Stop</span><div class="seg" id="sseg"><button data-v="spec" aria-pressed="true">Spec (A 6 pts, B 10 pts)</button><button data-v="atr2" aria-pressed="false">2 x ATR14</button></div></div>
-    <div class="ctl"><span class="lab">Setups</span><div><label class="chk"><input type="checkbox" id="showA" checked> A absorption</label> <label class="chk"><input type="checkbox" id="showB" checked> B build-and-go</label></div></div>
-    <div class="ctl"><span class="lab">Levels</span><div><label class="chk"><input type="checkbox" id="showL" checked> value area, ON, IB</label></div></div>
+    <div class="ctl" id="zctl"><span class="lab">Zones</span><div class="seg" id="zseg"><button data-v="vol" aria-pressed="true">Volume profile</button><button data-v="tpo" aria-pressed="false">TPO</button></div></div>
+    <div class="ctl" id="sctl"><span class="lab">Stop</span><div class="seg" id="sseg"><button data-v="spec" aria-pressed="true">Spec (A 6 pts, B 10 pts)</button><button data-v="atr2" aria-pressed="false">2 x ATR14</button></div></div>
+    <div class="ctl"><span class="lab">Setups</span><div><label class="chk"><input type="checkbox" id="showA" checked> <span id="lblA">A absorption</span></label> <label class="chk"><input type="checkbox" id="showB" checked> <span id="lblB">B build-and-go</span></label></div></div>
+    <div class="ctl"><span class="lab">Levels</span><div><label class="chk"><input type="checkbox" id="showL" checked> <span id="lblL">value area, ON, IB</span></label></div></div>
     <div class="ctl"><span class="lab">View</span><div><button id="zin" aria-label="Zoom in">+</button> <button id="zout" aria-label="Zoom out">&minus;</button> <button id="zreset">Reset</button></div></div>
   </div>
   <div class="panel"><div class="stats" id="stats"></div></div>
@@ -64,40 +66,58 @@ td.w { color: var(--win); } td.l { color: var(--loss); }
       <span><svg width="14" height="12" style="vertical-align:middle;margin-right:5px"><path d="M7 1.5 L12.5 10.5 L1.5 10.5 Z" fill="none" stroke="var(--loss)" stroke-width="2"/></svg>long, loss (hollow)</span>
       <span><svg width="14" height="12" style="vertical-align:middle;margin-right:5px"><path d="M7 10.5 L12.5 1.5 L1.5 1.5 Z" fill="none" stroke="var(--loss)" stroke-width="2"/></svg>short, loss (hollow)</span>
       <span><svg width="26" height="8" style="vertical-align:middle;margin-right:5px"><path d="M1 4 H25" stroke="var(--candle)" stroke-width="2" stroke-dasharray="4 3"/></svg>entry to exit</span>
-      <span><i style="width:16px;height:10px;background:var(--zone);opacity:.28"></i>confluence zone</span>
+      <span id="lgZone"><i style="width:16px;height:10px;background:var(--zone);opacity:.28"></i>confluence zone</span>
+      <span id="lgPush"><svg width="30" height="12" style="vertical-align:middle;margin-right:5px"><path d="M1 11 L24 2" stroke="var(--muted)" stroke-width="2"/><path d="M26 2 l3 3 l-3 3 l-3 -3 Z" fill="none" stroke="var(--ink)" stroke-width="1.5"/></svg>push leg and exhaustion bar</span>
       <span style="color:var(--muted)">Candles: hollow = up, filled = down. Drag to pan, wheel to zoom, click a trade for its stop and target.</span>
     </div></div>
-  <div class="panel"><div class="lab" style="margin-bottom:8px">Trades in this window</div><div class="tw"><table id="tt"><thead><tr><th>Day</th><th>Time</th><th>Setup</th><th>Side</th><th>Entry</th><th>Exit</th><th>Stop</th><th>Target</th><th>Why it ended</th><th>Points</th><th>Net $</th></tr></thead><tbody></tbody></table></div></div>
-  <p class="note">Wins are blue and losses orange; a hollow marker is a loss. Targets: setup A 15 points, setup B 20 points. Setup A also exits when a bar closes 5 points beyond the zone. Everything is flattened at 15:55. Net dollars include 1 tick slippage on market and stop exits and a $2 round trip.</p>
+  <div class="panel"><div class="lab" style="margin-bottom:8px">Trades in this window</div><div class="tw"><table id="tt"><thead><tr><th>Day</th><th>Signal</th><th>Entry bar</th><th>Setup</th><th>Side</th><th>Entry</th><th>Exit</th><th>Stop</th><th>Target</th><th>Why it ended</th><th>Points</th><th>Net $</th></tr></thead><tbody></tbody></table></div></div>
+  <p class="note" id="note"></p>
 </div>
 <script>
 const DATA = /*DATA*/null;
 const $ = id => document.getElementById(id);
-const st = { w: 0, z: 'vol', s: 'spec', A: true, B: true, L: true, sel: null, v0: 0, v1: 1, hover: null };
+const st = { mode: 'of', w: 0, z: 'vol', s: 'spec', A: true, B: true, L: true, sel: null, v0: 0, v1: 1 };
 let bars = [], days = [], cur = [];
 const cv = $('cv'), ctx = cv.getContext('2d'), tip = $('tip');
 const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 const hhmm = off => { const m = 570 + off; return String(Math.floor(m / 60)).padStart(2, '0') + ':' + String(m % 60).padStart(2, '0'); };
 const fmt = (x, d = 2) => (x == null ? '' : x.toFixed(d));
 const money = x => (x < 0 ? '-$' : '+$') + Math.abs(x).toFixed(2);
+const D = () => DATA[st.mode];
+const SUB = { of: 'The trades the two order-flow setups would have taken on NQ 1-minute bars (RTH only), five trading days at a time, on the explore sessions (March 2023 to May 2025). Each window is one of the eight busiest five-day stretches, picked for having many trades, so it is not representative: read the all-sessions line below. Simulated at 1 MNQ with $2 round-trip costs; these are research trades, not signals.',
+  ex: 'Exhaustion reversals as you described them: a one-directional push to a new extreme while the leading side stops pressing (diamond), then the other side steps in and price responds, and only then the trade (triangle). Explore sessions, five days at a time. These eight windows were picked because they contain the most events, not at random, so they look better than the whole sample: read the all-sessions line below for the honest picture. Simulated at 1 MNQ; research trades, not signals.' };
+const NOTE = { of: 'Wins are blue and losses orange; a hollow marker is a loss. Targets: setup A 15 points, setup B 20 points. Setup A also exits when a bar closes 5 points beyond the zone. Everything is flattened at 15:55. Net dollars include 1 tick slippage on market and stop exits and a $2 round trip.',
+  ex: 'E2 is the full rule: exhaustion, then at least two counter-side bars with counter volume in control and a close beyond the extreme bar\'s far end, entered on the next open. E1 enters at the bar after the exhaustion bar with no response required. Stop = 1 tick + half the 1-minute ATR beyond the extreme; target = half the push retraced; 30-bar time stop; flatten 15:55. Wins are blue and losses orange (hollow). Net dollars include 1 tick slippage on market and stop exits and a $2 round trip. Thin lines: value area, point of control, prior-day high/low, overnight and initial-balance levels.' };
+function setMode() {
+  const ex = st.mode === 'ex'; $('sub').textContent = SUB[st.mode]; $('note').textContent = NOTE[st.mode];
+  $('zctl').hidden = ex; $('sctl').hidden = ex; $('lgZone').hidden = ex; $('lgPush').hidden = !ex;
+  $('lblA').textContent = ex ? 'E2 exhaustion + response' : 'A absorption'; $('lblB').textContent = ex ? 'E1 exhaustion only' : 'B build-and-go'; $('lblL').textContent = ex ? 'levels' : 'value area, ON, IB';
+  st.A = true; st.B = !ex; $('showA').checked = true; $('showB').checked = !ex;
+  const w = $('win'); w.innerHTML = ''; D().windows.forEach((x, i) => { const o = document.createElement('option'); o.value = i; o.textContent = `${x.label} (${x.ntr} trades)`; w.appendChild(o); }); st.w = 0;
+  loadWindow();
+}
 function loadWindow() {
-  const W = DATA.windows[st.w]; days = W.days; bars = [];
+  const W = D().windows[st.w]; days = W.days; bars = [];
   days.forEach((d, di) => { for (let i = 0; i < 390; i++) bars.push({ di, i, g: di * 390 + i, o: d.o[i], h: d.h[i], l: d.l[i], c: d.c[i] }); });
   st.v0 = 0; st.v1 = bars.length; st.sel = null; refresh();
 }
 function visibleTrades() {
-  const out = [];
-  ['A', 'B'].forEach(k => { if (!st[k]) return; DATA.trades[`${st.z}|${st.s}|${k}`].forEach(t => { const di = days.findIndex(d => d.d === t[0]); if (di >= 0) out.push({ k, di, day: t[0], dir: t[1], ei: t[2], xi: t[3], entry: t[4], exit: t[5], why: t[6], net: t[7], pts: t[8], stop: t[9], tgt: t[10] }); }); });
+  const out = [], ex = st.mode === 'ex';
+  [['A', ex ? 'ex|E2' : null], ['B', ex ? 'ex|E1' : null]].forEach(([k, exkey]) => { if (!st[k]) return; const key = ex ? exkey : `${st.z}|${st.s}|${k}`, tag = ex ? (k === 'A' ? 'E2' : 'E1') : k;
+    (D().trades[key] || []).forEach(t => { const di = days.findIndex(d => d.d === t[0]); if (di < 0) return;
+      const o = { k: tag, di, day: t[0], dir: t[1], ei: t[2], xi: t[3], entry: t[4], exit: t[5], why: t[6], net: t[7], pts: t[8], stop: t[9], tgt: t[10], sig: t[11] };
+      if (ex) { o.ext = t[12]; o.start = t[13]; o.pk = t[14]; o.f15 = t[15]; } out.push(o); }); });
   return out.sort((a, b) => (a.di - b.di) || (a.ei - b.ei));
 }
 function refresh() {
-  cur = visibleTrades(); const key = k => DATA.summary[`${st.z}|${st.s}|${k}`];
+  cur = visibleTrades(); const ex = st.mode === 'ex', sm = D().summary;
   const wn = cur.filter(t => t.net > 0).length, tot = cur.reduce((a, t) => a + t.net, 0);
-  $('stats').innerHTML = `<span>This window: <b>${cur.length}</b> trades, <b>${wn}</b> wins, net <b>${cur.length ? money(tot) : '$0.00'}</b></span>` +
-    ['A', 'B'].map(k => `<span>Setup ${k}, all ${DATA.summary['vol|spec|A'] ? 'explore' : ''} sessions: <b>${key(k).n}</b> trades, win ${key(k).wr}%, profit factor <b>${key(k).pf.toFixed(2)}</b>, mean <b>${money(key(k).mean)}</b>/trade</span>`).join('');
+  const lines = ex ? [['E2', 'ex|E2', 'exhaustion + response'], ['E1', 'ex|E1', 'exhaustion only']].map(([n, k, nm]) => `<span>${n} (${nm}), all explore sessions: <b>${sm[k].n}</b> trades, win ${sm[k].wr}%, profit factor <b>${sm[k].pf.toFixed(2)}</b>, mean <b>${money(sm[k].mean)}</b>/trade, gross 15-minute move <b>${sm[k].f15 >= 0 ? '+' : ''}${sm[k].f15.toFixed(2)}</b> pts</span>`)
+    : ['A', 'B'].map(k => { const m = sm[`${st.z}|${st.s}|${k}`]; return `<span>Setup ${k}, all explore sessions: <b>${m.n}</b> trades, win ${m.wr}%, profit factor <b>${m.pf.toFixed(2)}</b>, mean <b>${money(m.mean)}</b>/trade</span>`; });
+  $('stats').innerHTML = `<span>This window: <b>${cur.length}</b> trades, <b>${wn}</b> wins, net <b>${cur.length ? money(tot) : '$0.00'}</b></span>` + lines.join('');
   const tb = $('tt').querySelector('tbody'); tb.innerHTML = '';
   cur.forEach((t, idx) => { const tr = document.createElement('tr'); tr.className = 'row' + (st.sel === idx ? ' sel' : ''); const w = t.net > 0;
-    tr.innerHTML = `<td>${t.day.slice(5)}</td><td>${hhmm(t.ei)}</td><td>${t.k}</td><td>${t.dir > 0 ? 'Long' : 'Short'}</td><td>${fmt(t.entry)}</td><td>${fmt(t.exit)}</td><td>${fmt(t.stop)}</td><td>${fmt(t.tgt)}</td><td>${t.why}</td><td class="${w ? 'w' : 'l'}">${(t.pts >= 0 ? '+' : '') + fmt(t.pts)}</td><td class="${w ? 'w' : 'l'}">${money(t.net)}</td>`;
+    tr.innerHTML = `<td>${t.day.slice(5)}</td><td>${hhmm(t.sig)}</td><td>${hhmm(t.ei)}</td><td>${t.k}</td><td>${t.dir > 0 ? 'Long' : 'Short'}</td><td>${fmt(t.entry)}</td><td>${fmt(t.exit)}</td><td>${fmt(t.stop)}</td><td>${fmt(t.tgt)}</td><td>${t.why}</td><td class="${w ? 'w' : 'l'}">${(t.pts >= 0 ? '+' : '') + fmt(t.pts)}</td><td class="${w ? 'w' : 'l'}">${money(t.net)}</td>`;
     tr.onclick = () => { st.sel = st.sel === idx ? null : idx; refresh(); }; tb.appendChild(tr); });
   draw();
 }
@@ -117,9 +137,9 @@ function draw() {
   // zones and levels per day
   days.forEach((d, di) => { const a = di * 390, b = a + 389; if (b < st.v0 || a > st.v1) return; const xa = Math.max(padL, X(a) - bw / 2), xb = Math.min(Wd - padR, X(b) + bw / 2);
     ctx.save(); ctx.beginPath(); ctx.rect(padL, padT, pw, ph); ctx.clip();
-    d.zones[st.z].forEach(z => { ctx.globalAlpha = 0.2; ctx.fillStyle = zone; ctx.fillRect(xa, Y(z[1]), xb - xa, Math.max(2, Y(z[0]) - Y(z[1]))); ctx.globalAlpha = 1; });
-    if (st.L) { const L = d.lv, v = st.z === 'vol' ? [['VAH', L.pdVAH], ['VAL', L.pdVAL]] : [['VAH', L.tVAH], ['VAL', L.tVAL]]; const all = v.concat([['ONH', L.ONH], ['ONL', L.ONL], ['IBH', L.IBH], ['IBL', L.IBL]]);
-      all.forEach(([nm, p], k) => { if (p == null) return; ctx.strokeStyle = lvl; ctx.globalAlpha = 0.75; ctx.lineWidth = 1; ctx.setLineDash(k < 2 ? [] : k < 4 ? [2, 3] : [6, 3]); ctx.beginPath(); ctx.moveTo(xa, Y(p)); ctx.lineTo(xb, Y(p)); ctx.stroke(); ctx.setLineDash([]); ctx.globalAlpha = 1; if (xb - xa > 90) { ctx.fillStyle = lvl; ctx.textAlign = 'left'; ctx.fillText(nm, xa + 3, Y(p) - 6); } }); }
+    if (st.mode === 'of') d.zones[st.z].forEach(z => { ctx.globalAlpha = 0.2; ctx.fillStyle = zone; ctx.fillRect(xa, Y(z[1]), xb - xa, Math.max(2, Y(z[0]) - Y(z[1]))); ctx.globalAlpha = 1; });
+    if (st.L) { const L = d.lv, v = st.mode === 'ex' || st.z === 'vol' ? [['VAH', L.pdVAH], ['VAL', L.pdVAL]] : [['VAH', L.tVAH], ['VAL', L.tVAL]]; const all = v.concat(st.mode === 'ex' ? [['POC', L.POC], ['pdH', L.pdH], ['pdL', L.pdL]] : []).concat([['ONH', L.ONH], ['ONL', L.ONL], ['IBH', L.IBH], ['IBL', L.IBL]]); const nsolid = st.mode === 'ex' ? 3 : 2;
+      all.forEach(([nm, p], k) => { if (p == null) return; ctx.strokeStyle = lvl; ctx.globalAlpha = 0.75; ctx.lineWidth = 1; ctx.setLineDash(k < nsolid ? [] : k < nsolid + 2 + (st.mode === 'ex' ? 0 : 0) ? [2, 3] : [6, 3]); ctx.beginPath(); ctx.moveTo(xa, Y(p)); ctx.lineTo(xb, Y(p)); ctx.stroke(); ctx.setLineDash([]); ctx.globalAlpha = 1; if (xb - xa > 90) { ctx.fillStyle = lvl; ctx.textAlign = 'left'; ctx.fillText(nm, xa + 3, Y(p) - 6); } }); }
     ctx.restore(); });
   // candles
   ctx.save(); ctx.beginPath(); ctx.rect(padL, padT, pw, ph); ctx.clip(); const cw = Math.max(1, Math.min(10, bw * 0.7));
@@ -134,6 +154,7 @@ function draw() {
   // trades
   ctx.save(); ctx.beginPath(); ctx.rect(padL, padT, pw, ph); ctx.clip(); st.marks = [];
   cur.forEach((t, idx) => { const g1 = t.di * 390 + t.ei, g2 = t.di * 390 + t.xi; if (g2 < st.v0 || g1 > st.v1) return; const x1 = X(g1), x2 = X(g2), y1 = Y(t.entry), y2 = Y(t.exit), col = t.net > 0 ? win : loss, sel = st.sel === idx;
+    if (st.mode === 'ex' && t.ext != null) { const gs = t.di * 390 + t.sig - t.pk, gt = t.di * 390 + t.sig; ctx.strokeStyle = muted; ctx.lineWidth = sel ? 2.4 : 1.6; ctx.setLineDash([]); ctx.beginPath(); ctx.moveTo(X(gs), Y(t.start)); ctx.lineTo(X(gt), Y(t.ext)); ctx.stroke(); const dx = X(gt), dy = Y(t.ext), r = sel ? 7 : 5.5; ctx.strokeStyle = ink; ctx.fillStyle = panel; ctx.lineWidth = 1.6; ctx.beginPath(); ctx.moveTo(dx, dy - r); ctx.lineTo(dx + r, dy); ctx.lineTo(dx, dy + r); ctx.lineTo(dx - r, dy); ctx.closePath(); ctx.fill(); ctx.stroke(); }
     ctx.strokeStyle = col; ctx.lineWidth = sel ? 2.4 : 1.4; ctx.setLineDash([5, 3]); ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke(); ctx.setLineDash([]);
     if (sel) { ctx.strokeStyle = ink2; ctx.lineWidth = 1; [[t.stop, 'stop'], [t.tgt, 'target']].forEach(([p, nm]) => { ctx.setLineDash([2, 3]); ctx.beginPath(); ctx.moveTo(x1, Y(p)); ctx.lineTo(Math.max(x2, x1 + 24), Y(p)); ctx.stroke(); ctx.setLineDash([]); ctx.fillStyle = ink2; ctx.textAlign = 'left'; ctx.textBaseline = 'bottom'; ctx.fillText(nm, x1 + 3, Y(p) - 2); }); }
     const s = sel ? 8 : 6.5; ctx.lineWidth = 2; ctx.beginPath(); if (t.dir > 0) { ctx.moveTo(x1, y1 - s * 1.2); ctx.lineTo(x1 + s, y1 + s * 0.6); ctx.lineTo(x1 - s, y1 + s * 0.6); } else { ctx.moveTo(x1, y1 + s * 1.2); ctx.lineTo(x1 + s, y1 - s * 0.6); ctx.lineTo(x1 - s, y1 - s * 0.6); } ctx.closePath();
@@ -150,7 +171,7 @@ cv.addEventListener('pointerdown', e => { cv.setPointerCapture(e.pointerId); dra
 cv.addEventListener('pointermove', e => { const p = posOf(e);
   if (drag) { const dx = e.clientX - drag.x; if (Math.abs(dx) > 3) drag.moved = true; const shift = -dx / st.geo.bw; let a = drag.v0 + shift, b = drag.v1 + shift; if (a < 0) { b -= a; a = 0; } if (b > bars.length) { a -= b - bars.length; b = bars.length; } st.v0 = a; st.v1 = b; draw(); tip.style.display = 'none'; return; }
   const m = (st.marks || []).find(k => Math.hypot(k.x - p.x, k.y - p.y) < 12);
-  if (m) { const t = cur[m.idx]; tip.innerHTML = `<b>Setup ${t.k} ${t.dir > 0 ? 'long' : 'short'}</b> ${t.day} ${hhmm(t.ei)}<br>entry ${fmt(t.entry)} exit ${fmt(t.exit)}<br>stop ${fmt(t.stop)} target ${fmt(t.tgt)}<br>${t.why}, ${t.pts >= 0 ? '+' : ''}${fmt(t.pts)} pts, ${money(t.net)}`; }
+  if (m) { const t = cur[m.idx]; tip.innerHTML = `<b>${st.mode === 'ex' ? '' : 'Setup '}${t.k} ${t.dir > 0 ? 'long' : 'short'}</b> ${t.day} ${hhmm(t.ei)}<br>${st.mode === 'ex' ? 'exhaustion bar ' + hhmm(t.sig) + ' at ' + fmt(t.ext) + '<br>' : ''}entry ${fmt(t.entry)} exit ${fmt(t.exit)}<br>stop ${fmt(t.stop)} target ${fmt(t.tgt)}<br>${t.why}, ${t.pts >= 0 ? '+' : ''}${fmt(t.pts)} pts, ${money(t.net)}${st.mode === 'ex' && t.f15 != null ? '<br>15-bar move ' + (t.f15 >= 0 ? '+' : '') + fmt(t.f15) + ' pts' : ''}`; }
   else { const g = Math.round(st.v0 + (p.x - st.geo.padL) / st.geo.bw - 0.5), b = bars[g]; if (!b || b.o == null || p.x < st.geo.padL || p.x > st.geo.Wd - st.geo.padR) { tip.style.display = 'none'; return; } tip.innerHTML = `${days[b.di].d} ${hhmm(b.i)}<br>O ${fmt(b.o)} H ${fmt(b.h)}<br>L ${fmt(b.l)} C ${fmt(b.c)}`; }
   tip.style.display = 'block'; const bx = $('chartbox').getBoundingClientRect(); tip.style.left = Math.min(p.x + 14, bx.width - 190) + 'px'; tip.style.top = Math.max(4, p.y - 70) + 'px'; });
 cv.addEventListener('pointerup', e => { if (drag && !drag.moved) { const p = posOf(e), m = (st.marks || []).find(k => Math.hypot(k.x - p.x, k.y - p.y) < 12); if (m) { st.sel = st.sel === m.idx ? null : m.idx; refresh(); } } drag = null; });
@@ -158,13 +179,13 @@ cv.addEventListener('pointerleave', () => { tip.style.display = 'none'; });
 function zoom(f, cx) { const n = st.v1 - st.v0, nn = Math.min(bars.length, Math.max(30, n * f)), c = cx == null ? (st.v0 + st.v1) / 2 : cx; let a = c - (c - st.v0) * (nn / n), b = a + nn; if (a < 0) { b -= a; a = 0; } if (b > bars.length) { a -= b - bars.length; b = bars.length; } st.v0 = Math.max(0, a); st.v1 = b; draw(); }
 cv.addEventListener('wheel', e => { e.preventDefault(); const p = posOf(e); zoom(e.deltaY > 0 ? 1.2 : 1 / 1.2, st.v0 + (p.x - st.geo.padL) / st.geo.bw); }, { passive: false });
 $('zin').onclick = () => zoom(1 / 1.4); $('zout').onclick = () => zoom(1.4); $('zreset').onclick = () => { st.v0 = 0; st.v1 = bars.length; draw(); };
-DATA.windows.forEach((w, i) => { const o = document.createElement('option'); o.value = i; o.textContent = `${w.label} (${w.ntr} trades)`; $('win').appendChild(o); });
 $('win').onchange = e => { st.w = +e.target.value; loadWindow(); };
 function seg(id, key) { $(id).querySelectorAll('button').forEach(b => b.onclick = () => { st[key] = b.dataset.v; $(id).querySelectorAll('button').forEach(x => x.setAttribute('aria-pressed', x === b)); st.sel = null; refresh(); }); }
 seg('zseg', 'z'); seg('sseg', 's');
+$('mseg').querySelectorAll('button').forEach(b => b.onclick = () => { st.mode = b.dataset.v; $('mseg').querySelectorAll('button').forEach(x => x.setAttribute('aria-pressed', x === b)); setMode(); });
 [['showA', 'A'], ['showB', 'B'], ['showL', 'L']].forEach(([id, k]) => $(id).onchange = e => { st[k] = e.target.checked; st.sel = null; refresh(); });
 window.addEventListener('resize', draw);
 window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', draw);
 new MutationObserver(draw).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
-loadWindow();
+setMode();
 </script>
