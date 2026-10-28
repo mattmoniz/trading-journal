@@ -150,6 +150,34 @@ CREATE TABLE public.acd_daily_log (
 
 
 --
+-- Name: acd_daily_log_fired_repair_backup_20261027; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.acd_daily_log_fired_repair_backup_20261027 (
+    id integer,
+    trade_date date,
+    or_high numeric,
+    or_low numeric,
+    a_multiplier numeric,
+    a_up_level numeric,
+    a_down_level numeric,
+    a_up_fired boolean,
+    a_up_time time without time zone,
+    a_down_fired boolean,
+    a_down_time time without time zone,
+    c_up_confirmed boolean,
+    c_down_confirmed boolean,
+    daily_score integer,
+    session_close numeric,
+    notes text,
+    created_at timestamp without time zone,
+    close_position character varying(10),
+    day_type character varying(30),
+    profile_shape character varying(20)
+);
+
+
+--
 -- Name: acd_daily_log_id_seq; Type: SEQUENCE; Schema: public; Owner: -
 --
 
@@ -198,6 +226,44 @@ CREATE TABLE public.acd_daily_log_nqbad_backup_20261005 (
 
 
 --
+-- Name: acd_daily_log_repair_backup_20261027; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.acd_daily_log_repair_backup_20261027 (
+    id integer,
+    trade_date date,
+    or_high numeric,
+    or_low numeric,
+    a_multiplier numeric,
+    a_up_level numeric,
+    a_down_level numeric,
+    a_up_fired boolean,
+    a_up_time time without time zone,
+    a_down_fired boolean,
+    a_down_time time without time zone,
+    c_up_confirmed boolean,
+    c_down_confirmed boolean,
+    daily_score integer,
+    session_close numeric,
+    notes text,
+    created_at timestamp without time zone,
+    close_position character varying(10),
+    day_type character varying(30),
+    profile_shape character varying(20)
+);
+
+
+--
+-- Name: acd_daily_log_session_close_backup_20261027; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.acd_daily_log_session_close_backup_20261027 (
+    trade_date date,
+    session_close numeric
+);
+
+
+--
 -- Name: acd_monthly_pivot; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -232,6 +298,23 @@ CREATE SEQUENCE public.acd_monthly_pivot_id_seq
 --
 
 ALTER SEQUENCE public.acd_monthly_pivot_id_seq OWNED BY public.acd_monthly_pivot.id;
+
+
+--
+-- Name: acd_monthly_pivot_repair_backup_20261027; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.acd_monthly_pivot_repair_backup_20261027 (
+    id integer,
+    month_year character varying(7),
+    prior_month_high numeric,
+    prior_month_low numeric,
+    prior_month_close numeric,
+    pivot_level numeric,
+    pivot_r1 numeric,
+    pivot_s1 numeric,
+    created_at timestamp without time zone
+);
 
 
 --
@@ -280,6 +363,27 @@ ALTER SEQUENCE public.acd_setup_events_id_seq OWNED BY public.acd_setup_events.i
 --
 
 CREATE TABLE public.acd_setup_events_or_rename_backup_20260812 (
+    id integer,
+    trade_date date,
+    setup_type character varying(50),
+    fired_time time without time zone,
+    fired_price numeric,
+    minutes_from_or integer,
+    or_high numeric,
+    or_low numeric,
+    a_up_level numeric,
+    a_down_level numeric,
+    session_high numeric,
+    session_low numeric,
+    created_at timestamp without time zone
+);
+
+
+--
+-- Name: acd_setup_events_repair_backup_20261027; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.acd_setup_events_repair_backup_20261027 (
     id integer,
     trade_date date,
     setup_type character varying(50),
@@ -730,6 +834,126 @@ CREATE TABLE public.active_setups_backfill_resolution_bar_time_backup_20260820 (
     bet_class character varying(24),
     wider_target_mult numeric,
     ib_window_stale_basis boolean
+);
+
+
+--
+-- Name: active_setups_backfill_time_expired_mtm_backup_20261027; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.active_setups_backfill_time_expired_mtm_backup_20261027 (
+    id integer,
+    trade_date date,
+    setup_type character varying(60),
+    fired_at timestamp without time zone,
+    expires_at timestamp without time zone,
+    resolved_at timestamp without time zone,
+    status character varying(10),
+    resolution character varying(20),
+    entry_zone_low numeric,
+    entry_zone_high numeric,
+    stop_level numeric,
+    t1_level numeric,
+    t1_label character varying(100),
+    structural_level_touched numeric,
+    structural_level_type character varying(60),
+    price_at_detection numeric,
+    price_at_resolution numeric,
+    historical_win_rate numeric,
+    historical_sessions integer,
+    historical_avg_pnl numeric,
+    historical_t1_hit_rate numeric,
+    historical_source character varying(20),
+    nl30_at_detection integer,
+    structural_state_at_detection character varying(60),
+    confluence_score_at_detection integer,
+    actual_outcome character varying(20),
+    actual_pnl numeric,
+    created_at timestamp without time zone,
+    updated_at timestamp without time zone,
+    invalidation_timing character varying(20),
+    resolution_method character varying(20),
+    overnight_bias character varying(20),
+    mae_points numeric,
+    mfe_points numeric,
+    bars_to_resolution integer,
+    resolution_bar_time timestamp without time zone,
+    replay_resolution character varying(20),
+    size_multiplier numeric(5,3),
+    suppression_reason text,
+    touch_quality character varying(20),
+    touch_quality_vol_z numeric,
+    origin_status character varying(12),
+    is_rth boolean,
+    runner_trail_width numeric,
+    breakeven_armed_at timestamp without time zone,
+    runner_peak_price numeric,
+    runner_trail_price numeric,
+    confluence_levels_at_detection text[],
+    exhaustion_signal_at_detection boolean,
+    bar6_checkpoint character varying(20),
+    bar6_exit_recommended boolean,
+    extend_target_level numeric,
+    extend_decision character varying(20),
+    delta_confirmation_state character varying(20),
+    cluster_attributed_setups text[],
+    hivol_lopace_at_detection boolean,
+    regime_pos_10d numeric(8,4),
+    regime_label_10d character varying(4),
+    regime_pos_20d numeric(8,4),
+    regime_label_20d character varying(4),
+    regime_pos_30d numeric(8,4),
+    regime_label_30d character varying(4),
+    regime_pos_45d numeric(8,4),
+    regime_label_45d character varying(4),
+    regime_pos_60d numeric(8,4),
+    regime_label_60d character varying(4),
+    regime_pos_90d numeric(8,4),
+    regime_label_90d character varying(4),
+    regime_pos_180d numeric(8,4),
+    regime_label_180d character varying(4),
+    va_width_pctile_60d numeric,
+    va_overlap_streak integer,
+    ib_range_pctile_60d numeric,
+    selected_over text[],
+    day_type_at_fire character varying(20),
+    vol_bucket_at_fire character varying(12),
+    session character varying(8),
+    minutes_from_open integer,
+    bet_class character varying(24),
+    wider_target_mult numeric,
+    ib_window_stale_basis boolean,
+    size_factors_at_detection text,
+    vol_building_signal jsonb,
+    or_range_at_detection numeric,
+    rvol_20d_at_detection numeric,
+    slow_deep_exit_speed character varying(10),
+    slow_deep_exit_recommended boolean,
+    post_entry_exit_signals jsonb,
+    step_trail_shadow jsonb,
+    pitch_catch_shadow jsonb,
+    direction_gate_shadow jsonb,
+    momentum_against_fade_shadow jsonb,
+    cluster_touch_id uuid,
+    is_cluster_primary boolean,
+    stale_entry_price_basis boolean,
+    breakeven_stop_shadow jsonb,
+    entry_orderflow_shadow jsonb,
+    ml_extended_label jsonb,
+    ml_pd_features jsonb,
+    ml_intraday_features jsonb,
+    ml_extended_label_5x jsonb,
+    ml_extended_label_10x jsonb,
+    breakeven_stop_eligible boolean,
+    breakeven_stop_live jsonb,
+    t1_floor_runner_shadow jsonb,
+    late_fill_past_expiry_basis boolean,
+    touch_orderflow_pressure_shadow jsonb,
+    bad_bars_basis boolean,
+    pnl_source character varying(10),
+    broker_pnl numeric,
+    rotation_65pt_gate_shadow jsonb,
+    stale_levels_basis boolean
 );
 
 
@@ -3692,6 +3916,17 @@ CREATE TABLE public.active_setups_stale_entry_price_round2_backup_20260915 (
 
 
 --
+-- Name: active_setups_stale_levels_flag_backup_20261027; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.active_setups_stale_levels_flag_backup_20261027 (
+    id integer NOT NULL,
+    rule text,
+    flagged_at timestamp without time zone DEFAULT now()
+);
+
+
+--
 -- Name: active_setups_timeout_exit_relabel_backup_20260915; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -4245,6 +4480,41 @@ CREATE SEQUENCE public.ai_cost_log_id_seq
 --
 
 ALTER SEQUENCE public.ai_cost_log_id_seq OWNED BY public.ai_cost_log.id;
+
+
+--
+-- Name: amt_daily_state; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.amt_daily_state (
+    trade_date date NOT NULL,
+    symbol text DEFAULT 'NQ'::text NOT NULL,
+    is_forward boolean NOT NULL,
+    atr20 numeric NOT NULL,
+    prior_vah numeric NOT NULL,
+    prior_val numeric NOT NULL,
+    prior_close numeric NOT NULL,
+    open_0930 numeric NOT NULL,
+    ib_high numeric NOT NULL,
+    ib_low numeric NOT NULL,
+    ib_va_high numeric,
+    ib_va_low numeric,
+    open_1030 numeric NOT NULL,
+    s1_state text NOT NULL,
+    s2_state text,
+    s3_state text NOT NULL,
+    gap_atr numeric,
+    onr_atr numeric,
+    prng_atr numeric,
+    ibr_atr numeric,
+    ib_ret_atr numeric,
+    y_oc numeric NOT NULL,
+    y_1030 numeric NOT NULL,
+    built_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT amt_daily_state_s1_state_check CHECK ((s1_state = ANY (ARRAY['ABOVE'::text, 'BELOW'::text, 'INSIDE'::text]))),
+    CONSTRAINT amt_daily_state_s2_state_check CHECK ((s2_state = ANY (ARRAY['MIGRATE_UP'::text, 'MIGRATE_DN'::text, 'OVERLAP'::text]))),
+    CONSTRAINT amt_daily_state_s3_state_check CHECK ((s3_state = ANY (ARRAY['MIGRATE_UP'::text, 'MIGRATE_DN'::text, 'OVERLAP'::text])))
+);
 
 
 --
@@ -4928,6 +5198,27 @@ CREATE TABLE public.developing_value_log (
 
 
 --
+-- Name: developing_value_log_halfday_backup_20261027; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.developing_value_log_halfday_backup_20261027 (
+    id integer,
+    trade_date date,
+    poc numeric(10,2),
+    vah numeric(10,2),
+    val numeric(10,2),
+    session_high numeric(10,2),
+    session_low numeric(10,2),
+    session_close numeric(10,2),
+    poc_delta_vs_prior numeric(10,2),
+    va_overlap_pct_vs_prior numeric(6,4),
+    migration_dir_vs_prior text,
+    hold_or_reject_vs_prior text,
+    computed_at timestamp without time zone
+);
+
+
+--
 -- Name: developing_value_log_id_seq; Type: SEQUENCE; Schema: public; Owner: -
 --
 
@@ -4952,6 +5243,27 @@ ALTER SEQUENCE public.developing_value_log_id_seq OWNED BY public.developing_val
 --
 
 CREATE TABLE public.developing_value_log_nqbad_backup_20261005 (
+    id integer,
+    trade_date date,
+    poc numeric(10,2),
+    vah numeric(10,2),
+    val numeric(10,2),
+    session_high numeric(10,2),
+    session_low numeric(10,2),
+    session_close numeric(10,2),
+    poc_delta_vs_prior numeric(10,2),
+    va_overlap_pct_vs_prior numeric(6,4),
+    migration_dir_vs_prior text,
+    hold_or_reject_vs_prior text,
+    computed_at timestamp without time zone
+);
+
+
+--
+-- Name: developing_value_log_repair_backup_20261027; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.developing_value_log_repair_backup_20261027 (
     id integer,
     trade_date date,
     poc numeric(10,2),
@@ -5078,7 +5390,8 @@ CREATE TABLE public.es_front_calendar (
     basis text NOT NULL,
     rth_volume_front bigint,
     rth_volume_leader bigint,
-    leader_contract text
+    leader_contract text,
+    rth_minutes integer
 );
 
 
@@ -5254,10 +5567,75 @@ CREATE TABLE public.level_prices_3m_va_lookahead_backup_20260719 (
 
 
 --
+-- Name: level_prices_cmp_stored; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.level_prices_cmp_stored (
+    trade_date date NOT NULL,
+    level_name text NOT NULL,
+    price numeric(12,4),
+    category text,
+    computed_at timestamp with time zone DEFAULT now()
+);
+
+
+--
+-- Name: level_prices_cmp_tick; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.level_prices_cmp_tick (
+    trade_date date NOT NULL,
+    level_name text NOT NULL,
+    price numeric(12,4),
+    category text,
+    computed_at timestamp with time zone DEFAULT now()
+);
+
+
+--
+-- Name: level_prices_halfday_backup_20261027; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.level_prices_halfday_backup_20261027 (
+    trade_date date,
+    level_name text,
+    price numeric(12,4),
+    category text,
+    computed_at timestamp with time zone
+);
+
+
+--
 -- Name: level_prices_ib_backup_20260714; Type: TABLE; Schema: public; Owner: -
 --
 
 CREATE TABLE public.level_prices_ib_backup_20260714 (
+    trade_date date,
+    level_name text,
+    price numeric(12,4),
+    category text,
+    computed_at timestamp with time zone
+);
+
+
+--
+-- Name: level_prices_monthlyvwap_rth_backup_20261027; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.level_prices_monthlyvwap_rth_backup_20261027 (
+    trade_date date,
+    level_name text,
+    price numeric(12,4),
+    category text,
+    computed_at timestamp with time zone
+);
+
+
+--
+-- Name: level_prices_monthshift_backup_20261027; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.level_prices_monthshift_backup_20261027 (
     trade_date date,
     level_name text,
     price numeric(12,4),
@@ -5306,10 +5684,62 @@ CREATE TABLE public.level_prices_or_rename_backup_20260812 (
 
 
 --
+-- Name: level_prices_pass3_backup_20261027; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.level_prices_pass3_backup_20261027 (
+    trade_date date,
+    level_name text,
+    price numeric(12,4),
+    category text,
+    computed_at timestamp with time zone
+);
+
+
+--
+-- Name: level_prices_pass4_backup_20261027; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.level_prices_pass4_backup_20261027 (
+    trade_date date,
+    level_name text,
+    price numeric(12,4),
+    category text,
+    computed_at timestamp with time zone
+);
+
+
+--
+-- Name: level_prices_repair_backup_20261027; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.level_prices_repair_backup_20261027 (
+    trade_date date,
+    level_name text,
+    price numeric(12,4),
+    category text,
+    computed_at timestamp with time zone
+);
+
+
+--
 -- Name: level_prices_va_bucketing_backup_20260717; Type: TABLE; Schema: public; Owner: -
 --
 
 CREATE TABLE public.level_prices_va_bucketing_backup_20260717 (
+    trade_date date,
+    level_name text,
+    price numeric(12,4),
+    category text,
+    computed_at timestamp with time zone
+);
+
+
+--
+-- Name: level_prices_vwap_backup_20261027; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.level_prices_vwap_backup_20261027 (
     trade_date date,
     level_name text,
     price numeric(12,4),
@@ -5336,6 +5766,19 @@ CREATE TABLE public.level_prices_weekly_open_backup_20260720 (
 --
 
 CREATE TABLE public.level_prices_weeklyvwap_backup_20260714 (
+    trade_date date,
+    level_name text,
+    price numeric(12,4),
+    category text,
+    computed_at timestamp with time zone
+);
+
+
+--
+-- Name: level_prices_weeklyvwap_rth_backup_20261027; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.level_prices_weeklyvwap_rth_backup_20261027 (
     trade_date date,
     level_name text,
     price numeric(12,4),
@@ -6061,6 +6504,18 @@ CREATE SEQUENCE public.order_placements_updates_id_seq
 --
 
 ALTER SEQUENCE public.order_placements_updates_id_seq OWNED BY public.order_placements_updates.id;
+
+
+--
+-- Name: overnight_checkpoint_stats; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.overnight_checkpoint_stats (
+    trade_date date NOT NULL,
+    checkpoint_min integer NOT NULL,
+    volume bigint NOT NULL,
+    legs integer NOT NULL
+);
 
 
 --
@@ -8500,6 +8955,43 @@ ALTER SEQUENCE public.session_analysis_id_seq OWNED BY public.session_analysis.i
 
 
 --
+-- Name: session_analysis_repair_backup_20261027; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.session_analysis_repair_backup_20261027 (
+    id integer,
+    trade_date date,
+    session_type character varying(30),
+    open_type character varying(30),
+    close_type character varying(30),
+    open_price double precision,
+    close_price double precision,
+    session_high double precision,
+    session_low double precision,
+    range_pt double precision,
+    atr_ratio double precision,
+    gap_pt double precision,
+    gap_filled boolean,
+    close_vs_open double precision,
+    close_pct_of_range integer,
+    vwap double precision,
+    close_vs_vwap double precision,
+    poc double precision,
+    close_vs_poc double precision,
+    rotations_65pt integer,
+    compressions integer,
+    volume_climaxes integer,
+    failed_breakouts integer,
+    stop_sweeps integer,
+    vwap_crosses integer,
+    patterns jsonb,
+    metrics jsonb,
+    summary text,
+    created_at timestamp with time zone
+);
+
+
+--
 -- Name: session_analysis_rotation_fields_backup_20260916; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -8546,6 +9038,23 @@ CREATE SEQUENCE public.session_patterns_id_seq
 --
 
 ALTER SEQUENCE public.session_patterns_id_seq OWNED BY public.session_patterns.id;
+
+
+--
+-- Name: session_patterns_repair_backup_20261027; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.session_patterns_repair_backup_20261027 (
+    id integer,
+    trade_date date,
+    pattern_type character varying(50),
+    et_minute integer,
+    duration_min integer,
+    direction character varying(10),
+    magnitude double precision,
+    context jsonb,
+    created_at timestamp with time zone
+);
 
 
 --
@@ -9372,6 +9881,45 @@ ALTER SEQUENCE public.trading_sessions_id_seq OWNED BY public.trading_sessions.i
 
 
 --
+-- Name: tripwire_events; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.tripwire_events (
+    id integer NOT NULL,
+    trade_date date NOT NULL,
+    level character varying(10) NOT NULL,
+    fired_at timestamp without time zone DEFAULT (now() AT TIME ZONE 'America/New_York'::text) NOT NULL,
+    elapsed_min integer NOT NULL,
+    vol_rank numeric,
+    legs_rank numeric,
+    vol_ratio numeric,
+    legs integer,
+    notified boolean DEFAULT false NOT NULL,
+    notify_note text
+);
+
+
+--
+-- Name: tripwire_events_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.tripwire_events_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: tripwire_events_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.tripwire_events_id_seq OWNED BY public.tripwire_events.id;
+
+
+--
 -- Name: value_area_regime_snapshots; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -9437,6 +9985,77 @@ CREATE SEQUENCE public.vol_backtest_cache_id_seq
 --
 
 ALTER SEQUENCE public.vol_backtest_cache_id_seq OWNED BY public.vol_backtest_cache.id;
+
+
+--
+-- Name: volume_at_price_30m; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.volume_at_price_30m (
+    bar_start timestamp without time zone NOT NULL,
+    price numeric(9,2) NOT NULL,
+    vol integer NOT NULL
+);
+
+
+--
+-- Name: volume_at_price_30m_ba; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.volume_at_price_30m_ba (
+    bar_start timestamp without time zone NOT NULL,
+    price numeric(9,2) NOT NULL,
+    bid_vol integer NOT NULL,
+    ask_vol integer NOT NULL
+);
+
+
+--
+-- Name: volume_at_price_30m_ba_days; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.volume_at_price_30m_ba_days (
+    trade_date date NOT NULL,
+    bid_volume bigint NOT NULL,
+    ask_volume bigint NOT NULL,
+    loaded_at timestamp without time zone DEFAULT now()
+);
+
+
+--
+-- Name: volume_at_price_30m_days; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.volume_at_price_30m_days (
+    trade_date date NOT NULL,
+    tick_volume bigint NOT NULL,
+    loaded_at timestamp without time zone DEFAULT now()
+);
+
+
+--
+-- Name: volume_at_price_daily; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.volume_at_price_daily (
+    trade_date date NOT NULL,
+    price numeric(9,2) NOT NULL,
+    vol_all integer NOT NULL,
+    vol_rth integer NOT NULL
+);
+
+
+--
+-- Name: volume_at_price_days; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.volume_at_price_days (
+    trade_date date NOT NULL,
+    tick_volume bigint NOT NULL,
+    db_volume bigint NOT NULL,
+    source text,
+    loaded_at timestamp without time zone DEFAULT now()
+);
 
 
 --
@@ -10401,6 +11020,13 @@ ALTER TABLE ONLY public.trading_sessions ALTER COLUMN id SET DEFAULT nextval('pu
 
 
 --
+-- Name: tripwire_events id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.tripwire_events ALTER COLUMN id SET DEFAULT nextval('public.tripwire_events_id_seq'::regclass);
+
+
+--
 -- Name: value_area_regime_snapshots id; Type: DEFAULT; Schema: public; Owner: -
 --
 
@@ -10549,11 +11175,27 @@ ALTER TABLE ONLY public.active_setups_resolved_at_tz_bug_backup_20260727
 
 
 --
+-- Name: active_setups_stale_levels_flag_backup_20261027 active_setups_stale_levels_flag_backup_20261027_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.active_setups_stale_levels_flag_backup_20261027
+    ADD CONSTRAINT active_setups_stale_levels_flag_backup_20261027_pkey PRIMARY KEY (id);
+
+
+--
 -- Name: ai_cost_log ai_cost_log_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.ai_cost_log
     ADD CONSTRAINT ai_cost_log_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: amt_daily_state amt_daily_state_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.amt_daily_state
+    ADD CONSTRAINT amt_daily_state_pkey PRIMARY KEY (trade_date);
 
 
 --
@@ -10813,6 +11455,22 @@ ALTER TABLE ONLY public.learning_digest_events
 
 
 --
+-- Name: level_prices_cmp_stored level_prices_cmp_stored_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.level_prices_cmp_stored
+    ADD CONSTRAINT level_prices_cmp_stored_pkey PRIMARY KEY (trade_date, level_name);
+
+
+--
+-- Name: level_prices_cmp_tick level_prices_cmp_tick_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.level_prices_cmp_tick
+    ADD CONSTRAINT level_prices_cmp_tick_pkey PRIMARY KEY (trade_date, level_name);
+
+
+--
 -- Name: level_prices level_prices_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -10938,6 +11596,14 @@ ALTER TABLE ONLY public.order_placements
 
 ALTER TABLE ONLY public.order_placements_updates
     ADD CONSTRAINT order_placements_updates_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: overnight_checkpoint_stats overnight_checkpoint_stats_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.overnight_checkpoint_stats
+    ADD CONSTRAINT overnight_checkpoint_stats_pkey PRIMARY KEY (trade_date, checkpoint_min);
 
 
 --
@@ -11797,6 +12463,22 @@ ALTER TABLE ONLY public.trading_sessions
 
 
 --
+-- Name: tripwire_events tripwire_events_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.tripwire_events
+    ADD CONSTRAINT tripwire_events_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: tripwire_events tripwire_events_trade_date_level_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.tripwire_events
+    ADD CONSTRAINT tripwire_events_trade_date_level_key UNIQUE (trade_date, level);
+
+
+--
 -- Name: dynamic_edges_mining uniq_edge_run; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -11826,6 +12508,54 @@ ALTER TABLE ONLY public.value_area_regime_snapshots
 
 ALTER TABLE ONLY public.vol_backtest_cache
     ADD CONSTRAINT vol_backtest_cache_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: volume_at_price_30m_ba_days volume_at_price_30m_ba_days_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.volume_at_price_30m_ba_days
+    ADD CONSTRAINT volume_at_price_30m_ba_days_pkey PRIMARY KEY (trade_date);
+
+
+--
+-- Name: volume_at_price_30m_ba volume_at_price_30m_ba_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.volume_at_price_30m_ba
+    ADD CONSTRAINT volume_at_price_30m_ba_pkey PRIMARY KEY (bar_start, price);
+
+
+--
+-- Name: volume_at_price_30m_days volume_at_price_30m_days_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.volume_at_price_30m_days
+    ADD CONSTRAINT volume_at_price_30m_days_pkey PRIMARY KEY (trade_date);
+
+
+--
+-- Name: volume_at_price_30m volume_at_price_30m_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.volume_at_price_30m
+    ADD CONSTRAINT volume_at_price_30m_pkey PRIMARY KEY (bar_start, price);
+
+
+--
+-- Name: volume_at_price_daily volume_at_price_daily_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.volume_at_price_daily
+    ADD CONSTRAINT volume_at_price_daily_pkey PRIMARY KEY (trade_date, price);
+
+
+--
+-- Name: volume_at_price_days volume_at_price_days_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.volume_at_price_days
+    ADD CONSTRAINT volume_at_price_days_pkey PRIMARY KEY (trade_date);
 
 
 --
@@ -11977,6 +12707,13 @@ CREATE INDEX idx_acd_setup_events_date ON public.acd_setup_events USING btree (t
 --
 
 CREATE INDEX idx_acd_setup_events_type ON public.acd_setup_events USING btree (setup_type);
+
+
+--
+-- Name: idx_amt_daily_state_fwd; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_amt_daily_state_fwd ON public.amt_daily_state USING btree (is_forward, trade_date);
 
 
 --

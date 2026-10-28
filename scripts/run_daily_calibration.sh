@@ -310,4 +310,9 @@ timed_step daily /usr/bin/node scripts/recheck_opening_drive_gate.mjs
 # run_weekly_backtests.sh. Read-only except one RESEARCH_CLAIM upsert; never changes live behavior.
 timed_step daily /usr/bin/node scripts/monitor_rotation_gate_forward.mjs
 
+# AMT daily-state passive tracker (scripts/amt_s1/PASSIVE_TRACKER_PREREG.md, frozen 2026-10-28): logs S1/S2/S3 states + outcomes for each completed RTH
+# session into amt_daily_state. Idempotent (never rewrites a row), prints state COUNTS and "NO DATA YET" until the pre-registered look thresholds; never prints an
+# outcome statistic, so nightly runs cannot cause optional stopping. Research only; nothing reads it live. OPEN_DECISION amt_s2_s3_forward_look_due.
+timed_step daily ./venv/bin/python3 scripts/amt_s1/amt_daily_state.py
+
 echo "=== Daily calibration complete: $(date) ==="
