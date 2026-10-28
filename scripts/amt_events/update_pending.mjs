@@ -1,0 +1,7 @@
+import { flagDecision } from '../flag_decision.mjs';
+await flagDecision({
+  slug: 'amt_deepseek_critique_pending_20261028',
+  decisionText: 'Status update: the GEMINI critique (Flash High) of AMT options 1 and 3 is DONE and audited (scripts/amt_events/GEMINI_CRITIQUE_AUDIT_20261028.md; response scratch/antigravity_response_amt_critique_20261028.md, truncated at the start). A DeepSeek critique of the same material is QUEUED to run at 04:00 UTC (00:00 ET, off-peak) via a detached waiter (scratch/dispatch_deepseek_offpeak.sh, log scratch/dispatch_deepseek_offpeak.log, request scratch/claude_request_deepseek.md, response scratch/deepseek_response.md plus a dated copy). If the process is missing (ps -eo pid,cmd | grep dispatch_deepseek_offpeak) and no dated response exists after 04:30 UTC, re-run ./scripts/invoke_deepseek.sh 25m in an off-peak window (04:00-06:00 or 10:00-01:00 UTC weekdays; DEEPSEEK_ALLOW_PEAK=1 only if the user says to pay surge). When it lands: read it, audit against the code, compare with the Gemini audit, report to the user, then resolve this decision. After both critiques, the user decides which faithful (time-at-price, hindsight-free checkpoint, structural-outcome) AMT tests to pre-register next; candidates so far: 80% rule with TPO value area, excess/poor extremes, opening type vs IB extension, ATR-scaled redo of option 1 with the matched INSIDE contrast as primary, and the open-outside-value family.',
+  sourceFile: 'scripts/amt_events/GEMINI_CRITIQUE_AUDIT_20261028.md', sourceDate: '2026-10-28',
+});
+process.exit(0);
