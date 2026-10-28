@@ -50,11 +50,14 @@ td.w { color: var(--win); } td.l { color: var(--loss); }
   <div><h1>Order-Flow Trade Chart</h1>
   <p class="sub" id="sub"></p></div>
   <div class="panel controls">
-    <div class="ctl"><span class="lab">Strategy</span><div class="seg" id="mseg"><button data-v="of" aria-pressed="true">Order-flow setups</button><button data-v="ex" aria-pressed="false">Exhaustion reversal</button></div></div>
+    <div class="ctl"><span class="lab">Strategy</span><div class="seg" id="mseg"><button data-v="of" aria-pressed="true">Order-flow setups</button><button data-v="ex" aria-pressed="false">Exhaustion reversal</button><button data-v="sw" aria-pressed="false">Sweep &amp; absorb (scale-out)</button></div></div>
     <div class="ctl"><label for="win">Window</label><select id="win"></select></div>
     <div class="ctl" id="zctl"><span class="lab">Zones</span><div class="seg" id="zseg"><button data-v="vol" aria-pressed="true">Volume profile</button><button data-v="tpo" aria-pressed="false">TPO</button></div></div>
     <div class="ctl" id="sctl"><span class="lab">Stop</span><div class="seg" id="sseg"><button data-v="spec" aria-pressed="true">Spec (A 6 pts, B 10 pts)</button><button data-v="atr2" aria-pressed="false">2 x ATR14</button></div></div>
     <div class="ctl"><span class="lab">Setups</span><div><label class="chk"><input type="checkbox" id="showA" checked> <span id="lblA">A absorption</span></label> <label class="chk"><input type="checkbox" id="showB" checked> <span id="lblB">B build-and-go</span></label></div></div>
+    <div class="ctl"><span class="lab">Side</span><div class="seg" id="sideseg"><button data-v="all" aria-pressed="true">All</button><button data-v="long" aria-pressed="false">Long</button><button data-v="short" aria-pressed="false">Short</button></div></div>
+    <div class="ctl"><span class="lab">Result</span><div class="seg" id="resseg"><button data-v="all" aria-pressed="true">All</button><button data-v="win" aria-pressed="false">Win</button><button data-v="loss" aria-pressed="false">Loss</button></div></div>
+    <div class="ctl"><label for="why">Exit reason</label><select id="why"><option value="">All</option></select></div>
     <div class="ctl"><span class="lab">Levels</span><div><label class="chk"><input type="checkbox" id="showL" checked> <span id="lblL">value area, ON, IB</span></label></div></div>
     <div class="ctl"><span class="lab">View</span><div><button id="zin" aria-label="Zoom in">+</button> <button id="zout" aria-label="Zoom out">&minus;</button> <button id="zreset">Reset</button></div></div>
   </div>
@@ -76,7 +79,7 @@ td.w { color: var(--win); } td.l { color: var(--loss); }
 <script>
 const DATA = /*DATA*/null;
 const $ = id => document.getElementById(id);
-const st = { mode: 'of', w: 0, z: 'vol', s: 'spec', A: true, B: true, L: true, sel: null, v0: 0, v1: 1 };
+const st = { side: 'all', res: 'all', why: '', mode: 'of', w: 0, z: 'vol', s: 'spec', A: true, B: true, L: true, sel: null, v0: 0, v1: 1 };
 let bars = [], days = [], cur = [];
 const cv = $('cv'), ctx = cv.getContext('2d'), tip = $('tip');
 const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
@@ -85,14 +88,17 @@ const fmt = (x, d = 2) => (x == null ? '' : x.toFixed(d));
 const money = x => (x < 0 ? '-$' : '+$') + Math.abs(x).toFixed(2);
 const D = () => DATA[st.mode];
 const SUB = { of: 'The trades the two order-flow setups would have taken on NQ 1-minute bars (RTH only), five trading days at a time, on the explore sessions (March 2023 to May 2025). Each window is one of the eight busiest five-day stretches, picked for having many trades, so it is not representative: read the all-sessions line below. Simulated at 1 MNQ with $2 round-trip costs; these are research trades, not signals.',
-  ex: 'Exhaustion reversals as you described them: a one-directional push to a new extreme while the leading side stops pressing (diamond), then the other side steps in and price responds, and only then the trade (triangle). Explore sessions, five days at a time. These eight windows were picked because they contain the most events, not at random, so they look better than the whole sample: read the all-sessions line below for the honest picture. Simulated at 1 MNQ; research trades, not signals.' };
+  ex: 'Exhaustion reversals as you described them: a one-directional push to a new extreme while the leading side stops pressing (diamond), then the other side steps in and price responds, and only then the trade (triangle). Explore sessions, five days at a time. These eight windows were picked because they contain the most events, not at random, so they look better than the whole sample: read the all-sessions line below for the honest picture. Simulated at 1 MNQ; research trades, not signals.',
+  sw: 'The revised Sweep and Absorb as you specified it: price sweeps beyond a confluence zone, absorption shows in the order flow, then the trade: 2 micro contracts, half off at +10 points, the stop moved just past breakeven, the runner to session VWAP (or +25 points if VWAP is too close). NQ 1-minute bars, RTH only, explore sessions, five days at a time. The windows are the busiest stretches, not random: read the all-sessions line for the honest picture. Research trades, not signals.' };
 const NOTE = { of: 'Wins are blue and losses orange; a hollow marker is a loss. Targets: setup A 15 points, setup B 20 points. Setup A also exits when a bar closes 5 points beyond the zone. Everything is flattened at 15:55. Net dollars include 1 tick slippage on market and stop exits and a $2 round trip.',
-  ex: 'E2 is the full rule: exhaustion, then at least two counter-side bars with counter volume in control and a close beyond the extreme bar\'s far end, entered on the next open. E1 enters at the bar after the exhaustion bar with no response required. Stop = 1 tick + half the 1-minute ATR beyond the extreme; target = half the push retraced; 30-bar time stop; flatten 15:55. Wins are blue and losses orange (hollow). Net dollars include 1 tick slippage on market and stop exits and a $2 round trip. Thin lines: value area, point of control, prior-day high/low, overnight and initial-balance levels.' };
+  ex: 'E2 is the full rule: exhaustion, then at least two counter-side bars with counter volume in control and a close beyond the extreme bar\'s far end, entered on the next open. E1 enters at the bar after the exhaustion bar with no response required. Stop = 1 tick + half the 1-minute ATR beyond the extreme; target = half the push retraced; 30-bar time stop; flatten 15:55. Wins are blue and losses orange (hollow). Net dollars include 1 tick slippage on market and stop exits and a $2 round trip. Thin lines: value area, point of control, prior-day high/low, overnight and initial-balance levels.',
+  sw: 'Blue is a winning trade and orange a losing one (hollow). The exit marker is the average exit of the two contracts, because the first leg is taken at +10 and the runner exits later; the exit reason is in the table (T1+STOP = first leg taken, runner stopped near breakeven). The stop is the signal bar extreme with a 25-point cap; signals needing a wider stop were skipped. Dashed lines show stop and first target when a trade is selected. The control is the same setup with the delta pointing the other way (no absorption). On all explore sessions this setup wins often (66%) but earns about $-2.67 a trade after costs: the average gain per contract before the $2 round trip is smaller than the cost.' };
 function setMode() {
-  const ex = st.mode === 'ex'; $('sub').textContent = SUB[st.mode]; $('note').textContent = NOTE[st.mode];
-  $('zctl').hidden = ex; $('sctl').hidden = ex; $('lgZone').hidden = ex; $('lgPush').hidden = !ex;
-  $('lblA').textContent = ex ? 'E2 exhaustion + response' : 'A absorption'; $('lblB').textContent = ex ? 'E1 exhaustion only' : 'B build-and-go'; $('lblL').textContent = ex ? 'levels' : 'value area, ON, IB';
-  st.A = true; st.B = !ex; $('showA').checked = true; $('showB').checked = !ex;
+  const ex = st.mode === 'ex', sw = st.mode === 'sw'; $('sub').textContent = SUB[st.mode]; $('note').textContent = NOTE[st.mode]; if (sw) st.z = 'vol';
+  $('zctl').hidden = ex || sw; $('sctl').hidden = ex || sw; $('lgZone').hidden = ex; $('lgPush').hidden = !ex;
+  $('lblA').textContent = ex ? 'E2 exhaustion + response' : sw ? 'Sweep and absorb' : 'A absorption'; $('lblB').textContent = ex ? 'E1 exhaustion only' : sw ? 'Control (no absorption)' : 'B build-and-go'; $('lblL').textContent = ex ? 'levels' : 'value area, ON, IB';
+  st.A = true; st.B = !ex && !sw; $('showA').checked = true; $('showB').checked = st.B;
+  const reasons = new Set(); Object.values(D().trades).forEach(arr => arr.forEach(t => reasons.add(t[6]))); const wy = $('why'); wy.innerHTML = '<option value="">All</option>'; [...reasons].sort().forEach(r => { const o = document.createElement('option'); o.value = r; o.textContent = r; wy.appendChild(o); }); st.why = '';
   const w = $('win'); w.innerHTML = ''; D().windows.forEach((x, i) => { const o = document.createElement('option'); o.value = i; o.textContent = `${x.label} (${x.ntr} trades)`; w.appendChild(o); }); st.w = 0;
   loadWindow();
 }
@@ -102,19 +108,23 @@ function loadWindow() {
   st.v0 = 0; st.v1 = bars.length; st.sel = null; refresh();
 }
 function visibleTrades() {
-  const out = [], ex = st.mode === 'ex';
-  [['A', ex ? 'ex|E2' : null], ['B', ex ? 'ex|E1' : null]].forEach(([k, exkey]) => { if (!st[k]) return; const key = ex ? exkey : `${st.z}|${st.s}|${k}`, tag = ex ? (k === 'A' ? 'E2' : 'E1') : k;
+  const out = [], ex = st.mode === 'ex', sw = st.mode === 'sw';
+  [['A', ex ? 'ex|E2' : sw ? 'sw|S' : null], ['B', ex ? 'ex|E1' : sw ? 'sw|C' : null]].forEach(([k, exkey]) => { if (!st[k]) return; const key = (ex || sw) ? exkey : `${st.z}|${st.s}|${k}`, tag = ex ? (k === 'A' ? 'E2' : 'E1') : sw ? (k === 'A' ? 'S' : 'C') : k;
     (D().trades[key] || []).forEach(t => { const di = days.findIndex(d => d.d === t[0]); if (di < 0) return;
       const o = { k: tag, di, day: t[0], dir: t[1], ei: t[2], xi: t[3], entry: t[4], exit: t[5], why: t[6], net: t[7], pts: t[8], stop: t[9], tgt: t[10], sig: t[11] };
-      if (ex) { o.ext = t[12]; o.start = t[13]; o.pk = t[14]; o.f15 = t[15]; } out.push(o); }); });
+      if (ex) { o.ext = t[12]; o.start = t[13]; o.pk = t[14]; o.f15 = t[15]; }
+      if ((st.side === 'long' && o.dir < 0) || (st.side === 'short' && o.dir > 0) || (st.res === 'win' && !(o.net > 0)) || (st.res === 'loss' && o.net > 0) || (st.why && o.why !== st.why)) return;
+      out.push(o); }); });
   return out.sort((a, b) => (a.di - b.di) || (a.ei - b.ei));
 }
 function refresh() {
   cur = visibleTrades(); const ex = st.mode === 'ex', sm = D().summary;
   const wn = cur.filter(t => t.net > 0).length, tot = cur.reduce((a, t) => a + t.net, 0);
   const lines = ex ? [['E2', 'ex|E2', 'exhaustion + response'], ['E1', 'ex|E1', 'exhaustion only']].map(([n, k, nm]) => `<span>${n} (${nm}), all explore sessions: <b>${sm[k].n}</b> trades, win ${sm[k].wr}%, profit factor <b>${sm[k].pf.toFixed(2)}</b>, mean <b>${money(sm[k].mean)}</b>/trade, gross 15-minute move <b>${sm[k].f15 >= 0 ? '+' : ''}${sm[k].f15.toFixed(2)}</b> pts</span>`)
+    : st.mode === 'sw' ? [['sw|S', 'Sweep and absorb'], ['sw|C', 'control, no absorption']].map(([k, nm]) => `<span>${nm}, all explore sessions: <b>${sm[k].n}</b> trades, win ${sm[k].wr}%, profit factor <b>${sm[k].pf.toFixed(2)}</b>, mean <b>${money(sm[k].mean)}</b>/trade</span>`)
     : ['A', 'B'].map(k => { const m = sm[`${st.z}|${st.s}|${k}`]; return `<span>Setup ${k}, all explore sessions: <b>${m.n}</b> trades, win ${m.wr}%, profit factor <b>${m.pf.toFixed(2)}</b>, mean <b>${money(m.mean)}</b>/trade</span>`; });
-  $('stats').innerHTML = `<span>This window: <b>${cur.length}</b> trades, <b>${wn}</b> wins, net <b>${cur.length ? money(tot) : '$0.00'}</b></span>` + lines.join('');
+  const filt = [st.side !== 'all' ? st.side : '', st.res !== 'all' ? (st.res === 'win' ? 'wins' : 'losses') : '', st.why].filter(Boolean).join(', ');
+  $('stats').innerHTML = `<span>This window${filt ? ' (filtered: ' + filt + ')' : ''}: <b>${cur.length}</b> trades, <b>${wn}</b> wins, net <b>${cur.length ? money(tot) : '$0.00'}</b></span>` + lines.join('');
   const tb = $('tt').querySelector('tbody'); tb.innerHTML = '';
   cur.forEach((t, idx) => { const tr = document.createElement('tr'); tr.className = 'row' + (st.sel === idx ? ' sel' : ''); const w = t.net > 0;
     tr.innerHTML = `<td>${t.day.slice(5)}</td><td>${hhmm(t.sig)}</td><td>${hhmm(t.ei)}</td><td>${t.k}</td><td>${t.dir > 0 ? 'Long' : 'Short'}</td><td>${fmt(t.entry)}</td><td>${fmt(t.exit)}</td><td>${fmt(t.stop)}</td><td>${fmt(t.tgt)}</td><td>${t.why}</td><td class="${w ? 'w' : 'l'}">${(t.pts >= 0 ? '+' : '') + fmt(t.pts)}</td><td class="${w ? 'w' : 'l'}">${money(t.net)}</td>`;
@@ -137,7 +147,7 @@ function draw() {
   // zones and levels per day
   days.forEach((d, di) => { const a = di * 390, b = a + 389; if (b < st.v0 || a > st.v1) return; const xa = Math.max(padL, X(a) - bw / 2), xb = Math.min(Wd - padR, X(b) + bw / 2);
     ctx.save(); ctx.beginPath(); ctx.rect(padL, padT, pw, ph); ctx.clip();
-    if (st.mode === 'of') d.zones[st.z].forEach(z => { ctx.globalAlpha = 0.2; ctx.fillStyle = zone; ctx.fillRect(xa, Y(z[1]), xb - xa, Math.max(2, Y(z[0]) - Y(z[1]))); ctx.globalAlpha = 1; });
+    if (st.mode !== 'ex') d.zones[st.z].forEach(z => { ctx.globalAlpha = 0.2; ctx.fillStyle = zone; ctx.fillRect(xa, Y(z[1]), xb - xa, Math.max(2, Y(z[0]) - Y(z[1]))); ctx.globalAlpha = 1; });
     if (st.L) { const L = d.lv, v = st.mode === 'ex' || st.z === 'vol' ? [['VAH', L.pdVAH], ['VAL', L.pdVAL]] : [['VAH', L.tVAH], ['VAL', L.tVAL]]; const all = v.concat(st.mode === 'ex' ? [['POC', L.POC], ['pdH', L.pdH], ['pdL', L.pdL]] : []).concat([['ONH', L.ONH], ['ONL', L.ONL], ['IBH', L.IBH], ['IBL', L.IBL]]); const nsolid = st.mode === 'ex' ? 3 : 2;
       all.forEach(([nm, p], k) => { if (p == null) return; ctx.strokeStyle = lvl; ctx.globalAlpha = 0.75; ctx.lineWidth = 1; ctx.setLineDash(k < nsolid ? [] : k < nsolid + 2 + (st.mode === 'ex' ? 0 : 0) ? [2, 3] : [6, 3]); ctx.beginPath(); ctx.moveTo(xa, Y(p)); ctx.lineTo(xb, Y(p)); ctx.stroke(); ctx.setLineDash([]); ctx.globalAlpha = 1; if (xb - xa > 90) { ctx.fillStyle = lvl; ctx.textAlign = 'left'; ctx.fillText(nm, xa + 3, Y(p) - 6); } }); }
     ctx.restore(); });
@@ -181,7 +191,8 @@ cv.addEventListener('wheel', e => { e.preventDefault(); const p = posOf(e); zoom
 $('zin').onclick = () => zoom(1 / 1.4); $('zout').onclick = () => zoom(1.4); $('zreset').onclick = () => { st.v0 = 0; st.v1 = bars.length; draw(); };
 $('win').onchange = e => { st.w = +e.target.value; loadWindow(); };
 function seg(id, key) { $(id).querySelectorAll('button').forEach(b => b.onclick = () => { st[key] = b.dataset.v; $(id).querySelectorAll('button').forEach(x => x.setAttribute('aria-pressed', x === b)); st.sel = null; refresh(); }); }
-seg('zseg', 'z'); seg('sseg', 's');
+seg('zseg', 'z'); seg('sseg', 's'); seg('sideseg', 'side'); seg('resseg', 'res');
+$('why').onchange = e => { st.why = e.target.value; st.sel = null; refresh(); };
 $('mseg').querySelectorAll('button').forEach(b => b.onclick = () => { st.mode = b.dataset.v; $('mseg').querySelectorAll('button').forEach(x => x.setAttribute('aria-pressed', x === b)); setMode(); });
 [['showA', 'A'], ['showB', 'B'], ['showL', 'L']].forEach(([id, k]) => $(id).onchange = e => { st[k] = e.target.checked; st.sel = null; refresh(); });
 window.addEventListener('resize', draw);

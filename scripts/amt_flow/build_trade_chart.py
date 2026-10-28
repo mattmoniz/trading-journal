@@ -1,4 +1,4 @@
-"""Builds the multi-mode trade chart page: order-flow setups (A/B) and exhaustion reversals (E2/E1), explore sessions only.
+"""Builds the multi-mode trade chart page: order-flow setups (A/B), exhaustion reversals (E2/E1) and the revised Sweep and Absorb (scale-out), explore sessions only.
 Usage: ../../venv/bin/python build_trade_chart.py <out_html>   (replaces build_chart_data.py)"""
 import sys, json, pathlib, importlib.util
 import numpy as np, pandas as pd
@@ -67,8 +67,22 @@ def ex_data(raw, ex, ks):
         wins.append(dict(label=f"{pd.Timestamp(dates[i]).strftime('%b %d')} to {pd.Timestamp(dates[i + 4]).strftime('%b %d, %Y')}", ntr=sum(1 for r in trades['ex|E2'] if r[0] in dates[i:i + 5]), days=[day_payload(exd[d], raw, ks) for d in dates[i:i + 5]]))
     return dict(windows=wins, trades=trades, summary=summary)
 
+def sw_data(raw, ex, ks):
+    """Revised Sweep and Absorb (scripts/amt_sweep, 2 contracts: half off at +10, stop to breakeven, runner to VWAP or +25). The exit marker is the AVERAGE exit of the two contracts (entry + dir * pts); target = the first leg at +10."""
+    SW = H.parent / 'amt_sweep'; T1 = 10.0; trades, summary, counts = {}, {}, {}
+    for key, fn in (('S', 'trades_signal_explore.csv'), ('C', 'trades_control_explore.csv')):
+        df = pd.read_csv(SW / fn); p = df.net.to_numpy(); w = p[p > 0]; l = p[p <= 0]
+        summary['sw|' + key] = dict(n=int(len(df)), wr=round(100 * float(np.mean(p > 0)), 1), pf=round(float(w.sum() / abs(l.sum())), 2), mean=round(float(p.mean()), 2))
+        trades['sw|' + key] = [[r.date, int(r.dir), int(r.ei), int(r.xi), r2(r.entry), r2(r.entry + r.dir * r.pts), r.reason, r2(r.net), r2(r.pts), r2(r.entry - r.dir * r.stop_dist), r2(r.entry + r.dir * T1), int(r.sig)] for r in df.itertuples()]
+        if key == 'S':
+            for d, c in df.groupby('date').size().items(): counts[d] = int(c)
+    dates = [s['d'] for s in ex]; by = {s['d']: s for s in ex}; wins = []
+    for sc, i in pick_windows(dates, counts):
+        wins.append(dict(label=f"{pd.Timestamp(dates[i]).strftime('%b %d')} to {pd.Timestamp(dates[i + 4]).strftime('%b %d, %Y')}", ntr=sc, days=[day_payload(by[d], raw, ks) for d in dates[i:i + 5]]))
+    return dict(windows=wins, trades=trades, summary=summary)
+
 def main(out):
-    raw, ex, ks = load_ctx(); data = dict(of=of_data(raw, ex, ks), ex=ex_data(raw, ex, ks))
+    raw, ex, ks = load_ctx(); data = dict(of=of_data(raw, ex, ks), ex=ex_data(raw, ex, ks), sw=sw_data(raw, ex, ks))
     html = (H / 'trade_chart_template.html').read_text().replace('/*DATA*/null', json.dumps(data, separators=(',', ':')))
     pathlib.Path(out).write_text(html); print(f'wrote {out} ({len(html) / 1e6:.2f} MB); of windows {len(data["of"]["windows"])}, ex windows {[w["label"] + " (" + str(w["ntr"]) + ")" for w in data["ex"]["windows"]]}')
 
