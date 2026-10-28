@@ -10879,3 +10879,163 @@ not just in test fixtures.
 
 - **Standing user-stated facts from this session:** shadow is a pipeline to live; the declustered lens is the primary one; DeepSeek peak pricing is 21:00-24:00 and 02:00-06:00 ET (off-peak 00:00-02:00 and 06:00-21:00, Fri 20:00-Sun 21:00); the user reads setups as IB break + hold + open TPO single prints below and watches velocity live — none of that is tracked in the app, and the single-print magnet effect was NOT supported in 11 months of data (22-36% reached vs 55-67% for a mirror level, n=9/11).
 
+
+---
+## Archive batch: 2026-10-27 (cutoff 2026-10-20, keep last 7 days)
+
+### From "2026-10-19 (day): daily-loss gate no longer dies on an unpriced fill"
+
+- **Root cause (confirmed from the journal + raw message log, not guessed):** `getPriceMultiplier()` cached a 4s-timeout lookup as `null` for the process lifetime. After the roll to `MNQZ26.CME`, the first fill (setup 136064, 23:29 ET 10-18) and every update after it (10 "no price multiplier known" lines through 23:33) stored `avg_fill_price` NULL, so `dllGate.js` had no worst case and refused all entries until a hand repair + restart.
+
+
+
+
+- **Fixed (live, server restarted 07:50 ET, single process, auto-armed on sim):** short retry window + shared in-flight lookup (`priceMultiplier.js`); `fillPriceRepair.js` repairs NULL fill prices from the kept raw message each sweep; the gate prices a missing-entry trade from the order price / setup entry level instead of blocking everything (no stop or no price at all still blocks). `scripts/test_fill_price_gap.mjs` passes; `test_broker_guards.mjs` passes.
+
+
+
+
+- **Remaining caveats:** the estimate uses the limit price as an upper bound on risk, which does not hold for a MARKET entry that slips (setup entry level is used there). The 3 Sim1 rows from 2026-10-06 (ids 31/33/35) were refused by the sanity check, not a multiplier failure, and are outside the 3-day repair window. Not yet independently reviewed — see `OPEN_DECISION dll_gate_price_fix_needs_independent_review_20261019`.
+
+
+
+
+- **Prevention added (same day):** multiplier warm-up for the current and next contract month every 15s; "SIERRA NEEDS YOU" banner kinds `UNPRICED_FILL` and `ENTRIES_BLOCKED_BY_DATA_GAP`. Not yet observed firing for real (no unpriced fill since); the alerts are covered by `scripts/test_fill_price_gap.mjs` part 4 only. Server restarted 07:57 ET, single systemd process, auto-armed on sim.
+
+
+### From "2026-10-19 (day, cont.): the 6:33 PM signal and the "no-reason shadow" rows"
+
+- **6:33 PM Sunday signal (setup 136052) was NOT the daily-loss gate.** Row bar time 18:33, inserted 18:41:34 (8.6 min late), expired 18:42:01. The order sweep only enters rows under 3 min old (`ENTRY_LOOKBACK_MINUTES`), so it could never get an order. Why the row was written late is NOT fully established (journal for that window is gone; bars for 18:25-18:49 exist now but their arrival time is unknown). Facts: `process_log` shows 8 SERVER_SHUTDOWN (SIGTERM) events between 17:49 and 18:49 that night (the stranded-short session restarting the server repeatedly), one at 18:40:33; the row was inserted at 18:41:34, on the first poll after that restart. The old process (up since 18:04) did not insert it in the ~7 min after the bar time, which is unexplained (candidates: late Sierra bar export at the Sunday reopen, or the known stale-live-bars issue in the `price_bars_primary` hard rule). `ORDER_LIFECYCLE ... AUTO_RESOLVED MISSING_ORDER` in `scratch/server_errors.jsonl` (18:42) did record that no order ever existed. 4 of ~44 POC rotation rows in 14 days were >3 min late.
+
+
+
+
+- **"No-reason" SHADOW rows = a missing label.** See `OPEN_DECISION shadow_no_reason_rows_leak_to_live_20261019` (updated) for the cause breakdown; the shadowCandidates insert never writes `suppression_reason`, the early-touch insert is hardwired SHADOW. Fix shipped in code (`SHADOW_CAUSE` rows in `gated_candidates`) but the server restart is pending because a real position (setup 136090) was open. `momentumChaseDetector.js` is hardwired SHADOW with no promotion path (new decision `momentum_chase_hardwired_shadow_no_promotion_path_20261019`).
+
+
+
+
+- **Gate-cost test (history only, `scripts/analyze_shadow_gate_cost_20261019.mjs`, `RESEARCH_CLAIM shadow_gate_cost_by_reason_20261019`, PROVISIONAL):** no gate is shown to cost money. Post-10-12 (primaries, REAL_TRADE_FILTER, POC separate): OPPOSITE_DIRECTION_OPEN blocked N=37 at -$15.21/trade (CI -$54..+$2.5; the earlier 5 weeks were +$2.01, N=102); ROTATION_DIRECTION_CONFLICT blocked N=29 at +$9.93 (CI -$58..+$75, 3 days, not decisive); SAME_TYPE_REFIRE N=16 +$13.90 (earlier window -$21.40, N=14: sign flips); STOP_NEVER_SWEPT N=22 -$42.55 (CI excludes zero, the gate is right). The unlabeled SHADOW bucket was +$6.35/trade over N=101 on 5 days that week, but -$5.99/trade over N=419 on 25 days in the previous 5 weeks (sum -$2,509). So the one-week "+$1,994 shadow shorts" is not a repeating pattern. The live baseline for the same week is thin (N=19, 4 days), so deltas vs live are weak. Caveat: a gate-blocked trade is not independent of the position that blocked it, so this is a guide, not collectable P&L.
+
+
+
+
+- **Follow-ups 2-4 done (2026-10-19 08:39 restart, single systemd process, auto-armed on sim):** (2) `/api/setups/today` now returns `shadow_cause` for unlabeled SHADOW rows (batched query, ~1 ms, endpoint 0.16 s) and `quick-check.html`'s Shadow tab maps it to plain English (`blockedReasonText`/`abbrevReasonCode`); rows from before 2026-10-19 08:13 have none and keep the generic text. (3) `scripts/analyze_momentum_chase_shadow_record_20261019.mjs` is now in `run_daily_calibration.sh` and auto-flags `momentum_chase_n20_promotion_review_20261019` once the live SHADOW record reaches N>=20 (now N=14). (4) The last unexplained row, `RSI_DIV_BULLISH` id 136051, is explained: it was that type's first-ever fire (15:57 on 10-16) and its first SETUP_STATUS row was created at 20:22 that night, so `isLiveEligible()` treated it as an unknown type (fail-closed by design). All 6 formerly unexplained rows are accounted for. (1) Verifying SHADOW_CAUSE rows on a real RTH session is still pending (no SHADOW rows existed before 08:37); a background watcher prints the result when 5 cause rows exist.
+
+
+
+
+### From "2026-10-19 (day, cont.): review of the gate fix, catch-up, logs, late-signal note, POC exit shakeout"
+
+- **DeepSeek review of the daily-loss gate fix** (`scratch/deepseek_response_dll_gate_price_fix_review_20261019.md`): 7 findings, all verified against the code, all fixed (rolling-p95 slippage allowance in the unknown-trade worst case, `NULLIF(price1,0)` for escalated MARKET rows, 5% magnitude guard in the repair, shared banner text constant, qty floor, LastFillPrice fallback, failedAt stamped at request time). Side find: the market-escalation UPDATE set `filled_quantity = NULL` on a NOT NULL column and could never run (proved in a rolled-back txn) -> now 0; that one-line change was not separately reviewed.
+
+
+
+
+- **Logs**: db.js logs only queries >=500 ms; DTC type 600 (ACCOUNT_BALANCE_UPDATE, confirmed in the local DTCProtocol.h) is handled; ~600 -> far fewer lines/min. **Too-old signals** now always leave a `SIERRA_ENTRY_SKIP` note (once per row, also for rows that already expired). `getFullDayATR` bounded + cached (31 dates byte-identical).
+
+
+
+
+- **POC exit shakeout test** (`scripts/backtest_poc_exit_shakeout_trend_state_20261019.mjs`, `RESEARCH_CLAIM poc_exit_shakeout_trend_state_20261019`): NO state-conditional disable supported (all DiD CIs cross zero, halves flip sign, permutation p>0.3). Incidental, NOT acted on: removing the rotation-flip close beat keeping it by ~$7.91/trade overall (CI $1.03..$16.43, both halves positive; Globex +$9.12 CI $0.09..$19.69, RTH +$5.05 CI crosses zero); the breakeven snap helps (-$4.21 when removed, CI -$6.74..-$1.65). Per the 2026-10-11/12 confound rule the flip-close is judged on forward data, not reverted: see `OPEN_DECISION poc_flip_close_marginal_value_review_20261019`.
+
+
+
+
+- **Harness validated, and the shipped BE-hold headline restated:** the shakeout script reproduces `poc_rotation_breakeven_hold_100pt_stop_20261008` (day-weighted +$37.40 vs claimed +$39.13), but the per-trade mean is +$12.32, CI [$5.20,$20.39] -- still positive, about 3x smaller than the headline (`RESEARCH_CLAIM poc_be_hold_claim_per_trade_vs_dayweighted_20261019`).
+
+
+
+
+- **Chronic detection-poll timeouts found (2026-10-19, HIGH)**: the 15 s poll timed out 49-156 times per RTH day for at least two weeks (92 outages / ~55 min on 10-16). Caches + a query profiler shipped today; objective metric is the `SETUP_DETECTION_POLL` outage count in `process_log` (baseline 49-156/day). See `OPEN_DECISION detection_poll_chronic_timeouts_rth_20261019`.
+
+
+### From "2026-10-19 (afternoon): speed round, Monday gate, order latency"
+
+- **Result of round 1 (steady state, after warm-up):** DB time 113% -> 22% of wall clock, detection pass avg 9.8 s -> 2.6 s, 0 poll outages in 30 min (baseline 49-156/day). Remaining top queries were 60 s-TTL cache misses (fixed with `DAY_CACHE_TTL`).
+
+
+
+
+- **Shipped after that:** JIT off per connection; 15 s micro-cache on market/pulse + live-session-context; event-loop reading in the profiler; server poller uses `?fresh=1` (the 20 s cache was swallowing every 2nd poll => real passes ~30 s); end-of-pass order sweep; reconciliation confirm-then-halt + 45 s halt recheck (false "unknown order" halt 10:32-10:43 cost >=5 entries); `getFullDayATR`/`getRollingATR`/volume baseline/prior-day range/prior-5 brackets/IB-OR values cached; raw-table window anchors (10x). Monday gate removed (user decision).
+
+
+
+
+- **Order-latency baseline BEFORE the end-of-pass sweep + fresh polls:** row -> ENTRY order median 25.5 s / p90 34.4 s / max 63.5 s (9:30-10:30, n=9); 35.8 s / 60.7 s / 64.0 s (10:30-12:05, n=12). Re-measure after the deploy with `node scratch/...q66` equivalent (`order_placements.created_at - active_setups.created_at` for purpose ENTRY).
+
+
+
+
+- **Open:** compare steady state again after the restart; consider `random_page_cost = 1.1` (volume baseline 170 -> 121 ms in a test) one change at a time; persist day caches across restarts (cold start still costs ~60 s of DB on JIT-off? re-measure first).
+
+
+
+
+- **Post-deploy measurement (restart 12:23, 14 min steady state; `?fresh=1` polls + end-of-pass sweep + JIT off + caches):** row -> ENTRY order delay median 0.8 s, p90 1.0 s, max 1.1 s (n=2 only, 12:25-13:00 was quiet -- thin, re-measure over a full active session; baseline was median 25-36 s, p90 34-61 s, max 64 s). Real passes now run every poll (33 passes / 517 s), avg 2.6 s incl. the end-of-pass sweep; DB time 23% of wall clock; 0 poll outages since 12:25; event loop NOT blocked (mean 20.6 ms = the 20 ms timer resolution, p99 20.9 ms, one 288 ms spike) => remaining time is database wait, not CPU. Top remaining per-pass queries (each ~130-390 ms): rth_low/rth_high, AVG(volume), recent-close series, ib_high/ib_low -- diminishing returns; first poll after a restart still takes ~46 s (cache fill).
+
+
+
+
+### From "2026-10-19 evening: derived tables extended to 3.5 years, level-reaction study, roster replay NEXT"
+
+- **Level-reaction study (user: "does price react at levels, should we fire/time differently") -> NO.** `scripts/study_level_reaction_timing_20261019.mjs`; real vs shifted-placebo levels, 12 families: 60-min difference -0.011..+0.010 ATR, CIs cross zero (IB_today +0.010 vanishes at proximity 0.05); delaying entry 5/15/30 min no help; overshoot past a level median 0.01-0.04 ATR. Independently re-derived by Gemini 3.8 Flash(High) (`scratch/gemini_level_reaction.mjs`, report `reports/gemini_level_reaction_2026-10-19.md`), agrees within ~0.005 ATR. `RESEARCH_CLAIM named_levels_no_reaction_beyond_placebo_20261019` (CONFIRMED). Caveats: levels so dense an isolated-level contrast is untestable; this is an unconditional touch average, not the selected roster with stops/targets.
+
+
+
+- **Gemini note:** its settings model is now `Gemini 3.8 Flash (High)`; `invoke_gemini.sh` refuses non-Pro unless `ALLOW_FLASH=1`. The user chose Flash(High) 2026-10-19; it completed a spec-driven, read-only re-derivation fine (response file stays empty until the run ends -- the wrapper captures stdout, so empty mid-run is normal; check `scratch/gemini_*.mjs` for progress). Old staged request preserved at `scratch/claude_request_20261013_poc_timing_preserved.md`.
+
+
+
+- **NEXT (user asked for a clear-context first): roster-wide 3.5-year replay.** Non-writing script importing `loadData/detectLevelFades/resolve/aggregate` etc. from `scripts/backtest_unified.js` (never its `main()`, which overwrites UNIFIED_BACKTEST/SYSTEM_BACKTEST rows live fallbacks read); skip roll-mismatch days; report per setup N/days/per-trade EV/day-blocked CI/by-year and half splits, family-pooled with multiple-testing control, vs live SETUP_STATUS; only replayable families (level fades with level_prices; NOT A/C/TRT/day-type). Gemini can run long loops, Claude audits.
+
+
+
+- **Queued, awaiting user "go":** force-SHADOW counter-gate for WITH-prior-session MAJOR_PIVOT RTH breaks; "Live means fired" design A; read/audit `scratch/deepseek_response_trendshift_gates_20261019.md`; CLAUDE.md documentation pass (rotation gate disabled 10-14, flip-close disabled 10-19, `server/config/rotationGateExemptions.js`).
+
+
+
+- **Live watch:** POC_ROTATION_JOIN_SHORT id 137375 (fired 19:58 ET, 1 MNQ sold 29748.25, ~+70pt at 20:35, stop 100pt above, breakeven snap due ~20:58) is the first real-money run of the 100pt-stop/breakeven-hold exit shipped without a shadow period; report POC_ROTATION separately from the roster.
+
+
+
+- **Roster replay run mode (user directive 2026-10-19):** Gemini and Claude build and run the replay SIMULTANEOUSLY and independently (Gemini gets the spec only -- definitions, population, skip rules -- never Claude's script; Claude writes its own). Compare per-setup numbers when both finish; trace any material disagreement before reporting. Dispatch Gemini first (`ALLOW_FLASH=1 ./scripts/invoke_gemini.sh 30m`, run_in_background, no `&`), then build Claude's version while it runs.
+
+
+
+- **Two new research ideas from the user, 2026-10-19 (both flagged as OPEN_DECISIONs, run with the roster replay):** `value_traversal_edge_to_edge_target_guidance_20261019` (price broke PD_VAH and went edge-to-edge to PD_VAL: do value edges work as setups vs target guidance?) and `early_globex_rotation_direction_session_bias_20261019` (a 65pt rotation in the first 10 min of Globex: gate the rest of Globex/next RTH to that direction?). Full test designs are in the decision texts (`node scripts/flag_decision.mjs --list`).
+
+
+### From "2026-10-19 night: roster replay + value traversal + early-Globex rotation DONE (Claude and Gemini in parallel, converged)"
+
+- **Roster replay (Task A):** `scripts/study_roster_replay_20261019.mjs` (Gemini: `scratch/gemini_roster_replay.mjs`, report `reports/gemini_roster_replay_2026-10-19.md`). 127 live RTH level-fade types, 3.5y, today's OPTIMAL_STOP stop/target, first touch per level per day: N=22,421, -$4.01/trade (CI -5.7..-2.3), flipped-direction placebo +$0.21; 0 of 122 types significantly positive, 15 significantly negative; per-type pre/post correlation -0.03. Gemini: N=22,408, -$4.04. `RESEARCH_CLAIM roster_replay_3p5yr_level_fades_negative_20261019` (CONFIRMED). Caveat: touch-level, no one-position/cluster dedupe. Own-script bug found by comparing with Gemini: first version dropped half-day sessions (<300 bars) and mis-gated the roll check after them; fixed to >60 bars, results then matched.
+
+
+
+- **Value traversal (Task B):** NARROW test only (80%-rule re-entry into the prior-day value area; far-edge reach 40.2% vs 37.5% shifted-placebo, CI crosses zero; reach rate is set by band width/ATR). `RESEARCH_CLAIM value_area_edge_to_edge_no_edge_vs_placebo_20261019` (PROVISIONAL, lists what is untested). The user's live example turned out to be today's RTH session against that session's own finished value area (VAH 29848.25 / VAL 29709; re-entered 12:45, low 29704.75 at 14:35) -- a hindsight value area, and tonight's Globex POC rotation short ran straight through the VAL. User then dropped the thread ("price kept moving"). `OPEN_DECISION value_traversal_setup_vs_guidance_untested_parts_20261019` stays open at low urgency; untested: opposite-edge-as-target guidance on roster/POC rotation trades, developing (not finished) value area, Globex.
+
+
+
+- **Early-Globex rotation (Task C):** first 65pt leg within 10 min of 18:00: +0.12 ATR in leg direction to 09:29 vs +0.04 for later first legs (gap CI crosses zero), UP-only (overnight drift), next RTH wrong-signed. `RESEARCH_CLAIM early_globex_rotation_session_bias_not_supported_20261019`. Decision `early_globex_rotation_direction_session_bias_20261019` resolved negative. Permutation p differs between versions only because mine is one-sided (0.018) and Gemini's two-sided (0.0725).
+
+
+
+- **quick-check.html fix:** the POC Gate tab ignored session scoping (still listed finished RTH trades after the 6PM roll); `getPocGateRows()` now uses `inCurrentSession()` like the Timeline and Shadow tabs.
+
+
+### From "2026-10-19 late: rotation_events table built (user: "watchers at every rotation high/low that record what they see")"
+
+- Built `server/services/rotationEvents.js` (pure builder over `detectRotationLegs`), table `rotation_events` and `scripts/backfill_rotation_events_20261019.mjs` (idempotent; second run inserted 0): 15,342 pivots, 2023-03-06..2026-10-16 (RTH 9,908 / Globex 5,434; median 5 pivots per session; 78 roll-gap sessions flagged `roll_gap_day`). Hand-traced Friday 2026-10-16 RTH: pivot prices and leg sizes match the bars. `server/schema.sql` regenerated, ARCHITECTURE.md service row added.
+
+
+
+- **Not done (flagged: `rotation_events_mining_digest_and_live_recorder_20261019`):** nightly incremental step + live recorder, a weekly mining digest with drift/placebo control, linking real trades (POC rotation join etc.), multi-scale thresholds.
+
+
+
+- **Pause-and-go (user chart story: stair-step trend, stuffed pause at stacked levels, continuation):** `scripts/study_pause_and_go_20261019.mjs` first pass: RTH continuation after a pause-break +0.06 ATR at 240m vs +0.02 for any bar in a leg; Globex nothing; later pauses (2nd/3rd) +0.19/+0.27 at 240m N=198/115 (a lead, unchecked for day clustering); the level-stacking contrast is UNTESTABLE as defined (98% of pauses sit near some level). Gemini's independent version (`scratch/gemini_pause_and_go.mjs`) was still running -- compare before recording a claim.
+
+
+
+- **Agreed plan with the user:** (1) rotation event table (done), (2) POC rotation join review: which legs/pullbacks pay, what is near the join, breakeven-hold exit vs old exit, (3) join at other anchors (VWAP, value area, level reclaim), (4) ML only as a ranker over the event table, judged against a simple rule split out-of-sample.
+
