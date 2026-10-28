@@ -2,6 +2,7 @@
 // Data: amt_tell_trades / amt_tell_sessions / amt_tell_alarms (scripts/migrate_amt_tell_live_20261028.mjs), written by scripts/amt_tell_live/sidecar.py. Timestamps are naive ET and are returned as
 // text, never parsed with JS Date (CLAUDE.md naive-timestamp rule). Per-trade means are sum/N, not day-weighted.
 import { query } from '../db.js';
+import { cacheGet, cacheSet } from '../lib/cache.js';
 
 const BOOKS = ['V1', 'V3', 'V1P'];
 
@@ -20,6 +21,16 @@ function summarize(rows) {
   return out;
 }
 
+/** 1-minute NQ bars of the session (18:00 ET the day before through 17:00 ET of the date) for the Tell chart. Bounded on BOTH sides (price_bars_primary is a view). Cached: 60 s for a live session, 6 h for a finished one. */
+async function sessionBars(date) {
+  if (!date) return [];
+  const key = `amtTell:bars:${date}`, hit = cacheGet(key); if (hit) return hit;
+  const r = await query(`SELECT to_char(ts, 'YYYY-MM-DD HH24:MI') AS t, close::float AS c, high::float AS h, low::float AS l FROM price_bars_primary
+                         WHERE symbol = 'NQ' AND ts >= ($1::date - 1) + time '18:00' AND ts < $1::date + time '17:00' ORDER BY ts`, [date]);
+  const live = date >= new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+  return cacheSet(key, r.rows, live ? 60_000 : 6 * 3600_000);
+}
+
 export async function getAmtTellSummary(date) {
   const dates = (await query(`SELECT d FROM (SELECT trade_date::text AS d FROM amt_tell_trades UNION SELECT trade_date::text FROM amt_tell_sessions) x ORDER BY d DESC LIMIT 25`)).rows.map((r) => r.d);
   const useDate = date && /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : (dates[0] || null);
@@ -36,5 +47,5 @@ export async function getAmtTellSummary(date) {
   const alarms = (await query(`SELECT at::text AS at, kind, detail FROM amt_tell_alarms WHERE at > NOW() - interval '48 hours' ORDER BY at DESC LIMIT 12`)).rows;
   const byRule = {};
   for (const rule of ['split', 'whole']) byRule[rule] = summarize(trades.filter((r) => r.bar_rule === rule));
-  return { generatedAt: new Date().toISOString(), date: useDate, dates, sessions, summary: byRule, trades, alarms };
+  return { generatedAt: new Date().toISOString(), date: useDate, dates, sessions, summary: byRule, trades, alarms, bars: await sessionBars(useDate) };
 }

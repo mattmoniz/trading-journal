@@ -3919,6 +3919,45 @@ function tellBookBlock(title, sub, rows, sm, boxId) {
     '<div style="font-size:12px;color:var(--dim);margin-bottom:4px">' + sub + '</div><div style="font-size:13px;margin-bottom:6px">' + stats + '</div>' +
     (sorted.length ? sorted.map(tellTradeRow).join('') : '<div class="loading">Not enough resolved trades yet</div>') + '</div>';
 }
+// Session chart for the Tell panel (2026-10-28, user request: "see the charts with these fires"): 1-minute NQ closes for the selected session, 09:00-16:00 ET, with every V1 (solid) and 09:30-10:00 V1P (hollow) fire of the
+// selected bar reading: triangle = entry (up long / down short), dashed line = the stop until the exit, dot = exit (green win / red loss), thin line entry -> exit. The 09:30-10:00 band is shaded; 10:00 and 14:30 are the order window.
+function renderTellChart(d) {
+  const canvas = $('tell-chart'); if (!canvas) return;
+  const dpr = window.devicePixelRatio || 1, w = canvas.clientWidth || canvas.parentElement.clientWidth, h = 260;
+  canvas.width = w * dpr; canvas.height = h * dpr; const ctx = canvas.getContext('2d'); ctx.scale(dpr, dpr); ctx.clearRect(0, 0, w, h);
+  const day = d.date, M0 = 540, M1 = 960;                      // 09:00 .. 16:00
+  const minOf = (ts) => (String(ts).slice(0, 10) === day) ? Number(String(ts).slice(11, 13)) * 60 + Number(String(ts).slice(14, 16)) + (String(ts).length >= 19 ? Number(String(ts).slice(17, 19)) / 60 : 0) : null;
+  const bars = (d.bars || []).map(b => ({ m: minOf(b.t), c: b.c, h: b.h, l: b.l })).filter(b => b.m != null && b.m >= M0 && b.m <= M1);
+  if (bars.length < 2) { ctx.fillStyle = 'rgba(148,163,184,0.6)'; ctx.font = '12px sans-serif'; ctx.textAlign = 'center'; ctx.fillText('No price bars for this session window yet', w / 2, h / 2); return; }
+  const trs = (d.trades || []).filter(t => t.bar_rule === tellRule && (t.book === 'V1' || t.book === 'V1P') && minOf(t.entry_at) != null);
+  const lastM = bars[bars.length - 1].m;
+  const exitOf = (t) => t.status === 'CLOSED' ? { m: minOf(t.exit_bar_start), p: t.entry_price + t.direction * t.exit_points } : null;
+  let lo = Math.min(...bars.map(b => b.l)), hi = Math.max(...bars.map(b => b.h));
+  for (const t of trs) { lo = Math.min(lo, t.stop_price); hi = Math.max(hi, t.stop_price); }
+  const padL = 46, padR = 8, padT = 8, padB = 20, pw = w - padL - padR, ph = h - padT - padB, span = (hi - lo) || 1;
+  const X = (m) => padL + ((Math.max(M0, Math.min(M1, m)) - M0) / (M1 - M0)) * pw, Y = (p) => padT + (1 - (p - lo) / span) * ph;
+  ctx.font = '10px sans-serif'; ctx.textBaseline = 'middle';
+  // shaded 09:30-10:00 watch band + window lines
+  ctx.fillStyle = 'rgba(148,163,184,0.10)'; ctx.fillRect(X(570), padT, X(600) - X(570), ph);
+  ctx.strokeStyle = 'rgba(51,65,85,0.5)'; ctx.fillStyle = 'rgba(148,163,184,0.8)'; ctx.textAlign = 'right';
+  for (let i = 0; i <= 4; i++) { const p = lo + (span * i) / 4, y = Y(p); ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(w - padR, y); ctx.stroke(); ctx.fillText(Math.round(p).toLocaleString('en-US'), padL - 4, y); }
+  ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+  for (const m of [540, 600, 660, 720, 780, 840, 900, 960]) { const x = X(m); ctx.beginPath(); ctx.moveTo(x, padT); ctx.lineTo(x, padT + ph); ctx.stroke(); ctx.fillText(String(Math.floor(m / 60)).padStart(2, '0') + ':' + String(m % 60).padStart(2, '0'), x, padT + ph + 4); }
+  ctx.setLineDash([3, 3]); ctx.strokeStyle = 'rgba(245,158,11,0.55)';
+  for (const m of [600, 870]) { const x = X(m); ctx.beginPath(); ctx.moveTo(x, padT); ctx.lineTo(x, padT + ph); ctx.stroke(); }
+  ctx.setLineDash([]);
+  // price line
+  ctx.strokeStyle = 'rgba(226,232,240,0.85)'; ctx.lineWidth = 1.2; ctx.beginPath(); bars.forEach((b, i) => { const x = X(b.m), y = Y(b.c); if (i) ctx.lineTo(x, y); else ctx.moveTo(x, y); }); ctx.stroke(); ctx.lineWidth = 1;
+  // fires
+  for (const t of trs) {
+    const long = t.direction === 1, em = minOf(t.entry_at), ex = exitOf(t), xm = ex && ex.m != null ? ex.m : lastM, hollow = t.book === 'V1P';
+    const win = ex ? t.net_dollars > 0 : null, col = ex ? (win ? '#4ade80' : '#f87171') : '#fbbf24', x0 = X(em), y0 = Y(t.entry_price);
+    ctx.setLineDash([4, 3]); ctx.strokeStyle = 'rgba(251,191,36,0.75)'; ctx.beginPath(); ctx.moveTo(x0, Y(t.stop_price)); ctx.lineTo(X(xm), Y(t.stop_price)); ctx.stroke(); ctx.setLineDash([]);
+    if (ex && ex.m != null) { ctx.strokeStyle = col; ctx.globalAlpha = 0.8; ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(X(ex.m), Y(ex.p)); ctx.stroke(); ctx.globalAlpha = 1; ctx.fillStyle = col; ctx.beginPath(); ctx.arc(X(ex.m), Y(ex.p), 3.2, 0, 6.2832); ctx.fill(); }
+    ctx.beginPath(); ctx.moveTo(x0, y0 + (long ? -7 : 7)); ctx.lineTo(x0 - 5, y0 + (long ? 3 : -3)); ctx.lineTo(x0 + 5, y0 + (long ? 3 : -3)); ctx.closePath();
+    if (hollow) { ctx.strokeStyle = long ? '#4ade80' : '#f87171'; ctx.lineWidth = 1.6; ctx.stroke(); ctx.lineWidth = 1; } else { ctx.fillStyle = long ? '#4ade80' : '#f87171'; ctx.fill(); }
+  }
+}
 function renderTell(d, err) {
   const el = $('tell-body'); if (!el) return;
   if (!d) { el.innerHTML = '<div style="color:#e0a030;font-size:13px">Tell data could not be loaded (' + monEsc(err || 'unknown') + '). Will retry.</div>'; return; }
@@ -3936,6 +3975,7 @@ function renderTell(d, err) {
     + '<div style="font-size:11.5px;color:var(--dim);margin-top:6px">Two readings of how Sierra closes a 500-contract bar (a trade that overflows is split into the next bar, or kept whole): which one matches your chart is pending your bar export. The research numbers are the split reading. Only the V1 book (split reading) places orders, on the simulated account; V3, the 09:30–10:00 book and the whole reading are logged only.</div>');
   // date picker
   h += '<div style="margin:0 0 10px;font-size:13px">Session <select id="tell-date" style="background:var(--card);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:3px 6px">' + (d.dates || []).map(x => '<option value="' + monEsc(x) + '"' + (x === d.date ? ' selected' : '') + '>' + monEsc(x) + '</option>').join('') + '</select></div>';
+  h += '<canvas id="tell-chart" style="width:100%;height:260px;display:block"></canvas><div style="font-size:11px;color:var(--dim);margin:4px 0 14px">▲▼ entry (long/short; hollow = 09:30–10:00 watch book) · dashed amber = stop · dot = exit (green win, red loss) · shaded 09:30–10:00 · dotted lines = 10:00 and 14:30 order window · 1-minute closes, ' + monEsc(tellRule) + ' reading</div>';
   const rows = (d.trades || []).filter(r => r.bar_rule === tellRule), sm = (d.summary || {})[tellRule] || {};
   h += tellBookBlock('V1 — tell-fade exit', 'Stop behind the 2nd node; after the range breaks, exit when the tell fades (the pre-registered primary).', rows.filter(r => r.book === 'V1'), sm.V1, 'v1');
   h += tellBookBlock('V3 — hold to the close', 'Same entries and stops; after the break, hold until the 15:55 flatten (chosen after seeing the research results).', rows.filter(r => r.book === 'V3'), sm.V3, 'v3');
@@ -3944,6 +3984,7 @@ function renderTell(d, err) {
   h += '<div style="font-size:11.5px;color:var(--dim)">Updated ' + monEsc(d.generatedAt) + '. Tap a row for the five conditions. Research basis: explore data only, V1 +1.93/trade (CI -3.44..+7.62), V3 +7.29 (CI -2.19..+17.30) — not proven.</div>';
   el.innerHTML = h;
   renderToggle('tell-rule-toggle', [['split', 'Split (research)'], ['whole', 'Whole']], tellRule, (v) => { tellRule = v; renderTell(tellLast); });
+  renderTellChart(d);
   const sel = $('tell-date'); if (sel) sel.onchange = () => { tellDate = sel.value; loadTell(true); };
 }
 async function loadTell(force) {
