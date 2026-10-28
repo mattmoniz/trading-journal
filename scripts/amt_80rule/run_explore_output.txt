@@ -1,0 +1,56 @@
+Eligible sessions 869 (explore 529, hold-out 340 SEALED, not touched). Explore 2023-03-10..2025-05-16; VA widths: median 106, share < 40 pts 2.6%
+
+=== BASELINE (explore) ===
+  baseline, $2 RT commission: N=603 WR trade 25.9% (leg A 25.9%, runner 14.1%) PF 0.83 mean $-6.86/trade (-0.71 pts/contract before commission) avgW $134.00 avgL $-56.01 maxDD $4225 total $-4134 | day-blocked 95% CI of mean $ [-15.77, 3.16]
+  baseline, spec $4.50 RT commission (sensitivity): N=603 WR trade 25.9% (leg A 25.9%, runner 14.1%) PF 0.74 mean $-11.86/trade (-0.71 pts/contract before commission) avgW $129.00 avgL $-61.01 maxDD $7106 total $-7150
+  exits (leg A / leg B): STOP/STOP 319, STRUCT/STRUCT 128, T1/STOP 106, T1/T2 44, EOD/EOD 4, T1/STOP_GAP 1, T1/EOD 1
+  T1 filled on 152 of 603 trades; trades by direction: long 286 short 317
+
+=== PHASE 1 DIAGNOSTICS (baseline trade log, explore) ===
+  1. losers N=447: MFE >= 6 pts 51.9%, in [6,10) 12.1%, >= 10 39.8%; median MFE 6.2; MAE of all trades median 13.8, p90 15.0
+     stop-type exits 447: price later traded through pdPOC before 15:55 on 232 (52%) -> stopped then rotated
+  2. 09:35-11:00: N=382 WR trade 26.4% (leg A 26.4%, runner 13.6%) PF 0.92 mean $-3.37/trade (+0.16 pts/contract before commission) avgW $148.79 avgL $-58.05 maxDD $2398 total $-1286
+  2. 11:00-13:30: N=168 WR trade 26.8% (leg A 26.8%, runner 15.5%) PF 0.71 mean $-11.20/trade (-1.80 pts/contract before commission) avgW $100.18 avgL $-51.95 maxDD $1847 total $-1882
+  2. 13:30-15:15: N=53 WR trade 18.9% (leg A 18.9%, runner 13.2%) PF 0.59 mean $-18.25/trade (-3.56 pts/contract before commission) avgW $136.80 avgL $-54.30 maxDD $1074 total $-967
+  3. open > 30 pts beyond the value area: N=207 WR trade 27.1% (leg A 27.1%, runner 16.4%) PF 0.90 mean $-4.06/trade (-0.02 pts/contract before commission) avgW $129.01 avgL $-53.41 maxDD $1441 total $-840
+  3. open within 30 pts: N=396 WR trade 25.3% (leg A 25.3%, runner 12.9%) PF 0.81 mean $-8.32/trade (-1.08 pts/contract before commission) avgW $136.79 avgL $-57.34 maxDD $3276 total $-3294
+
+=== PLACEBO (explore baseline entries; random direction under one simple fixed geometry) ===
+  stripped geometry, real direction: mean $-9.28/trade | random direction: p5 -18.87  p50 -12.74  p95 -6.63 | trials >= real: 19.5%
+
+=== PHASE 2 MATRIX ===
+  baseline explore PF 0.83 < 1.3: running all 27 configurations on EXPLORE only
+   A1/B1/C1: N=603 PF 0.83 mean $-6.86
+   A1/B1/C2: N=610 PF 0.73 mean $-8.44
+   A1/B1/C3: N=608 PF 0.78 mean $-7.43
+   A1/B2/C1: N=596 PF 0.82 mean $-7.65
+   A1/B2/C2: N=602 PF 0.71 mean $-9.15
+   A1/B2/C3: N=602 PF 0.78 mean $-7.35
+   A1/B3/C1: N=603 PF 0.84 mean $-6.54
+   A1/B3/C2: N=609 PF 0.72 mean $-8.75
+   A1/B3/C3: N=608 PF 0.79 mean $-7.18
+   A2/B1/C1: N=563 PF 0.88 mean $-4.76
+   A2/B1/C2: N=567 PF 0.77 mean $-7.13
+   A2/B1/C3: N=567 PF 0.81 mean $-6.60
+   A2/B2/C1: N=563 PF 0.88 mean $-4.93
+   A2/B2/C2: N=566 PF 0.76 mean $-7.32
+   A2/B2/C3: N=567 PF 0.80 mean $-6.71
+   A2/B3/C1: N=562 PF 0.85 mean $-6.40
+   A2/B3/C2: N=566 PF 0.72 mean $-8.67
+   A2/B3/C3: N=566 PF 0.78 mean $-7.55
+   A3/B1/C1: N=524 PF 0.82 mean $-6.98
+   A3/B1/C2: N=531 PF 0.78 mean $-6.35
+   A3/B1/C3: N=530 PF 0.79 mean $-7.04
+   A3/B2/C1: N=510 PF 0.78 mean $-8.55
+   A3/B2/C2: N=515 PF 0.75 mean $-7.46
+   A3/B2/C3: N=516 PF 0.77 mean $-7.90
+   A3/B3/C1: N=523 PF 0.84 mean $-6.18
+   A3/B3/C2: N=529 PF 0.80 mean $-5.97
+   A3/B3/C3: N=529 PF 0.81 mean $-6.32
+
+  TOP 3 by mean $ per trade (N >= 30), with the baseline for reference:
+  A2/B1/C1: N=563 WR trade 25.9% (leg A 25.9%, runner 15.8%) PF 0.88 mean $-4.76/trade (-0.19 pts/contract before commission) avgW $139.78 avgL $-55.37 maxDD $3273 total $-2680 | day-blocked 95% CI of mean $ [-14.63, 5.46]
+  A2/B2/C1: N=563 WR trade 25.9% (leg A 25.9%, runner 15.8%) PF 0.88 mean $-4.93/trade (-0.23 pts/contract before commission) avgW $139.78 avgL $-55.60 maxDD $3285 total $-2775 | day-blocked 95% CI of mean $ [-14.23, 5.37]
+  A3/B3/C2: N=529 WR trade 42.2% (leg A 42.2%, runner 19.7%) PF 0.80 mean $-5.97/trade (-0.49 pts/contract before commission) avgW $55.25 avgL $-50.59 maxDD $3237 total $-3160 | day-blocked 95% CI of mean $ [-11.04, -0.54]
+  BASELINE A1/B1/C1: N=603 WR trade 25.9% (leg A 25.9%, runner 14.1%) PF 0.83 mean $-6.86/trade (-0.71 pts/contract before commission) avgW $134.00 avgL $-56.01 maxDD $4225 total $-4134 | day-blocked 95% CI of mean $ [-15.77, 3.16]
+  configurations with N>=30: 27 of 27; best-of-27 on the same data is biased upward. Share with positive mean: 0%
