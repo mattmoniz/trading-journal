@@ -102,7 +102,7 @@ def spike_marks(ex):
         if thr is None: continue
         evs = SP.detect(s['a'], stats[si], thr); tot['sessions'] += 1
         marks[s['d']] = [[int(e['dir']), int(e['t']), int(e['u']), r2(e['ext']), r2(e['base']), int(e['strong'])] for e in evs]
-        tot['strong'] += sum(e['strong'] for e in evs); tot['weak'] += sum(not e['strong'] for e in evs)
+        tot['strong'] += int(sum(bool(e['strong']) for e in evs)); tot['weak'] += int(sum(not bool(e['strong']) for e in evs))
     return marks, tot
 
 def bo_data(raw, ex, ks, of, exx):
