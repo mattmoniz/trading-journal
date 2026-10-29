@@ -1,0 +1,39 @@
+/home/mmoniz/trading-journal/scripts/amt_marks_path/run_breakout_state.py:57: RuntimeWarning: All-NaN slice encountered
+  bal = bool(np.mean([p <= ratio[si] for p in prior]) <= 1 / 3); atr = atr20[si]; a = s['a']; medmove = np.nanmedian(np.array([mm[j] for j in range(si - 20, si)]), axis=0); on = ON[s['d']]
+/home/mmoniz/trading-journal/scripts/amt_marks_path/run_breakout_state.py:57: RuntimeWarning: All-NaN slice encountered
+  bal = bool(np.mean([p <= ratio[si] for p in prior]) <= 1 / 3); atr = atr20[si]; a = s['a']; medmove = np.nanmedian(np.array([mm[j] for j in range(si - 20, si)]), axis=0); on = ON[s['d']]
+/home/mmoniz/trading-journal/scripts/amt_marks_path/run_breakout_state.py:57: RuntimeWarning: All-NaN slice encountered
+  bal = bool(np.mean([p <= ratio[si] for p in prior]) <= 1 / 3); atr = atr20[si]; a = s['a']; medmove = np.nanmedian(np.array([mm[j] for j in range(si - 20, si)]), axis=0); on = ON[s['d']]
+
+=== A=30: real events 338 (up 188, down 150), shifted-level placebo events 1545 ===
+  A&P&BAL (counted)      n= 106 days=101 | move +60 -0.002 +120 -0.004 close +0.016 ATR20 | large-capture  47% (placebo  56%) fail<60min  34% (placebo  20%)
+                         minus placebo: +60 -0.027 [-0.069,+0.017] +120 -0.025 [-0.078,+0.028] close -0.035 [-0.099,+0.030] | PRE -0.010 POST -0.137 top5 nan%
+  A&P&NOT-BAL            n= 175 days=169 | move +60 +0.053 +120 +0.030 close +0.051 ATR20 | large-capture  52% (placebo  58%) fail<60min  29% (placebo  21%)
+                         minus placebo: +60 +0.032 [-0.014,+0.080] +120 -0.003 [-0.062,+0.066] close +0.017 [-0.038,+0.077] | PRE -0.017 POST +0.041 top5 161%
+  A&NO-PUSH              n=  57 days= 56 | move +60 -0.071 +120 -0.090 close -0.112 ATR20 | large-capture  12% (placebo  44%) fail<60min  74% (placebo  36%)
+                         minus placebo: +60 -0.053 [-0.113,+0.006] +120 -0.077 [-0.163,+0.010] close -0.108 [-0.238,+0.014] | PRE -0.074 POST -0.090 top5 nan%
+  A&P (all)              n= 281 days=270 | move +60 +0.032 +120 +0.017 close +0.038 ATR20 | large-capture  50% (placebo  58%) fail<60min  31% (placebo  21%)
+                         minus placebo: +60 +0.010 [-0.024,+0.046] +120 -0.011 [-0.054,+0.036] close -0.002 [-0.048,+0.042] | PRE -0.015 POST +0.002 top5 177%
+  COUNTED (3): A&P&BAL minus A&P&NOT-BAL at +120: -0.034 [-0.132,+0.061]
+  UP breaks A&P&BAL n=57 minus placebo +120: -0.043 [-0.104,+0.015]
+  DOWN breaks A&P&BAL n=49 minus placebo +120: -0.000 [-0.090,+0.094]
+
+=== A=15: real events 395 (up 218, down 177), shifted-level placebo events 1627 ===
+  A&P&BAL (counted)      n= 121 days=116 | move +60 +0.002 +120 -0.001 close +0.012 ATR20 | large-capture  40% (placebo  54%) fail<60min  50% (placebo  29%)
+                         minus placebo: +60 -0.037 [-0.079,+0.003] +120 -0.030 [-0.080,+0.020] close -0.062 [-0.123,-0.003] | PRE -0.020 POST -0.095 top5 nan%
+  A&P&NOT-BAL            n= 202 days=191 | move +60 +0.012 +120 +0.007 close +0.034 ATR20 | large-capture  41% (placebo  55%) fail<60min  49% (placebo  31%)
+                         minus placebo: +60 -0.021 [-0.060,+0.019] +120 -0.033 [-0.078,+0.013] close -0.023 [-0.072,+0.028] | PRE -0.048 POST +0.009 top5 454%
+  A&NO-PUSH              n=  72 days= 70 | move +60 -0.059 +120 -0.056 close -0.034 ATR20 | large-capture  24% (placebo  44%) fail<60min  68% (placebo  38%)
+                         minus placebo: +60 -0.041 [-0.101,+0.017] +120 -0.041 [-0.132,+0.052] close -0.021 [-0.130,+0.095] | PRE -0.047 POST -0.020 top5 nan%
+  A&P (all)              n= 323 days=307 | move +60 +0.008 +120 +0.004 close +0.026 ATR20 | large-capture  41% (placebo  55%) fail<60min  49% (placebo  30%)
+                         minus placebo: +60 -0.027 [-0.055,+0.003] +120 -0.032 [-0.066,+0.002] close -0.038 [-0.077,+0.002] | PRE -0.037 POST -0.014 top5 509%
+
+=== A=60: real events 272 (up 151, down 121), shifted-level placebo events 1367 ===
+  A&P&BAL (counted)      n=  34 days= 34 | move +60 -0.052 +120 -0.078 close -0.071 ATR20 | large-capture  47% (placebo  64%) fail<60min   9% (placebo   2%)
+                         minus placebo: +60 -0.078 [-0.157,+0.004] +120 -0.117 [-0.214,-0.017] close -0.132 [-0.262,+0.001] | PRE -0.090 POST -0.228 top5 nan%
+  A&P&NOT-BAL            n=  59 days= 59 | move +60 +0.037 +120 -0.011 close +0.031 ATR20 | large-capture  51% (placebo  61%) fail<60min   7% (placebo   7%)
+                         minus placebo: +60 +0.018 [-0.089,+0.155] +120 -0.015 [-0.147,+0.145] close -0.024 [-0.147,+0.121] | PRE -0.045 POST +0.088 top5 nan%
+  A&NO-PUSH              n= 179 days=177 | move +60 +0.016 +120 +0.005 close +0.029 ATR20 | large-capture  44% (placebo  49%) fail<60min  34% (placebo  24%)
+                         minus placebo: +60 +0.030 [-0.005,+0.064] +120 +0.012 [-0.038,+0.062] close +0.030 [-0.033,+0.090] | PRE +0.033 POST -0.057 top5 511%
+  A&P (all)              n=  93 days= 93 | move +60 +0.004 +120 -0.036 close -0.006 ATR20 | large-capture  49% (placebo  62%) fail<60min   8% (placebo   5%)
+                         minus placebo: +60 -0.017 [-0.090,+0.067] +120 -0.052 [-0.144,+0.059] close -0.063 [-0.151,+0.038] | PRE -0.064 POST -0.008 top5 nan%
