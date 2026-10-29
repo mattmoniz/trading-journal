@@ -8,7 +8,9 @@ for i, (lo, hi) in enumerate([(100, 100.5), (100.5, 101.5), (101.5, 103), (103, 
     a['l'][100 + i] = lo; a['h'][100 + i] = hi; a['c'][100 + i] = hi - 0.1
 a['h'][105], a['l'][105], a['c'][105] = 103.2, 102.9, 103.0; a['h'][106], a['l'][106], a['c'][106] = 100.9, 100.2, 100.4   # comes right back: through the midpoint (about 103.5? no: 103.0 < mid) then the base
 st = S.thrust(a); ev = S.detect(a, st, thr)
-assert any(e['dir'] == -1 and e['t'] == 104 and e['strong'] for e in ev), ev
+assert any(e['dir'] == -1 and e['t'] == 104 and not e['strong'] for e in ev), ev            # closes through the midpoint only at u: weak (Amendment 2)
+a2 = {k: v.copy() for k, v in a.items()}; a2['c'][105] = 101.5; ev2 = S.detect(a2, S.thrust(a2), thr); assert any(e['t'] == 104 and e['strong'] for e in ev2), ev2   # back through 75 percent at u: strong
+a3 = {k: v.copy() for k, v in a.items()}; a3['h'][107] = 108.0; ev3 = S.detect(a3, S.thrust(a3), thr); assert any(e['t'] == 104 for e in ev3), ev3   # a higher high AFTER u no longer deletes the event (no lookahead)
 b = flat()
 for i, (lo, hi) in enumerate([(100, 100.5), (100.5, 101.5), (101.5, 103), (103, 105), (105, 107)]): b['l'][100 + i] = lo; b['h'][100 + i] = hi; b['c'][100 + i] = hi - 0.1
 b['c'][105:] = 106.5; b['h'][105:] = 106.7; b['l'][105:] = 106.3

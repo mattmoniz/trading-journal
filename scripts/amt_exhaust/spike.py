@@ -35,13 +35,12 @@ def detect(a, st, thr, m=M, k=K, ret=RET):
                 ext = l[t]; base = float(np.max(h[t - m + 1:t + 1]))
                 if not ext < np.min(l[max(0, t - m - k + 1):t - m + 1]): continue
                 mid = (ext + base) / 2.0
-            u = None; strong = False
+            u = None; strong = False                                                 # Amendment 2: decided at u from bars up to and including u only (no lookahead)
             for x in range(t + 1, min(N, t + ret + 1)):
                 if np.isnan(c[x]): break
-                if (D == -1 and h[x] > ext) or (D == 1 and l[x] < ext): u = None; break      # the spike kept extending: a later bar is the peak
-                if u is None and ((D == -1 and c[x] < mid) or (D == 1 and c[x] > mid)): u = x
-                if (D == -1 and c[x] <= ext - STRONG_FRAC * (ext - base)) or (D == 1 and c[x] >= ext + STRONG_FRAC * (base - ext)): strong = True
-                if u is not None and x >= t + ret: break
+                if (D == -1 and h[x] > ext) or (D == 1 and l[x] < ext): break          # the spike kept extending before the return: a later bar is the peak
+                if (D == -1 and c[x] < mid) or (D == 1 and c[x] > mid):
+                    u = x; strong = (D == -1 and c[x] <= ext - STRONG_FRAC * (ext - base)) or (D == 1 and c[x] >= ext + STRONG_FRAC * (base - ext)); break
             if u is None: continue
             out.append(dict(dir=D, t=t, u=u, ext=float(ext), base=base, strong=strong, size=float(size))); last[D] = t
     return out

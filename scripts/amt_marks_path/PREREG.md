@@ -23,3 +23,6 @@ INSIDE_ABS: a same-direction absorption mark's window [t0, u] contains the spike
 
 ## Not tested
 Globex; trailing and two-lot exits (the user's discretionary habits) and the tell-component hold gate (needs the 500-volume bars; separate prereg); any live wiring.
+
+## ERRATUM (2026-10-29): the first run of this study is DISCARDED
+The first run used spike marks with a lookahead (spike.py: events discarded when the extreme was exceeded AFTER the confirmation bar, and STRONG set from closes after it; PREREG_SPIKE.md Amendment 2). Its spike numbers (strong +34 dollars real-minus-placebo, CI 21..51; "all" +17, CI 11..24) are invalid and must not be cited. The absorption cells in that run were not affected by this bug (absorption marks use information up to the confirmation bar only) and read as no edge (strong +9.2 CI -11..29, weak -1.2, all +0.9 CI -5.6..7.6). The study definition above is unchanged; it is re-run on the corrected spike marks.
