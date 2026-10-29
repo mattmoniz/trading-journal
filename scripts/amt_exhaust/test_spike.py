@@ -19,4 +19,9 @@ m = flat()
 for i, (lo, hi) in enumerate([(99.5, 100), (98.5, 99.5), (97, 98.5), (95, 97), (93, 95)]): m['l'][100 + i] = lo; m['h'][100 + i] = hi; m['c'][100 + i] = lo + 0.1
 m['h'][105], m['l'][105], m['c'][105] = 97.2, 96.9, 97.0; m['h'][106], m['l'][106], m['c'][106] = 99.9, 99.5, 99.7; st = S.thrust(m); ev = S.detect(m, st, thr)
 assert any(e['dir'] == 1 and e['t'] == 104 for e in ev), ev
+c1 = flat()
+for i, (lo, hi) in enumerate([(100, 100.5), (100.5, 101.5), (101.5, 103), (103, 105), (105, 107)]): c1['l'][100 + i] = lo; c1['h'][100 + i] = hi; c1['c'][100 + i] = hi - 0.1
+c1['c'][105:] = 106.5; c1['h'][105:] = 106.7; c1['l'][105:] = 106.3
+st = S.thrust(c1); ev = S.detect_noreturn(c1, st, thr); assert any(e['dir'] == -1 and e['t'] == 104 and e['u'] == 109 for e in ev), ev      # no return: a control event
+ev = S.detect_noreturn(a, S.thrust(a), thr); assert not [e for e in ev if e['t'] == 104], ev                                                       # a real mark's thrust is not a control
 print('spike tests ok')

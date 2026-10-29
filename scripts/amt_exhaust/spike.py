@@ -44,3 +44,24 @@ def detect(a, st, thr, m=M, k=K, ret=RET):
             if u is None: continue
             out.append(dict(dir=D, t=t, u=u, ext=float(ext), base=base, strong=strong, size=float(size))); last[D] = t
     return out
+
+
+def detect_noreturn(a, st, thr, m=M, k=K, ret=RET):
+    """Same-selection control (path-study PREREG Amendment 2): thrusts meeting the same size and new-extreme conditions that NEVER give a real mark: through t+ret the price makes no close through the thrust midpoint and no new extreme. The decision bar is u = t+ret (information complete), entry at u+1."""
+    h, l, c = a['h'], a['l'], a['c']; out = []; last = {1: -10 ** 6, -1: -10 ** 6}
+    for t in range(m + MINK, N - ret - 2):
+        if np.isnan(thr[t]): continue
+        for D, size in ((-1, st['up'][t]), (1, st['dn'][t])):
+            if size < thr[t] or size <= 0 or t < last[D] + REFRACT: continue
+            if D == -1:
+                ext = h[t]; base = float(np.min(l[t - m + 1:t + 1]))
+                if not ext > np.max(h[max(0, t - m - k + 1):t - m + 1]): continue
+            else:
+                ext = l[t]; base = float(np.max(h[t - m + 1:t + 1]))
+                if not ext < np.min(l[max(0, t - m - k + 1):t - m + 1]): continue
+            mid = (ext + base) / 2.0; ok = True
+            for x in range(t + 1, t + ret + 1):
+                if np.isnan(c[x]) or (D == -1 and (h[x] > ext or c[x] < mid)) or (D == 1 and (l[x] < ext or c[x] > mid)): ok = False; break
+            if not ok: continue
+            out.append(dict(dir=D, t=t, u=t + ret, ext=float(ext), base=base, size=float(size))); last[D] = t
+    return out
