@@ -1,0 +1,4 @@
+
+=== EXPLORE M=5 Q=75: sessions with thresholds 509, sessions with a qualifying mark 366 ===
+S1: trades 366, traded days 366, mean net/trade   2.68$, mean daily P&L (traded days)   2.68$ median -40.50, win days  25%, worst day -349.00$, max drawdown  1486.50$, mean over ALL sessions  1.93$ | placebo daily -21.71$ | real-placebo per traded day  24.39 [ 13.80, 35.77] PRE  24.81 POST  21.77
+S2: trades 657, traded days 366, mean net/trade   9.24$, mean daily P&L (traded days)  16.59$ median -37.50, win days  38%, worst day -607.50$, max drawdown  1831.50$, mean over ALL sessions 11.93$ | placebo daily -24.70$ | real-placebo per traded day  41.29 [ 30.34, 53.42] PRE  37.47 POST  64.83
