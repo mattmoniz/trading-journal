@@ -68,9 +68,19 @@ def main():
             r2 = sim(a, e2, e['D'], en2 - e['D'] * risk)
             if r2 is not None: plc.append(r2['pts'] * DPP - COMM)
         if len(plc) < 10: excl += 1; continue
+        plcB = []; lo_b, hi_b = max(E_LO, en - 30), min(E_HI, en + 30)                       # Amendment 1: time-matched placebo (same session, +/- 30 bars)
+        for _ in range(TRIALS):
+            e2 = int(rng.integers(lo_b, hi_b + 1))
+            if e2 == en: continue
+            en2 = a['o'][e2] + e['D'] * SLIP
+            if np.isnan(en2): continue
+            r2 = sim(a, e2, e['D'], en2 - e['D'] * risk)
+            if r2 is not None: plcB.append(r2['pts'] * DPP - COMM)
+        Df = -e['D']; enC = a['o'][en] + Df * SLIP; rC = sim(a, en, Df, enC - Df * risk) if not np.isnan(enC) else None   # Amendment 1: direction flip at the same bar, same risk
+        if len(plcB) < 10 or rC is None: excl += 1; continue
         net = r['pts'] * DPP - COMM; c = a['c']; f = {}
         for hh in (30, 60, 120): j = en + hh - 1; f[f'F{hh}'] = e['D'] * (c[j] - r['entry']) / atr if j < FLAT and not np.isnan(c[j]) else np.nan
-        row = dict(e, net=net, pts=r['pts'], plc=float(np.mean(plc)), diff=net - float(np.mean(plc)), hit=r['hit'], mae=r['mae'] / atr, mfe=r['mfe'] / atr, risk=risk, **f, era='PRE' if e['d'] < PRE_END else 'POST')
+        netC = rC['pts'] * DPP - COMM; row = dict(e, net=net, pts=r['pts'], plc=float(np.mean(plc)), diff=net - float(np.mean(plc)), plcB=float(np.mean(plcB)), diffB=net - float(np.mean(plcB)), netC=netC, diffC=net - netC, hit=r['hit'], mae=r['mae'] / atr, mfe=r['mfe'] / atr, risk=risk, **f, era='PRE' if e['d'] < PRE_END else 'POST')
         if e['kind'] == 'spike':
             h_, l_, o0 = a['h'], a['l'], a['o'][0]; t = e['t']; ext = (e['stop'] + e['D'] * TICK)
             row['new_ext'] = bool(ext > np.nanmax(h_[:t])) if e['D'] == -1 and t > 0 else bool(ext < np.nanmin(l_[:t])) if e['D'] == 1 and t > 0 else False
@@ -83,13 +93,16 @@ def main():
         for r in rows: w.writerow([r.get(k) for k in keys])
     def cell(name, R):
         if len(R) == 0: print(f'{name}: n=0'); return
-        days = [r['d'] for r in R]; nd = len(set(days)); m, lo, hi = boot([r['diff'] for r in R], days, rng)
+        days = [r['d'] for r in R]; nd = len(set(days)); out = {}
+        for k in ('diff', 'diffB', 'diffC'): out[k] = boot([r[k] for r in R], days, rng)
         pre = [r['diff'] for r in R if r['era'] == 'PRE']; post = [r['diff'] for r in R if r['era'] == 'POST']
         byday = {}
-        for r in R: byday[r['d']] = byday.get(r['d'], 0) + r['diff']
-        dv = sorted(byday.values(), reverse=True); tot = sum(dv); share = sum(dv[:5]) / tot if tot > 0 else float('nan')
-        ok = len(R) >= 100 and nd >= 50 and lo > 0 and (np.mean(pre) > 0 and np.mean(post) > 0 if pre and post else False) and tot > 0 and share < 0.5
-        print(f"{name:44s} n={len(R):4d} days={nd:3d} | stop-hit {100 * np.mean([r['hit'] for r in R]):3.0f}% | median risk {np.median([r['risk'] for r in R]):5.1f} pts | mean net {np.mean([r['net'] for r in R]):6.2f}$ placebo {np.mean([r['plc'] for r in R]):6.2f}$ | real-placebo {m:6.2f}$ CI [{lo:6.2f},{hi:6.2f}] (half-width {(hi - lo) / 2:5.2f}) PRE {np.mean(pre) if pre else float('nan'):6.2f} POST {np.mean(post) if post else float('nan'):6.2f} top5 {100 * share:4.0f}% | MAE {np.mean([r['mae'] for r in R]):.2f} MFE {np.mean([r['mfe'] for r in R]):.2f} ATR20 | F30/F60/F120 {np.nanmean([r['F30'] for r in R]):+.3f}/{np.nanmean([r['F60'] for r in R]):+.3f}/{np.nanmean([r['F120'] for r in R]):+.3f}" + ('  <== PASSES' if ok else ''))
+        for r in R: byday.setdefault(r['d'], []).append(r['diff'])
+        dv = sorted((sum(v) for v in byday.values()), reverse=True); tot = sum(dv); share = sum(dv[:5]) / tot if tot > 0 else float('nan'); dw = float(np.mean([np.mean(v) for v in byday.values()]))
+        ok = len(R) >= 100 and nd >= 50 and out['diff'][1] > 0 and out['diffB'][1] > 0 and out['diffC'][1] > 0 and (np.mean(pre) > 0 and np.mean(post) > 0 if pre and post else False) and tot > 0 and share < 0.5
+        f = lambda t: f"{t[0]:6.2f} [{t[1]:6.2f},{t[2]:6.2f}]"
+        print(f"{name:42s} n={len(R):4d} days={nd:3d} stop-hit {100 * np.mean([r['hit'] for r in R]):3.0f}% risk {np.median([r['risk'] for r in R]):5.1f}pt | net {np.mean([r['net'] for r in R]):6.2f}$ | placeboA {np.mean([r['plc'] for r in R]):6.2f} B(time-matched) {np.mean([r['plcB'] for r in R]):6.2f} flip {np.mean([r['netC'] for r in R]):6.2f}" + ('  <== PASSES' if ok else ''))
+        print(f"{'':42s} real-A {f(out['diff'])} | real-B {f(out['diffB'])} | real-flip {f(out['diffC'])} | PRE {np.mean(pre) if pre else float('nan'):6.2f} POST {np.mean(post) if post else float('nan'):6.2f} top5 {100 * share:4.0f}% day-weighted(A) {dw:6.2f}")
     print('\n=== P1 hold (structural stop, no target, flatten 15:55) vs random-entry placebo with the same stop distance; dollars per 1 MNQ trade, after costs ===')
     for kind, nm in (('spike', 'SPIKE'), ('abs', 'ABSORPTION')):
         for st_, snm in ((1, 'strong'), (0, 'weak')): cell(f'{nm} {snm}', [r for r in rows if r['kind'] == kind and r['strong'] == st_])

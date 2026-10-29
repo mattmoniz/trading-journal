@@ -1,0 +1,41 @@
+events with a valid P1 entry 3271 (excluded: entry beyond the structural stop or no data 0)
+
+=== P1 hold (structural stop, no target, flatten 15:55) vs random-entry placebo with the same stop distance; dollars per 1 MNQ trade, after costs ===
+SPIKE strong                               n= 330 days=205 stop-hit  73% risk  32.8pt | net   3.56$ | placeboA  -7.89 B(time-matched)  -9.15 flip -12.31
+                                           real-A  11.45 [ -3.15, 25.88] | real-B  12.71 [  0.08, 25.21] | real-flip  15.87 [-19.01, 53.51] | PRE   7.66 POST  27.48 top5   83% day-weighted(A)  17.72
+SPIKE weak                                 n=1817 days=458 stop-hit  77% risk  22.8pt | net  -2.91$ | placeboA -16.16 B(time-matched) -22.77 flip   1.17
+                                           real-A  13.25 [  8.31, 18.67] | real-B  19.86 [ 15.56, 24.45] | real-flip  -4.08 [-14.43,  6.22] | PRE  11.54 POST  23.17 top5   25% day-weighted(A)  17.31
+ABSORPTION strong                          n= 218 days=162 stop-hit  65% risk  27.5pt | net  23.72$ | placeboA  14.13 B(time-matched)  13.21 flip  -4.17
+                                           real-A   9.59 [-10.53, 32.00] | real-B  10.51 [ -0.17, 22.82] | real-flip  27.89 [ -6.82, 65.73] | PRE   8.80 POST  13.62 top5  171% day-weighted(A)  14.13
+ABSORPTION weak                            n= 906 days=394 stop-hit  73% risk  26.1pt | net   0.36$ | placeboA   1.78 B(time-matched)   0.73 flip  -6.96
+                                           real-A  -1.42 [ -8.74,  5.91] | real-B  -0.37 [ -4.57,  3.91] | real-flip   7.33 [ -7.40, 21.67] | PRE  -5.71 POST  21.48 top5  nan% day-weighted(A)   5.37
+SPIKE all                                  n=2147 days=463 stop-hit  77% risk  24.0pt | net  -1.92$ | placeboA -14.89 B(time-matched) -20.68 flip  -0.90
+                                           real-A  12.97 [  8.25, 18.22] | real-B  18.76 [ 14.76, 23.30] | real-flip  -1.02 [-11.12,  8.81] | PRE  10.97 POST  24.00 top5   27% day-weighted(A)  17.17
+ABSORPTION all                             n=1124 days=428 stop-hit  72% risk  26.2pt | net   4.89$ | placeboA   4.18 B(time-matched)   3.15 flip  -6.42
+                                           real-A   0.72 [ -6.09,  7.70] | real-B   1.74 [ -2.24,  5.78] | real-flip  11.31 [ -2.43, 25.50] | PRE  -2.91 POST  19.90 top5  518% day-weighted(A)   4.08
+  by side, SPIKE long (spike low / absorbed selling) n=1340 days=439 stop-hit  75% risk  24.5pt | net   0.68$ | placeboA -16.75 B(time-matched) -18.37 flip  -0.94
+                                           real-A  17.43 [ 11.44, 23.89] | real-B  19.05 [ 14.15, 24.27] | real-flip   1.62 [-17.74, 23.33] | PRE  16.60 POST  22.54 top5   23% day-weighted(A)  24.47
+  by side, ABSORPTION long (spike low / absorbed selling) n= 659 days=349 stop-hit  69% risk  26.8pt | net   7.65$ | placeboA   1.34 B(time-matched)   3.25 flip  -8.28
+                                           real-A   6.31 [ -1.66, 14.38] | real-B   4.40 [  0.39,  8.67] | real-flip  15.93 [ -5.86, 37.01] | PRE   2.60 POST  26.32 top5   75% day-weighted(A)   7.51
+  by side, SPIKE short (spike high / absorbed buying) n= 807 days=325 stop-hit  79% risk  23.0pt | net  -6.23$ | placeboA -11.80 B(time-matched) -24.51 flip  -0.83
+                                           real-A   5.57 [ -2.93, 15.08] | real-B  18.28 [ 10.99, 27.92] | real-flip  -5.40 [-32.24, 21.15] | PRE   1.22 POST  25.93 top5  111% day-weighted(A)   2.25
+  by side, ABSORPTION short (spike high / absorbed buying) n= 465 days=290 stop-hit  74% risk  26.0pt | net   0.98$ | placeboA   8.19 B(time-matched)   3.01 flip  -3.78
+                                           real-A  -7.20 [-19.79,  5.58] | real-B  -2.03 [ -9.45,  5.74] | real-flip   4.77 [-20.69, 31.72] | PRE -10.80 POST  11.19 top5  nan% day-weighted(A)  -4.93
+
+=== INTERACTION TAGS on spike marks (descriptive) ===
+SPIKE with INSIDE a same-direction absorption mark n= 303 days=207 stop-hit  73% risk  22.8pt | net   3.16$ | placeboA -14.01 B(time-matched) -17.73 flip -17.89  <== PASSES
+                                           real-A  17.17 [  5.57, 28.89] | real-B  20.89 [ 11.76, 30.35] | real-flip  21.05 [  0.49, 41.40] | PRE  16.47 POST  23.31 top5   46% day-weighted(A)  14.83
+SPIKE without INSIDE a same-direction absorption mark n=1844 days=447 stop-hit  77% risk  24.4pt | net  -2.75$ | placeboA -15.03 B(time-matched) -21.16 flip   1.89
+                                           real-A  12.28 [  6.99, 18.14] | real-B  18.41 [ 14.08, 23.18] | real-flip  -4.64 [-15.99,  7.03] | PRE  10.00 POST  24.07 top5   32% day-weighted(A)  16.32
+SPIKE with NEW session extreme             n= 944 days=373 stop-hit  78% risk  27.8pt | net  -6.39$ | placeboA -28.66 B(time-matched) -25.26 flip   5.81
+                                           real-A  22.28 [ 14.03, 31.06] | real-B  18.88 [ 12.15, 26.41] | real-flip -12.19 [-31.37,  6.96] | PRE  20.17 POST  33.73 top5   24% day-weighted(A)  32.18
+SPIKE without NEW session extreme          n=1203 days=407 stop-hit  75% risk  21.8pt | net   1.59$ | placeboA  -4.08 B(time-matched) -17.08 flip  -6.16
+                                           real-A   5.67 [ -0.79, 12.39] | real-B  18.67 [ 13.02, 25.57] | real-flip   7.75 [ -4.21, 20.72] | PRE   3.78 POST  16.18 top5   86% day-weighted(A)   5.12
+SPIKE with AGAINST the day drift           n= 704 days=334 stop-hit  73% risk  22.0pt | net  12.01$ | placeboA   9.86 B(time-matched) -11.32 flip -14.62
+                                           real-A   2.15 [ -7.41, 13.72] | real-B  23.33 [ 14.96, 34.97] | real-flip  26.63 [  1.34, 58.40] | PRE  -1.28 POST  23.12 top5  374% day-weighted(A)   1.68
+SPIKE without AGAINST the day drift        n=1443 days=415 stop-hit  78% risk  25.5pt | net  -8.71$ | placeboA -26.97 B(time-matched) -25.24 flip   5.79
+                                           real-A  18.25 [ 12.63, 23.87] | real-B  16.53 [ 11.67, 21.31] | real-flip -14.51 [-30.97,  1.03] | PRE  17.09 POST  24.37 top5   18% day-weighted(A)  20.32
+SPIKE inside absorption AND against drift  n=  98 days= 88 stop-hit  71% risk  21.2pt | net   3.54$ | placeboA   4.64 B(time-matched) -19.29 flip -24.50
+                                           real-A  -1.11 [-18.29, 19.01] | real-B  22.82 [  7.82, 38.59] | real-flip  28.04 [ -4.46, 62.46] | PRE  -5.26 POST  39.99 top5  nan% day-weighted(A)  -0.01
+SPIKE new extreme AND against drift        n=  17 days= 17 stop-hit  76% risk  36.5pt | net   4.21$ | placeboA -22.67 B(time-matched) -24.77 flip  63.09
+                                           real-A  26.87 [-25.55, 88.18] | real-B  28.97 [ -3.52, 73.97] | real-flip -58.88 [-234.35,109.32] | PRE  11.12 POST 145.06 top5  193% day-weighted(A)  26.87
