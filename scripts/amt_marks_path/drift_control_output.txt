@@ -1,0 +1,4 @@
+events 2147
+ALL marks                          n=2147 | drift-direction trade at the mark  10.26$ | uniform   4.43 time-matched   3.66 | real-uniform   5.83 [  0.63, 10.81] | real-timematched   6.60 [  2.38, 11.05] PRE   7.42 POST   2.05
+against-drift marks (fade = with drift) n= 836 | drift-direction trade at the mark  11.79$ | uniform  -2.94 time-matched -15.34 | real-uniform  14.74 [  6.21, 24.57] | real-timematched  27.14 [ 18.39, 37.64] PRE  21.07 POST  63.71
+with-drift marks (fade = against drift) n=1311 | drift-direction trade at the mark   9.28$ | uniform   9.13 time-matched  15.79 | real-uniform   0.15 [ -8.22,  8.63] | real-timematched  -6.50 [-12.30, -0.93] PRE  -1.47 POST -32.73
