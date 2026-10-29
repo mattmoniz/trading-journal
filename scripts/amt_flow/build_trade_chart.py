@@ -81,6 +81,18 @@ def sw_data(raw, ex, ks):
         wins.append(dict(label=f"{pd.Timestamp(dates[i]).strftime('%b %d')} to {pd.Timestamp(dates[i + 4]).strftime('%b %d, %Y')}", ntr=sc, days=[day_payload(by[d], raw, ks) for d in dates[i:i + 5]]))
     return dict(windows=wins, trades=trades, summary=summary)
 
+def absorb_marks(ex):
+    """Marks-only persistent-absorption events (scripts/amt_absorb, PREREG.md Amendments 1-4) for every explore session with a 20-session trailing history."""
+    sys.path.insert(0, str(H.parent / 'amt_absorb')); import absorb as AB
+    stats = [AB.window_stats(s['a']) for s in ex]; marks = {}; tot = dict(strong=0, weak=0, sessions=0)
+    for si, s in enumerate(ex):
+        thr = AB.thresholds(stats, si)
+        if thr is None: continue
+        evs = AB.detect_both(s['a'], stats[si], thr, E.atr14(s['a'])); tot['sessions'] += 1
+        marks[s['d']] = [[int(e['dir']), int(e['t0']), int(e['t']), int(e['u']), r2(e['wlo']), r2(e['whi']), int(e['tries']), int(e['strong']), r2(e['band'][0]), r2(e['band'][1])] for e in evs]
+        tot['strong'] += sum(e['strong'] for e in evs); tot['weak'] += sum(not e['strong'] for e in evs)
+    return marks, tot
+
 def bo_data(raw, ex, ks, of, exx):
     """Absorption (A, all four zone/stop variants) and exhaustion (E2, E1) on the SAME windows: windows are picked for the most exhaustion trades (weighted 12x) plus absorption trades, so both appear together."""
     A = of['trades']['vol|atr2|A']; E2 = exx['trades']['ex|E2']; counts = {}
@@ -94,7 +106,8 @@ def bo_data(raw, ex, ks, of, exx):
     trades = {k: [r for r in v if r[0] in dset] for k, v in of['trades'].items() if k.endswith('|A')}
     trades.update({k: [r for r in v if r[0] in dset] for k, v in exx['trades'].items() if k in ('ex|E2', 'ex|E1')})
     summary = {k: v for k, v in of['summary'].items() if k.endswith('|A')}; summary.update({k: v for k, v in exx['summary'].items() if k in ('ex|E2', 'ex|E1')})
-    return dict(windows=wins, trades=trades, summary=summary)
+    allm, tot = absorb_marks(ex)
+    return dict(windows=wins, trades=trades, summary=summary, marks={d: allm.get(d, []) for d in dset}, marktot=tot)
 
 def main(out):
     raw, ex, ks = load_ctx(); of = of_data(raw, ex, ks); exx = ex_data(raw, ex, ks); data = dict(bo=bo_data(raw, ex, ks, of, exx), of=of, ex=exx, sw=sw_data(raw, ex, ks))
