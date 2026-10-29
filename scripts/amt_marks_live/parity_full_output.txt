@@ -1,0 +1,6 @@
+  2023-05-31: marks 10, prefix violations clean 0, series 0, leaky detector violations 1
+  2025-04-11: marks 9, prefix violations clean 0, series 0, leaky detector violations 0
+sessions 2, prefix points per session 18, total marks 19; clean-detector violations 0; series violations 0; mutation (leaky) violations 1
+marks used 2147, skipped (bad ratios) 0; L = 50 points x ATR20 / median ATR20 (median ATR20 222 points)
+--full: features vs run_context table: 2147 marks, mismatching values 0, max abs diff 0
+PARITY OK
