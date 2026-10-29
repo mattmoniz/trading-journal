@@ -1,0 +1,60 @@
+marks used 2147, skipped (bad ratios) 0; L = 50 points x ATR20 / median ATR20 (median ATR20 222 points)
+
+=== P1 (counted): fade minus flip by EXPANSION SCORE tercile (rel. volume, volatility now, range so far) ===
+  LOW expansion                                  n= 716 fade   0.59 flip  -6.58 fade-flip   7.17 [ -5.99, 21.41] with-drift  -1.70 | BIG_REV  29% BIG_CONT  27% both   0%
+  MID                                            n= 715 fade  -2.10 flip   2.73 fade-flip  -4.83 [-18.62,  8.70] with-drift  14.93 | BIG_REV  30% BIG_CONT  31% both   1%
+  HIGH expansion                                 n= 716 fade  -4.24 flip   1.16 fade-flip  -5.40 [-27.66, 17.67] with-drift  17.55 | BIG_REV  35% BIG_CONT  37% both   1%
+  top minus bottom tercile of (fade - flip): -12.57 [-38.92, 15.23]  PRE -17.84 POST  -2.99  (hypothesis: negative = fade better when LOW expansion, continuation better when HIGH)
+
+=== P2 (descriptive): by each factor ===
+  RVOL low                                       n= 716 fade   6.96 flip  -0.64 fade-flip   7.60 [-12.90, 27.80] with-drift  16.91 | BIG_REV  29% BIG_CONT  28% both   1%
+  RVOL mid                                       n= 715 fade  -8.06 flip   6.14 fade-flip -14.20 [-32.65,  2.39] with-drift   4.93 | BIG_REV  30% BIG_CONT  33% both   0%
+  RVOL high                                      n= 716 fade  -4.66 flip  -8.19 fade-flip   3.53 [-15.59, 24.27] with-drift   8.93 | BIG_REV  35% BIG_CONT  34% both   1%
+  VOLNOW low                                     n= 716 fade   3.60 flip  -7.39 fade-flip  10.99 [ -3.00, 25.56] with-drift   3.63 | BIG_REV  28% BIG_CONT  26% both   0%
+  VOLNOW mid                                     n= 715 fade  -7.01 flip  -5.17 fade-flip  -1.85 [-14.72, 11.37] with-drift   0.55 | BIG_REV  31% BIG_CONT  32% both   0%
+  VOLNOW high                                    n= 716 fade  -2.34 flip   9.85 fade-flip -12.20 [-36.00,  8.96] with-drift  26.59 | BIG_REV  34% BIG_CONT  37% both   1%
+  RANGE_SO_FAR low                               n= 716 fade  -3.75 flip  -7.86 fade-flip   4.11 [ -8.87, 16.74] with-drift  -4.14 | BIG_REV  30% BIG_CONT  27% both   1%
+  RANGE_SO_FAR mid                               n= 715 fade   2.09 flip  11.20 fade-flip  -9.12 [-23.02,  4.54] with-drift  25.06 | BIG_REV  29% BIG_CONT  33% both   0%
+  RANGE_SO_FAR high                              n= 716 fade  -4.08 flip  -6.03 fade-flip   1.95 [-18.20, 22.54] with-drift   9.89 | BIG_REV  34% BIG_CONT  34% both   1%
+  price vs OVERNIGHT range: above                n= 440 fade   0.29 flip   1.48 fade-flip  -1.18 [-23.24, 21.65] with-drift  14.92 | BIG_REV  31% BIG_CONT  33% both   1%
+  price vs OVERNIGHT range: inside               n=1042 fade   0.34 flip  -0.49 fade-flip   0.83 [-15.58, 18.58] with-drift  12.50 | BIG_REV  31% BIG_CONT  31% both   0%
+  price vs OVERNIGHT range: below                n= 665 fade  -6.92 flip  -3.11 fade-flip  -3.81 [-22.49, 13.56] with-drift   3.66 | BIG_REV  32% BIG_CONT  31% both   0%
+  price vs OVERNIGHT value: above                n= 621 fade   4.28 flip   3.96 fade-flip   0.32 [-15.03, 14.94] with-drift  21.96 | BIG_REV  31% BIG_CONT  32% both   1%
+  price vs OVERNIGHT value: inside               n= 570 fade  -1.24 flip  -0.79 fade-flip  -0.44 [-20.30, 21.58] with-drift   9.55 | BIG_REV  32% BIG_CONT  31% both   1%
+  price vs OVERNIGHT value: below                n= 956 fade  -6.35 flip  -4.12 fade-flip  -2.23 [-18.89, 12.97] with-drift   3.08 | BIG_REV  31% BIG_CONT  31% both   0%
+  price vs PRIOR-DAY value: above                n= 657 fade   1.90 flip   6.92 fade-flip  -5.02 [-25.22, 16.33] with-drift  12.15 | BIG_REV  29% BIG_CONT  31% both   1%
+  price vs PRIOR-DAY value: inside               n= 673 fade  -1.08 flip  -8.90 fade-flip   7.82 [ -8.50, 26.41] with-drift  -2.04 | BIG_REV  33% BIG_CONT  30% both   0%
+  price vs PRIOR-DAY value: below                n= 817 fade  -5.68 flip  -0.61 fade-flip  -5.08 [-20.07,  9.78] with-drift  18.87 | BIG_REV  32% BIG_CONT  33% both   1%
+  OVERNIGHT relative volume low                  n= 720 fade  -4.78 flip  -3.95 fade-flip  -0.84 [-19.64, 16.00] with-drift  -0.65 | BIG_REV  30% BIG_CONT  28% both   1%
+  OVERNIGHT relative volume mid                  n= 722 fade  -4.30 flip  -3.70 fade-flip  -0.60 [-13.06, 11.65] with-drift   0.38 | BIG_REV  31% BIG_CONT  31% both   0%
+  OVERNIGHT relative volume high                 n= 705 fade   3.45 flip   5.08 fade-flip  -1.63 [-22.31, 19.11] with-drift  31.51 | BIG_REV  33% BIG_CONT  36% both   1%
+  OVERNIGHT range small                          n= 722 fade  -2.04 flip -11.99 fade-flip   9.95 [ -3.37, 23.03] with-drift  -6.20 | BIG_REV  32% BIG_CONT  27% both   1%
+  OVERNIGHT range mid                            n= 715 fade -10.76 flip   6.99 fade-flip -17.75 [-39.03,  3.67] with-drift  12.13 | BIG_REV  29% BIG_CONT  33% both   0%
+  OVERNIGHT range large                          n= 710 fade   7.11 flip   2.43 fade-flip   4.68 [-12.36, 21.54] with-drift  25.11 | BIG_REV  33% BIG_CONT  35% both   1%
+  time of day: first hour (before 10:30)         n= 280 fade  13.83 flip   3.34 fade-flip  10.49 [-28.36, 52.91] with-drift  21.14 | BIG_REV  45% BIG_CONT  38% both   1%
+  time of day: middle (10:30-13:30)              n=1170 fade  -0.80 flip  -1.20 fade-flip   0.40 [-12.69, 13.94] with-drift  11.01 | BIG_REV  31% BIG_CONT  32% both   0%
+  time of day: last two hours                    n= 697 fade -10.12 flip  -2.10 fade-flip  -8.03 [-25.48,  6.33] with-drift   4.63 | BIG_REV  26% BIG_CONT  29% both   1%
+
+=== NEWS (descriptive; calendar = NFP, CPI, FOMC only) ===
+  no scheduled big release today                 n=1832 fade   0.61 flip  -2.19 fade-flip   2.80 [ -7.77, 13.15] with-drift  10.89 | BIG_REV  31% BIG_CONT  31% both   0%
+  NFP day, all marks                             n= 121 fade -13.57 flip   2.79 fade-flip -16.37 [-52.35, 16.97] with-drift   5.85 | BIG_REV  32% BIG_CONT  29% both   0%
+  CPI day, all marks                             n= 124 fade -15.23 flip   2.94 fade-flip -18.17 [-65.36, 29.36] with-drift  -5.26 | BIG_REV  29% BIG_CONT  41% both   2%
+  FOMC day, all marks                            n=  70 fade -24.34 flip  19.57 fade-flip -43.91 [-165.31, 37.95] with-drift  28.89 | BIG_REV  43% BIG_CONT  41% both   6%
+  window: settled_0830                           n= 245 fade -14.41 flip   2.87 fade-flip -17.28 [-49.33, 11.60] with-drift   0.23 | BIG_REV  31% BIG_CONT  35% both   1%
+  window: FOMC_early                             n=  20 fade -23.95 flip -54.52 fade-flip  30.57 [  0.00, 60.61] with-drift -54.52 | BIG_REV  45% BIG_CONT  10% both   0%
+  window: dodge                                  n=5 (too few)
+  window: reaction                               n=13 (too few)
+  window: settled                                n=  32 fade  -8.27 flip  35.66 fade-flip -43.92 [-209.71, 74.47] with-drift  46.78 | BIG_REV  44% BIG_CONT  47% both   3%
+
+=== P3 (causal chooser): choose FADE or FLIP by the sign of earlier marks in the same expansion tercile (>= 50) ===
+  policy           n=1997 mean  -0.46
+  always FADE      n=1997 mean  -1.23
+  always FLIP      n=1997 mean  -0.58
+  with-drift rule  n=1997 mean  11.41
+  policy minus with-drift    -11.86 [-28.27, -0.28]
+  policy minus always FADE     0.77 [-10.23, 11.10]
+  policy minus always FLIP     0.12 [ -6.30,  5.89]
+
+=== P4 (descriptive): walk-forward logistic regression, expanding window, monthly refit; out-of-sample AUC ===
+  BIG_CONT (flip captures a large move): base rate 31.4%, n=1847, model AUC 0.592 (day-bootstrap 95% 0.562..0.622), expansion score alone AUC 0.565
+  BIG_REV (fade captures a large move): base rate 31.9%, n=1847, model AUC 0.567 (day-bootstrap 95% 0.540..0.593), expansion score alone AUC 0.537
