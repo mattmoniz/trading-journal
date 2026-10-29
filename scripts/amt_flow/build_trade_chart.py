@@ -93,6 +93,18 @@ def absorb_marks(ex):
         tot['strong'] += sum(e['strong'] for e in evs); tot['weak'] += sum(not e['strong'] for e in evs)
     return marks, tot
 
+def spike_marks(ex):
+    """Marks-only spike exhaustion events (scripts/amt_exhaust/PREREG_SPIKE.md incl. Amendment 1)."""
+    sys.path.insert(0, str(H.parent / 'amt_exhaust')); import spike as SP
+    stats = [SP.thrust(s['a']) for s in ex]; marks = {}; tot = dict(strong=0, weak=0, sessions=0)
+    for si, s in enumerate(ex):
+        thr = SP.thresholds(stats, si)
+        if thr is None: continue
+        evs = SP.detect(s['a'], stats[si], thr); tot['sessions'] += 1
+        marks[s['d']] = [[int(e['dir']), int(e['t']), int(e['u']), r2(e['ext']), r2(e['base']), int(e['strong'])] for e in evs]
+        tot['strong'] += sum(e['strong'] for e in evs); tot['weak'] += sum(not e['strong'] for e in evs)
+    return marks, tot
+
 def bo_data(raw, ex, ks, of, exx):
     """Absorption (A, all four zone/stop variants) and exhaustion (E2, E1) on the SAME windows: windows are picked for the most exhaustion trades (weighted 12x) plus absorption trades, so both appear together."""
     A = of['trades']['vol|atr2|A']; E2 = exx['trades']['ex|E2']; counts = {}
@@ -106,8 +118,8 @@ def bo_data(raw, ex, ks, of, exx):
     trades = {k: [r for r in v if r[0] in dset] for k, v in of['trades'].items() if k.endswith('|A')}
     trades.update({k: [r for r in v if r[0] in dset] for k, v in exx['trades'].items() if k in ('ex|E2', 'ex|E1')})
     summary = {k: v for k, v in of['summary'].items() if k.endswith('|A')}; summary.update({k: v for k, v in exx['summary'].items() if k in ('ex|E2', 'ex|E1')})
-    allm, tot = absorb_marks(ex)
-    return dict(windows=wins, trades=trades, summary=summary, marks={d: allm.get(d, []) for d in dset}, marktot=tot)
+    allm, tot = absorb_marks(ex); alls, stot = spike_marks(ex)
+    return dict(windows=wins, trades=trades, summary=summary, marks={d: allm.get(d, []) for d in dset}, marktot=tot, spikes={d: alls.get(d, []) for d in dset}, spiketot=stot)
 
 def main(out):
     raw, ex, ks = load_ctx(); of = of_data(raw, ex, ks); exx = ex_data(raw, ex, ks); data = dict(bo=bo_data(raw, ex, ks, of, exx), of=of, ex=exx, sw=sw_data(raw, ex, ks))
