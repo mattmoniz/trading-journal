@@ -1,0 +1,30 @@
+marks used 2147, skipped (bad ratios) 0; L = 50 points x ATR20 / median ATR20 (median ATR20 222 points)
+qualifying marks 836 on 366 sessions of 509
+
+=== S1 (first allowed mark per session), mean P&L over ALL 509 sessions ===
+  UNGATED        skip   0% trades  366 per trade   2.68$ | per session   1.93$ | win days  25% worst  -349.00$ max drawdown  1486.50$
+  G1             skip  25% trades  280 per trade  12.95$ | per session   7.13$ | win days  27% worst  -349.00$ max drawdown  1028.00$
+  G2             skip  22% trades  261 per trade   9.63$ | per session   4.94$ | win days  25% worst  -349.00$ max drawdown  1071.50$
+  G3             skip  20% trades  275 per trade   5.89$ | per session   3.18$ | win days  24% worst  -349.00$ max drawdown  1353.00$
+  G4             skip  36% trades  224 per trade  15.03$ | per session   6.61$ | win days  26% worst  -349.00$ max drawdown  1028.00$
+  G5             skip  33% trades  268 per trade  -1.89$ | per session  -1.00$ | win days  22% worst  -349.00$ max drawdown  1597.00$
+  RANDOM-SKIP    skip  25% (mean of 50 reps)          per session   2.97$
+  G1 minus UNGATED   5.20$/session [ -0.76, 11.79]  minus RANDOM-SKIP   4.16 [ -2.05, 10.30]  PRE   1.98 POST  25.12
+  G2 minus UNGATED   3.01$/session [ -0.61,  6.20]  minus RANDOM-SKIP   1.97 [ -3.27,  6.34]  PRE   1.44 POST  12.73
+  G3 minus UNGATED   1.25$/session [ -2.86,  5.10]  minus RANDOM-SKIP   0.21 [ -5.15,  5.02]  PRE   1.14 POST   1.97
+  G4 minus UNGATED   4.69$/session [ -1.67, 11.44]  minus RANDOM-SKIP   3.65 [ -2.54, 10.18]  PRE   1.22 POST  26.13
+  G5 minus UNGATED  -2.92$/session [-10.09,  2.98]  minus RANDOM-SKIP  -3.97 [-11.09,  2.35]  PRE  -1.91 POST  -9.18
+
+=== S2 (re-entry after a stop), mean P&L over ALL 509 sessions ===
+  UNGATED        skip   0% trades  657 per trade   9.24$ | per session  11.93$ | win days  38% worst  -607.50$ max drawdown  1831.50$
+  G1             skip  25% trades  506 per trade  14.00$ | per session  13.92$ | win days  39% worst  -607.50$ max drawdown  1618.50$
+  G2             skip  22% trades  498 per trade  14.61$ | per session  14.29$ | win days  40% worst  -607.50$ max drawdown  1094.00$
+  G3             skip  20% trades  504 per trade  13.01$ | per session  12.88$ | win days  38% worst  -607.50$ max drawdown  1847.50$
+  G4             skip  36% trades  420 per trade  16.81$ | per session  13.87$ | win days  40% worst  -607.50$ max drawdown  1238.00$
+  G5             skip  33% trades  448 per trade   7.97$ | per session   7.01$ | win days  35% worst  -491.50$ max drawdown  2280.50$
+  RANDOM-SKIP    skip  25% (mean of 50 reps)          per session  10.22$
+  G1 minus UNGATED   1.99$/session [ -3.28,  6.83]  minus RANDOM-SKIP   3.70 [ -1.58,  8.88]  PRE   1.30 POST   6.24   <== COUNTED
+  G2 minus UNGATED   2.36$/session [ -2.37,  7.13]  minus RANDOM-SKIP   4.08 [ -0.93,  9.26]  PRE   0.90 POST  11.42
+  G3 minus UNGATED   0.95$/session [ -4.54,  6.31]  minus RANDOM-SKIP   2.67 [ -2.56,  8.01]  PRE   0.22 POST   5.48
+  G4 minus UNGATED   1.94$/session [ -4.54,  8.34]  minus RANDOM-SKIP   3.65 [ -2.27,  9.58]  PRE   0.67 POST   9.78
+  G5 minus UNGATED  -4.92$/session [-12.90,  2.25]  minus RANDOM-SKIP  -3.21 [-11.01,  3.82]  PRE  -3.46 POST -13.94

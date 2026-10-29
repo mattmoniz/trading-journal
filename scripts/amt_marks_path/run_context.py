@@ -28,6 +28,7 @@ def per_session(a):
         if np.isfinite(hw).any() and np.isfinite(lw).any(): r30[u] = np.nanmax(hw) - np.nanmin(lw)
         if np.isfinite(hh[u]) and np.isfinite(ll[u]) and hh[u] > -np.inf: rng[u] = hh[u] - ll[u]
     return dict(cum=cum, r30=r30, rng=rng)
+NSESS = 0
 def build():
     raw = E.load_sessions(); allS = E.build_eligible(raw); ex = [s for s in allS if s['d'] <= RP.SPLIT]; ON = overnight_table(); rngs = [float(np.nanmax(s['a']['h']) - np.nanmin(s['a']['l'])) for s in ex]
     atr20 = {s['d']: float(np.mean(rngs[i - 20:i])) for i, s in enumerate(ex) if i >= 20}; Lscale = 50.0 / float(np.median(list(atr20.values()))); PS = [per_session(s['a']) for s in ex]
@@ -35,6 +36,7 @@ def build():
     for si, s in enumerate(ex):
         thr = SP.thresholds(stats, si)
         if thr is None or s['d'] not in ON: continue
+        global NSESS; NSESS += 1
         a = s['a']; o0 = a['o'][0]; c = a['c']; atr = atr20[s['d']]; on = ON[s['d']]; pc = ex[si - 1]['a']['c']; prior_close = float(pc[~np.isnan(pc)][-1]); P = PS[si]; prior = range(si - 20, si)
         for e in SP.detect(a, stats[si], thr):
             D = e['dir']; u = e['u']; en = u + 1
@@ -53,7 +55,7 @@ def build():
             win = 'none' if typ is None else ('settled_0830' if typ in ('NFP', 'CPI') else ('dodge' if (mto is not None and 0 < mto <= 30) else ('reaction' if (mts is not None and 0 <= mts < 15) else ('settled' if mts is not None else 'FOMC_early'))))
             rows.append(dict(d=s['d'], u=u, D=D, es=es, rvol=rvol, volnow=volnow, rngr=rngr, on_pos=loc3(c[u], on['hi'], on['lo']), on_va=loc3(c[u], on['vah'], on['val']) if np.isfinite(on['vah']) else 0, va_pos=loc3(c[u], s['vah'], s['val']),
                 on_range_rel=(on['hi'] - on['lo']) / atr, on_vol_rel=on['vol'] / onv if onv else np.nan, gap_rel=(o0 - prior_close) / atr, drift_w=(c[u] - o0) / atr * (-D), size_ratio=e['size'] / thr[e['t']], rvol_u=u,
-                fade=rf['pts'] * RP.DPP - RP.COMM, flip=rc['pts'] * RP.DPP - RP.COMM, fade_big=rf['mfe'] >= L, flip_big=rc['mfe'] >= L, withdrift=(rf['pts'] if D == dsign else rc['pts']) * RP.DPP - RP.COMM, dsign=dsign, news=typ, win=win, era='PRE' if s['d'] < RP.PRE_END else 'POST'))
+                fade=rf['pts'] * RP.DPP - RP.COMM, flip=rc['pts'] * RP.DPP - RP.COMM, fade_big=rf['mfe'] >= L, flip_big=rc['mfe'] >= L, withdrift=(rf['pts'] if D == dsign else rc['pts']) * RP.DPP - RP.COMM, dsign=dsign, en=en, wd_xi=(rf['xi'] if D == dsign else rc['xi']), news=typ, win=win, era='PRE' if s['d'] < RP.PRE_END else 'POST'))
     print(f'marks used {len(rows)}, skipped (bad ratios) {skipped}; L = 50 points x ATR20 / median ATR20 (median ATR20 {1 / Lscale * 50:.0f} points)'); return rows
 def main():
     rows = build(); rng = np.random.default_rng(SEED); es = np.array([r['es'] for r in rows]); q1, q2 = np.quantile(es, [1 / 3, 2 / 3])
