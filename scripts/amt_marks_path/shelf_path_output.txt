@@ -1,0 +1,7 @@
+shelves 3162, shelves with a break inside 20 bars and a valid trade 2204
+shelf breaks WITH the day drift (primary)    n=1393 days=440 stop-hit  56% risk  37.2pt | net  -1.76$ | uniform   2.53 time-matched  10.28 flip  -2.97
+                                             real-uniform  -4.29 [ -9.41,  0.86] | real-timematched -12.04 [-16.20, -7.82] | real-flip   1.21 [-17.15, 19.04] | PRE -10.89 POST -18.27
+shelf breaks AGAINST the day drift           n= 811 days=370 stop-hit  63% risk  35.2pt | net -12.52$ | uniform  -8.39 time-matched -18.61 flip   9.44
+                                             real-uniform  -4.14 [-19.50, 12.59] | real-timematched   6.08 [-11.91, 24.47] | real-flip -21.97 [-43.47,  0.15] | PRE  15.26 POST -39.46
+all shelf breaks                             n=2204 days=461 stop-hit  59% risk  36.5pt | net  -5.72$ | uniform  -1.49 time-matched  -0.35 flip   1.60
+                                             real-uniform  -4.23 [-11.07,  2.46] | real-timematched  -5.37 [-12.81,  2.10] | real-flip  -7.32 [-17.67,  3.97] | PRE  -1.35 POST -26.41
