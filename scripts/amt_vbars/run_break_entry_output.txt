@@ -1,0 +1,18 @@
+Sessions usable 516; hold-out NOT touched
+decision points 30209: armed 2591, control 27618
+points excluded because a side was already broken: armed 876, control 18270; break events: armed 264, control 168
+skipped (entry not beyond stop / no node stop): {'S_EDGE': 1, 'S_NODE': 5}
+
+=== S_EDGE ===
+  ARMED    N=264 on 255 dates, mean $-0.63, WR 2.7%, median stop distance 2.5 pts
+  CONTROL  N=167 on 155 dates, mean $+0.89, WR 3.0%, median stop distance 2.5 pts
+  ARMED absolute mean $-0.63 day-blocked CI [-6.30, +6.32]
+  ARMED minus CONTROL (entry-time-mix weighted) $-5.32 CI [-31.62, +11.62], halves +2.26/-15.43
+  READING: not shown
+
+=== S_NODE ===
+  ARMED    N=264 on 255 dates, mean $+4.34, WR 34.8%, median stop distance 48.4 pts
+  CONTROL  N=163 on 152 dates, mean $+21.52, WR 32.5%, median stop distance 39.8 pts
+  ARMED absolute mean $+4.34 day-blocked CI [-15.71, +25.49]
+  ARMED minus CONTROL (entry-time-mix weighted) $-23.03 CI [-70.43, +18.78], halves -16.37/-34.29
+  READING: not shown
