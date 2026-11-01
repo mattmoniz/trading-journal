@@ -21,7 +21,15 @@ def candidate_paths(contract, dd):
 
 def primary_paths(contract, dd):
     """Standard-layout tick files of the calendar contract itself (not the neighbouring quarters the batch extractor also tried for roll weeks, which only a volume validation may select)."""
-    return [p for p in X.scid_paths(X.candidate_codes(contract)[0]) if X._sniff_layout(p, dd) == 'std']
+    out = []
+    for p in X.scid_paths(X.candidate_codes(contract)[0]):
+        lay = X._sniff_layout(p, dd)
+        if lay == 'empty':
+            # A session for trade date D starts at 18:00 ET on D-1, so before midnight the file has no record dated D yet (2026-11-01: NO_TICK_FILE every 10 minutes from 18:00 to midnight on every
+            # session). The record layout does not change inside one file, so sniff the evening records dated D-1 instead. A stale file is still empty for D-1 too and stays excluded.
+            lay = X._sniff_layout(p, dd - datetime.timedelta(days=1))
+        if lay == 'std': out.append(p)
+    return out
 
 
 def completed_session_dates(conn, before, n):
