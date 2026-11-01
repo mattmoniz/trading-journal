@@ -1,0 +1,22 @@
+# Pre-registration: does the trader's own side read add direction at tell moments? Blind call pilot (written 2026-11-01 BEFORE any chart is built or any call is made)
+
+Origin: the tell is an expansion detector with a coin-flip side (`amt_tell_is_expansion_detector_side_not_shown_20261101`, `amt_tell_expansion_5_15_30_60min_windows_20261101`); the trader's stated edge is choosing the side by eye (delta flips, absorbed areas, peak-and-fail, balance vs trend). Nothing in code can test that, so the trader calls the side blind. Page: an Artifact ("Tell Side Calls"); builder `scripts/amt_vbars/build_side_calls.py`; analysis `scripts/amt_vbars/analyze_side_calls.py`, run ONCE on the exported ratings. Explore sessions only (to 2025-05-16); the AMT-tell hold-out is not extracted and not used.
+
+## Items (sampled by seed, data-derived, never hand-picked)
+60 moments, shuffled so any prefix is a random mix: 40 TELL moments (decision points of `decision_points_explore.csv` where either direction has the tell, ncomp == 5) and 20 CONTROL moments (decision points with no tell in either direction and price moving in at least one direction, so a control chart is not obviously quiet). At most 2 moments per date and at least 60 bars apart; at least 120 bars of history. The trader is NOT told which are tell moments, and is not shown the tell's direction.
+
+## What the page shows (and hides)
+Candles of the last up to 240 500-volume bars ending at the decision bar, prices as points above/below the last close (no dates, no absolute price), clock times, per-bar delta (ask minus bid volume) and its running total over the visible bars, the overnight high/low and, once complete, the IB high/low as lines, the day-so-far volume-at-price profile with its POC. No outcome, no tell flag, no tell direction, no later bar. The call applies to the NEXT open.
+Call = LONG / SHORT / SKIP, a confidence tick (low / high), cue ticks for what drove it (delta flip, absorbed or defended area, peak-and-fail at an overnight/IB edge, near edge / room to run, with the move, against the move / exhaustion, other), optional note, and a "recognise this day" box. Ratings are stored in the artifact db collection `ratings`, one doc per item id.
+
+## Outcomes (computed afterwards from the key file, which is NOT in the page)
+For each item the signed move from the decision-bar close in the CALLED direction over 15, 30 and 60 minutes in ATR20 units (same formula as `vbars.points`, long move = fwd for d=+1, short = minus it), plus the first-break side within 60 minutes. A SKIP has no outcome.
+
+## Analysis (once; no peeking as ratings arrive)
+Primary: on TELL moments with a LONG/SHORT call, mean signed 60-minute move in the called direction versus a within-item permutation null (each item's side flipped at random, 20,000 draws, seeded; one-sided p and the null's 95th percentile). Secondary, all reported: the same at 15 and 30 minutes; hit rate (called side moved the right way at 60 minutes) with exact binomial CI; the tell's own direction on the same items (what the machine would have done) and the agreement rate between the trader's call and the tell; the same statistics on CONTROL moments (does the trader's side read work without a tell); high- versus low-confidence calls; per cue tick; recognised days excluded as a sensitivity run. Counts first.
+
+## Resolution (stated now, so a null is read correctly)
+The signed 60-minute move has a standard deviation of about 0.5 ATR20 per call; with about 35 non-skipped tell calls the standard error of the mean is about 0.08-0.09 ATR20 (roughly 25 points). The pilot can therefore only detect a LARGE side skill (a mean of roughly +0.15-0.2 ATR20 in the called direction, or a hit rate near 70 percent); a modest skill such as 55-58 percent is invisible here. A null means "not large", never "no skill". A positive is a lead for a larger, frozen, sealed-hold-out call set; a null with a hit rate near 50 percent and an interval spanning the large-effect threshold justifies stopping.
+
+## Reading rule
+LEAD if the primary permutation p < 0.05 AND the hit rate lower bound exceeds 50 percent AND the same sign at 15 and 30 minutes. Otherwise not shown, with the resolution quoted. No exclusion after seeing the outcomes; no horizon, cue or subgroup is promoted to primary afterwards. Calls made while looking at anything else (a live chart of the day, a screenshot with later bars) invalidate that call; the recognise-box is the trader's own disclosure.
