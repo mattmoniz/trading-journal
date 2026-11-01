@@ -1,0 +1,7 @@
+import { flagDecision } from '../flag_decision.mjs';
+await flagDecision({
+  slug: 'side_calls_ratings_pending_20261101',
+  decisionText: 'WAITING ON THE USER TO CALL 60 CHARTS, then ONE analysis. Artifact "Tell Side Calls" https://claude.ai/artifact/AWc3ofhpbwNXb8v5pTfReA (40 tell moments and 20 non-tell moments from the explore decision points, seeded sample, shuffled, 240 five-hundred-contract bars with delta and the day volume profile, call LONG/SHORT/SKIP, confidence, cue ticks, ratings stored in the artifact db collection ratings). Pre-registration scripts/amt_vbars/PREREG_SIDE_CALLS.md (committed before any chart was built; states the resolution: about 25-35 tell calls can only show a large side skill, a null means not large). Builder scripts/amt_vbars/build_side_calls.py (seeded; the answer key is scratch/side_calls_20261101/key.json, not in the page); analysis scripts/amt_vbars/analyze_side_calls.py, run ONCE on the exported ratings (ArtifactData list with out_dir, then analyze_side_calls.py <dir>); the script was smoke-tested on SYNTHETIC outcomes only so no real outcome statistic has been seen. Resolve with the numbers after the one analysis; if a LEAD, the next step is a larger frozen call set plus one sealed look, not a rule. Related unrated tests the user has not yet done: Four-Hour Picks (https://claude.ai/artifact/TqtzpVQv9pGzr9Qftt5r65), My Calls (https://claude.ai/artifact/DwiHd2fbCwS4aCVynHS5AJ).',
+  sourceFile: 'scripts/amt_vbars/PREREG_SIDE_CALLS.md', sourceDate: '2026-11-01',
+});
+process.exit(0);
