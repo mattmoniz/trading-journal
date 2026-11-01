@@ -27,3 +27,7 @@ A DECISION ENGINE, not a free-roaming model: every judgment is an explicit, vers
 
 ## What is NOT claimed
 That a bot judges better than the user. The user's discretion (spike/absorption reads, holding through grinds, news awareness) is the source of the hypotheses; a labeling mode would turn it into exact data to learn from and to measure the bot against. Speed alone is not an edge unless an out-of-sample test shows it.
+
+
+## Status note 2026-11-01: the sealed look on the with-trend rule (gate 1) is spent
+Result: relative-to-placebo criterion passes (+22.11 per traded day, CI +2.08..+41.71, halves +32/+12) but ABSOLUTE P&L is negative in the hold-out (S1 -12.47 per trade, win days 20 percent; the explore +12 per session did not survive in dollars). The condition DeepSeek stated (the +12 per session surviving out of sample) is therefore NOT met. See scripts/amt_marks_path/PREREG_SINGLE.md and claim amt_marks_withtrend_holdout_rel_pass_abs_neg_20261101. Nothing downstream (probability layer, firing) should be built on this rule as specified.

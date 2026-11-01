@@ -1,0 +1,6 @@
+S1: reproduced mean daily P&L -12.47, real-placebo 22.11 (printed S1 -12.47/22.11, S2 -19.33/32.19)
+   first half (2025-05-21..2026-01-21, 110 days): real 0.14, placebo -31.92, real-placebo 32.06
+   second half (2026-01-23..2026-10-23, 110 days): real -25.08, placebo -37.24, real-placebo 12.16
+S2: reproduced mean daily P&L -19.33, real-placebo 32.19 (printed S1 -12.47/22.11, S2 -19.33/32.19)
+   first half (2025-05-21..2026-01-21, 110 days): real -21.33, placebo -48.20, real-placebo 26.87
+   second half (2026-01-23..2026-10-23, 110 days): real -17.34, placebo -54.84, real-placebo 37.51

@@ -1,0 +1,4 @@
+
+=== SEALED HOLD-OUT (post 2025-05-16), primary = S1: sessions with thresholds 340, sessions with a qualifying mark 220 ===
+S1: trades 220, traded days 220, mean net/trade -12.47$, mean daily P&L (traded days) -12.47$ median -64.00, win days  20%, worst day -364.50$, max drawdown  3842.50$, mean over ALL sessions -8.07$ | placebo daily -34.58$ | real-placebo per traded day  22.11 [  2.08, 41.71] PRE    nan POST  22.11
+S2: trades 392, traded days 220, mean net/trade -10.85$, mean daily P&L (traded days) -19.33$ median -62.00, win days  33%, worst day -594.50$, max drawdown  5619.00$, mean over ALL sessions -12.51$ | placebo daily -51.52$ | real-placebo per traded day  32.19 [ 12.13, 52.44] PRE    nan POST  32.19
