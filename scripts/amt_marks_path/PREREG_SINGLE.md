@@ -19,3 +19,6 @@ Code and thresholds frozen at the commit that contains this section. Data: sessi
 
 ## Not tested
 Globex; the user's two-lot and loose-trail exits; the tell-component hold gate; absorption marks as a filter (their confirmation can come after the spike entry and leaks).
+
+## Pre-run note for the sealed look (2026-11-01, outcome-free, written and committed BEFORE the look is run; changes nothing above)
+User go received 2026-11-01. Data window as coded: `engine.load_sessions` default end 2026-10-27 (timestamps before it, so the last session is 2026-10-26); sessions must have >= 385 RTH bars including the 09:30 and 15:59 bars. Outcome-free screen of the post-2025-05-16 sessions: 18 months all with 390 median bars; 340 eligible sessions after the previous-day-full and gap rules; price ranges plausible every month. One data oddity noted, NOT acted on: June-August 2025 session volume is about 2x the later months (median 0.86-0.97 million vs 0.36-0.49 million contracts per RTH session) and absolute delta likewise; the frozen rule and its thresholds use price thrusts, not volume, so it is not expected to matter, but it is disclosed. No session is excluded after seeing any outcome. Command: `HOLDOUT_OK=1 ../../venv/bin/python run_single.py --holdout`; the lock file spends the look whatever the result.
