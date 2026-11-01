@@ -35,3 +35,6 @@ Shadow-table migration not run (`scripts/migrate_create_amt_marks_shadow_2026102
 2. Items 1 P1 and 2 P1; decide continue or stop on the kill rules.
 3. Item 3 waits for data; item 5 and item 6 wait for a result from 1 or 2.
 Dropped unless the user wants them: the blind side-call page (the trader cannot be in the loop; the cues are tested automatically instead).
+
+## Update 2026-11-01 (late): inputs received for item 1
+The trader approved the repo absorption studies as the 'absorbed area' definition and supplied a description of a delta divergence at new extremes (an ATAS-style DF marker) in place of the unavailable DDY settings. Both are written up as a DRAFT feature dictionary, `docs/DIRECTION_FEATURE_DICTIONARY_20261101.md` (nothing frozen, no outcome computed). Order of work after the DeepSeek review is in `docs/AGENTIC_SYSTEM_SCOPE_20261101.md` section 9: G0 and the look ledger come before the direction program.
