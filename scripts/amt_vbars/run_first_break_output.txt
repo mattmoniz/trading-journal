@@ -1,0 +1,18 @@
+Sessions usable 516; V1 tell fires 1760 (expected 1760); hold-out NOT touched
+tell fires with BOTH sides inside the range: 824 on 369 dates {'T': 329, 'O': 118, 'N': 377}; opposite side ALREADY broken (failed-break-back candidates): 936 {'T': 81, 'O': 717, 'N': 138}
+control (moving only, both sides inside): 10896 points on 470 dates {'T': 3225, 'O': 2101, 'N': 5570}
+
+=== headline: share of FIRST breaks that are on the tell's side (breaking events only) ===
+  TELL    73.6% of 447 breaking events on 278 dates; break rate 54.2%
+  CONTROL 60.6% of 5326; break rate 48.9%
+  tell minus control share: +13.0 pts, day-blocked CI [+9.4, +16.6]
+  tell minus control break rate: +5.4 pts, CI [+1.4, +9.2]
+  first half: tell 74.0% (n=250), control 60.6% (n=3163)
+  second half: tell 73.1% (n=197), control 60.5% (n=2163)
+  READING (pre-registered rule): ABOVE control (design reading)
+
+=== descriptive: NEAR vs FAR (tell points at the nearer / farther range side) ===
+  NEAR: tell 585 events, first-break-on-tell-side 85.8% (break rate 60%); control 6444, 85.0% (break rate 52%)
+  FAR: tell 239 events, first-break-on-tell-side 29.2% (break rate 40%); control 4452, 19.9% (break rate 45%)
+
+=== descriptive: FAILED-BREAK-BACK candidates (opposite side already broken earlier in RTH): 936 fires; tell side breaks first 81, a new break on the other side first 717, none 138

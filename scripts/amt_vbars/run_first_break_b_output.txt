@@ -1,0 +1,8 @@
+near share of events: tell 71.0% (n=824), control 59.1% (n=10896)
+first-break-on-own-side share: tell NEAR 85.8 FAR 29.2; control NEAR 85.0 FAR 19.9
+headline tell 73.6% vs control 60.6% (raw +13.0); control standardised to the tell's near/far mix 66.1% -> tell minus standardised control +7.5 pts
+  standardised difference day-blocked CI [+4.2, +11.1]
+
+FAILED-BREAK-BACK class corrected: 936 fires = STILL_OUTSIDE at the fire 494, BACK_INSIDE 442
+  STILL_OUTSIDE: closes back inside the range within the window 306 (62%)
+  BACK_INSIDE first break: tell side 81, the already-broken side again 224, none 137
