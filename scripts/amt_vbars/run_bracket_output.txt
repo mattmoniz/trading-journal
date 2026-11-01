@@ -1,0 +1,57 @@
+{'TELL': (2591, 442), 'CONTROL_MOVING': (17644, 516), 'CONTROL_NONODE': (1755, 426)} (points, dates)
+
+=== bracket k = 1 x median bar range, window 5 min ===
+  TELL            points  2591 on 442 dates | fill rate 99% ambiguous 0% of fills | mean per point $-2.43 | per fill $-2.45
+  CONTROL_MOVING  points 17644 on 516 dates | fill rate 98% ambiguous 0% of fills | mean per point $-3.09 | per fill $-3.17
+  CONTROL_NONODE  points  1755 on 426 dates | fill rate 99% ambiguous 0% of fills | mean per point $-2.36 | per fill $-2.38
+  TELL absolute per point $-2.43 day-blocked CI [-4.15, -0.61]
+  TELL minus CONTROL_MOVING  (entry-time-mix weighted) $+0.64 CI [-1.34, +2.59] halves -1.13/+2.54
+  TELL minus CONTROL_NONODE  (entry-time-mix weighted) $-0.18 CI [-2.73, +2.37] halves -2.21/+2.30
+  READING: not shown
+
+=== bracket k = 1 x median bar range, window 15 min ===
+  TELL            points  2591 on 442 dates | fill rate 100% ambiguous 0% of fills | mean per point $-1.99 | per fill $-1.99
+  CONTROL_MOVING  points 17644 on 516 dates | fill rate 100% ambiguous 0% of fills | mean per point $-2.80 | per fill $-2.81
+  CONTROL_NONODE  points  1755 on 426 dates | fill rate 100% ambiguous 0% of fills | mean per point $-2.60 | per fill $-2.60
+  TELL absolute per point $-1.99 day-blocked CI [-4.43, +0.68]
+  TELL minus CONTROL_MOVING  (entry-time-mix weighted) $+0.80 CI [-1.98, +3.74] halves -1.61/+3.41
+  TELL minus CONTROL_NONODE  (entry-time-mix weighted) $+0.51 CI [-2.94, +3.97] halves -2.49/+4.25
+  READING: not shown
+
+=== bracket k = 1 x median bar range, window 30 min ===
+  TELL            points  2591 on 442 dates | fill rate 100% ambiguous 0% of fills | mean per point $-1.52 | per fill $-1.52
+  CONTROL_MOVING  points 17644 on 516 dates | fill rate 100% ambiguous 0% of fills | mean per point $-2.24 | per fill $-2.24
+  CONTROL_NONODE  points  1755 on 426 dates | fill rate 100% ambiguous 0% of fills | mean per point $-1.21 | per fill $-1.21
+  TELL absolute per point $-1.52 day-blocked CI [-4.92, +2.32]
+  TELL minus CONTROL_MOVING  (entry-time-mix weighted) $+0.72 CI [-2.62, +4.50] halves -3.64/+5.27
+  TELL minus CONTROL_NONODE  (entry-time-mix weighted) $-0.27 CI [-4.97, +4.50] halves -4.58/+4.51
+  READING: not shown
+
+=== bracket k = 2 x median bar range, window 5 min ===
+  TELL            points  2591 on 442 dates | fill rate 77% ambiguous 0% of fills | mean per point $-1.72 | per fill $-2.23
+  CONTROL_MOVING  points 17644 on 516 dates | fill rate 70% ambiguous 0% of fills | mean per point $-2.28 | per fill $-3.26
+  CONTROL_NONODE  points  1755 on 426 dates | fill rate 75% ambiguous 0% of fills | mean per point $-2.21 | per fill $-2.93
+  TELL absolute per point $-1.72 day-blocked CI [-4.20, +0.47]
+  TELL minus CONTROL_MOVING  (entry-time-mix weighted) $+0.53 CI [-2.57, +3.25] halves -0.61/+1.79
+  TELL minus CONTROL_NONODE  (entry-time-mix weighted) $+0.27 CI [-3.91, +3.93] halves -0.36/+0.85
+  READING: not shown
+
+=== bracket k = 2 x median bar range, window 15 min ===
+  TELL            points  2591 on 442 dates | fill rate 98% ambiguous 0% of fills | mean per point $-2.05 | per fill $-2.10
+  CONTROL_MOVING  points 17644 on 516 dates | fill rate 96% ambiguous 0% of fills | mean per point $-2.84 | per fill $-2.96
+  CONTROL_NONODE  points  1755 on 426 dates | fill rate 97% ambiguous 0% of fills | mean per point $-3.06 | per fill $-3.15
+  TELL absolute per point $-2.05 day-blocked CI [-5.21, +1.28]
+  TELL minus CONTROL_MOVING  (entry-time-mix weighted) $+0.79 CI [-2.54, +4.27] halves -0.94/+2.62
+  TELL minus CONTROL_NONODE  (entry-time-mix weighted) $+0.81 CI [-3.72, +5.22] halves -1.14/+3.09
+  READING: not shown
+
+=== bracket k = 2 x median bar range, window 30 min ===
+  TELL            points  2591 on 442 dates | fill rate 100% ambiguous 0% of fills | mean per point $-1.53 | per fill $-1.53
+  CONTROL_MOVING  points 17644 on 516 dates | fill rate 100% ambiguous 0% of fills | mean per point $-3.43 | per fill $-3.45
+  CONTROL_NONODE  points  1755 on 426 dates | fill rate 100% ambiguous 0% of fills | mean per point $-2.71 | per fill $-2.72
+  TELL absolute per point $-1.53 day-blocked CI [-6.75, +3.63]
+  TELL minus CONTROL_MOVING  (entry-time-mix weighted) $+1.92 CI [-2.67, +6.92] halves -2.45/+6.54
+  TELL minus CONTROL_NONODE  (entry-time-mix weighted) $+1.10 CI [-4.87, +7.06] halves -1.95/+4.05
+  READING: not shown
+
+summary {(1, 5): False, (1, 15): False, (1, 30): False, (2, 5): False, (2, 15): False, (2, 30): False}
