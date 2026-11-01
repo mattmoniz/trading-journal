@@ -1,0 +1,18 @@
+points: TELL 2591 on 442 dates; CONTROL_MOVING 17978 on 516; CONTROL_NONODE 1755 on 426
+  stratum 0: tell 1150, moving 6962, nonode 350
+  stratum 1: tell 819, moving 5804, nonode 602
+  stratum 2: tell 622, moving 5212, nonode 803
+
+=== TELL minus CONTROL_MOVING (tell-mix-weighted over distance strata; per-point means; day-blocked CI) ===
+  E range travelled (ATR20)          tell +0.4491 ctl +0.3827  weighted diff +0.0705 CI [+0.0552, +0.0863]  halves +0.0465/+0.0895
+  A directional asymmetry mfe-mae    tell +0.0109 ctl +0.0017  weighted diff +0.0079 CI [-0.0072, +0.0220]  halves +0.0098/+0.0096
+  fwd signed 60m move                tell +0.0117 ctl -0.0006  weighted diff +0.0104 CI [-0.0014, +0.0222]  halves +0.0096/+0.0123
+  break rate                         tell +0.2038 ctl +0.1352  weighted diff +0.0510 CI [+0.0324, +0.0703]  halves +0.0368/+0.0676
+
+=== TELL minus CONTROL_NONODE (tell-mix-weighted over distance strata; per-point means; day-blocked CI) ===
+  E range travelled (ATR20)          tell +0.4491 ctl +0.4107  weighted diff +0.0533 CI [+0.0293, +0.0791]  halves +0.0212/+0.0842
+  A directional asymmetry mfe-mae    tell +0.0109 ctl -0.0037  weighted diff +0.0228 CI [-0.0024, +0.0488]  halves +0.0227/+0.0277
+  fwd signed 60m move                tell +0.0117 ctl -0.0095  weighted diff +0.0243 CI [+0.0042, +0.0457]  halves +0.0207/+0.0306
+  break rate                         tell +0.2038 ctl +0.0553  weighted diff +0.0965 CI [+0.0626, +0.1315]  halves +0.0750/+0.1274
+
+READING: expansion detector vs moving-only: YES; ladder marginal over non-node components on E: YES; direction asymmetry A vs moving-only CI excludes zero: no (coin-flip side not shown to differ)
