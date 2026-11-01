@@ -1,0 +1,49 @@
+REPRODUCTION at 60 min: rows 41272 of 41272; max |mfe diff| 4.44e-16, max |mae diff| 4.44e-16, max |fwd diff| 4.44e-16, brk equal True
+
+######## window 5 minutes: rows 41247 of 41272; tell 2591 on 442 dates, moving-only 17965, no-node 1755
+  --- TELL minus CONTROL_MOVING
+    E range travelled      tell +0.1440 ctl +0.1185  weighted diff +0.0267 CI [+0.0212, +0.0336]  halves +0.0167/+0.0339  ratio tell/ctl 1.22
+    A asymmetry mfe-mae    tell +0.0039 ctl +0.0005  weighted diff +0.0033 CI [-0.0009, +0.0075]  halves +0.0045/+0.0027
+    fwd signed move        tell +0.0013 ctl -0.0011  weighted diff +0.0023 CI [-0.0018, +0.0063]  halves +0.0024/+0.0026
+    break rate             tell +0.0475 ctl +0.0254  weighted diff +0.0183 CI [+0.0102, +0.0273]  halves +0.0139/+0.0232
+  --- TELL minus CONTROL_NONODE
+    E range travelled      tell +0.1440 ctl +0.1270  weighted diff +0.0201 CI [+0.0125, +0.0290]  halves +0.0072/+0.0314  ratio tell/ctl 1.13
+    A asymmetry mfe-mae    tell +0.0039 ctl +0.0004  weighted diff +0.0044 CI [-0.0021, +0.0112]  halves +0.0047/+0.0059
+    fwd signed move        tell +0.0013 ctl -0.0016  weighted diff +0.0035 CI [-0.0026, +0.0095]  halves +0.0031/+0.0051
+    break rate             tell +0.0475 ctl +0.0046  weighted diff +0.0373 CI [+0.0261, +0.0485]  halves +0.0366/+0.0383
+
+######## window 15 minutes: rows 41272 of 41272; tell 2591 on 442 dates, moving-only 17978, no-node 1755
+  --- TELL minus CONTROL_MOVING
+    E range travelled      tell +0.2421 ctl +0.2033  weighted diff +0.0410 CI [+0.0322, +0.0518]  halves +0.0247/+0.0530  ratio tell/ctl 1.19
+    A asymmetry mfe-mae    tell +0.0022 ctl -0.0002  weighted diff +0.0021 CI [-0.0054, +0.0097]  halves +0.0044/+0.0008
+    fwd signed move        tell -0.0007 ctl -0.0011  weighted diff +0.0000 CI [-0.0066, +0.0067]  halves +0.0022/-0.0011
+    break rate             tell +0.0915 ctl +0.0545  weighted diff +0.0291 CI [+0.0175, +0.0413]  halves +0.0216/+0.0375
+  --- TELL minus CONTROL_NONODE
+    E range travelled      tell +0.2421 ctl +0.2174  weighted diff +0.0315 CI [+0.0181, +0.0469]  halves +0.0094/+0.0518  ratio tell/ctl 1.11
+    A asymmetry mfe-mae    tell +0.0022 ctl -0.0010  weighted diff +0.0065 CI [-0.0060, +0.0189]  halves +0.0114/+0.0020
+    fwd signed move        tell -0.0007 ctl -0.0014  weighted diff +0.0037 CI [-0.0083, +0.0148]  halves +0.0078/-0.0005
+    break rate             tell +0.0915 ctl +0.0160  weighted diff +0.0567 CI [+0.0382, +0.0761]  halves +0.0504/+0.0652
+
+######## window 30 minutes: rows 41272 of 41272; tell 2591 on 442 dates, moving-only 17978, no-node 1755
+  --- TELL minus CONTROL_MOVING
+    E range travelled      tell +0.3353 ctl +0.2819  weighted diff +0.0563 CI [+0.0442, +0.0714]  halves +0.0351/+0.0725  ratio tell/ctl 1.19
+    A asymmetry mfe-mae    tell +0.0041 ctl +0.0007  weighted diff +0.0028 CI [-0.0084, +0.0144]  halves +0.0046/+0.0035
+    fwd signed move        tell +0.0025 ctl -0.0010  weighted diff +0.0027 CI [-0.0071, +0.0118]  halves +0.0044/+0.0039
+    break rate             tell +0.1366 ctl +0.0877  weighted diff +0.0367 CI [+0.0226, +0.0523]  halves +0.0239/+0.0512
+  --- TELL minus CONTROL_NONODE
+    E range travelled      tell +0.3353 ctl +0.3020  weighted diff +0.0446 CI [+0.0251, +0.0665]  halves +0.0185/+0.0677  ratio tell/ctl 1.11
+    A asymmetry mfe-mae    tell +0.0041 ctl -0.0023  weighted diff +0.0120 CI [-0.0066, +0.0303]  halves +0.0144/+0.0120
+    fwd signed move        tell +0.0025 ctl -0.0035  weighted diff +0.0100 CI [-0.0063, +0.0272]  halves +0.0113/+0.0120
+    break rate             tell +0.1366 ctl +0.0296  weighted diff +0.0746 CI [+0.0476, +0.0997]  halves +0.0601/+0.0940
+
+######## window 60 minutes: rows 41272 of 41272; tell 2591 on 442 dates, moving-only 17978, no-node 1755
+  --- TELL minus CONTROL_MOVING
+    E range travelled      tell +0.4491 ctl +0.3827  weighted diff +0.0705 CI [+0.0555, +0.0862]  halves +0.0465/+0.0895  ratio tell/ctl 1.17
+    A asymmetry mfe-mae    tell +0.0109 ctl +0.0017  weighted diff +0.0079 CI [-0.0072, +0.0221]  halves +0.0098/+0.0096
+    fwd signed move        tell +0.0117 ctl -0.0006  weighted diff +0.0104 CI [-0.0020, +0.0224]  halves +0.0096/+0.0123
+    break rate             tell +0.2038 ctl +0.1352  weighted diff +0.0510 CI [+0.0321, +0.0708]  halves +0.0368/+0.0676
+  --- TELL minus CONTROL_NONODE
+    E range travelled      tell +0.4491 ctl +0.4107  weighted diff +0.0533 CI [+0.0284, +0.0786]  halves +0.0212/+0.0842  ratio tell/ctl 1.09
+    A asymmetry mfe-mae    tell +0.0109 ctl -0.0037  weighted diff +0.0228 CI [-0.0017, +0.0474]  halves +0.0227/+0.0277
+    fwd signed move        tell +0.0117 ctl -0.0095  weighted diff +0.0243 CI [+0.0026, +0.0455]  halves +0.0207/+0.0306
+    break rate             tell +0.2038 ctl +0.0553  weighted diff +0.0965 CI [+0.0614, +0.1299]  halves +0.0750/+0.1274
