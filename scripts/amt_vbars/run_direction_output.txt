@@ -1,0 +1,18 @@
+Sessions usable 516; V1 tell trades 1760 (expected 1760); hold-out NOT touched
+events 1760 on 488 dates; with a DELTA read 1758; with a FLIP 719; DELTA agrees with tell 1434, disagrees 324
+
+=== Q1 (descriptive): tell direction vs opposite vs random-direction placebo, same entry/stop/exit (stripped geometry) ===
+  R0 tell dir : mean $+2.68 CI (-3.69, 9.28)   WR 26.1%
+  R1 opposite : mean $-3.89 CI (-9.28, 1.83)   WR 27.3%
+  PLACEBO random dir: mean $-0.50, p95 $+3.77 over 200 draws
+  (real V1 trade with its own exits, for reference: mean $+1.93)
+  R1 minus R0 paired: -6.57 CI (-16.12, 2.16)
+  halves (R1 minus R0): first -0.78, second -12.36
+
+=== Q2: flow-based direction rules, paired against the tell direction on the same events ===
+  R2 DELTA: N=1758 on 488 dates; rule mean $+0.26 vs tell $+2.78; paired diff -2.52 CI [-7.51, +2.11]; placebo p95 $+4.11; halves +2.09/-7.14; top5 share n/a -> not shown
+  R3 FLIP: N=1760 on 488 dates; rule mean $-0.11 vs tell $+2.68; paired diff -2.79 CI [-7.24, +1.48]; placebo p95 $+3.84; halves +0.93/-6.52; top5 share n/a -> not shown
+  R4 AGREE: tell where DELTA agrees N=1434 mean $+0.18 | disagrees N=324 mean $+14.28; diff -14.09 CI [-36.91, +7.47]; AGREE mean vs placebo p95 $+3.77; halves +4.04/-26.43 -> not shown
+      (the opposite side on DISAGREE events: mean $+0.58)
+
+summary: {'R2 DELTA': False, 'R3 FLIP': False, 'R4 AGREE': False}
