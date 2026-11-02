@@ -1,0 +1,16 @@
+usable rows 1607 (dropped {'null_pnl': 0, 'no_ctx': 178, 'in_first_train': 0, 'no_state': 2}); hold minutes: n 1525, p25 5, median 18, p75 58, p90 174  ->  H* = 30 minutes (rule: median rounded to 15, floor 30, cap 240)
+training decision points with a complete 30-minute window: 30803 of 30819 (100%)
+evaluated 1507 rows on 98 dates; overall mean simulated P&L per row $-4.99
+
+SKIPPED (horizon-matched forecast top third): N=526 on 63 dates, mean $-4.62/row, day-blocked 95% CI [-20.17, +10.62]; KEPT N=981 mean $-5.19
+  effect of skipping them: total $+2429 over 98 days = $+24.79/day (mirror of a non-significant mean unless the pass rule below says otherwise)
+  first half: skipped N=204 mean $-8.13, kept N=350 mean $+1.81
+  second half: skipped N=322 mean $-2.39, kept N=631 mean $-9.08
+  matched random-skip placebo: mean $-4.98, p(placebo <= observed) = 0.5385
+
+H4c pass rule (skipped CI upper < 0, placebo p < 0.05, skipped mean below kept mean in BOTH halves): NOT PASSED
+
+uncounted: Spearman(forecast, trade mfe+mae) = -0.0257, day-blocked CI [-0.1577, +0.1103]; by forecast third (N, mean excursion points, mean $ pnl):
+  low  N= 444 exc   73.79  pnl   -7.54
+  mid  N= 537 exc   75.45  pnl   -3.25
+  high N= 526 exc   74.40  pnl   -4.62

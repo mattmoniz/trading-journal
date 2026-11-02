@@ -1,0 +1,7 @@
+import { recordClaim } from '../record_claim.mjs';
+await recordClaim({
+  slug: 'roster_context_h4c_horizon_matched_not_shown_20261102',
+  claimText: 'Roster-context Amendment 5 (rule committed before computing; look id 41; explore only; SIMULATED BACKFILL P&L). The horizon rule gave H* = 30 minutes: the median hold of the 1,607 usable fade rows is 18 minutes (p25 5, p75 58, p90 174), so the 30-minute forecast ALREADY matched the trades and the earlier guess (horizon mismatch behind the 74-point mean excursion) is REFUTED; the mean excursion comes from a long tail of holds. H4c (same pass rule as H4): skipped N=526 mean -$4.62/row (day-blocked CI -20.17..+10.62) vs kept N=981 mean -$5.19; placebo p 0.54; halves contradict (first half skipped -8.13 vs kept +1.81; second half -2.39 vs -9.08). NOT PASSED. Spearman(forecast, trade mfe+mae) -0.026 (CI -0.158..+0.110); excursion by forecast third 73.8/75.5/74.4 points. NOT SHOWN: any link between the busy-or-quiet forecast and these fades outcomes or excursions on the simulated history, at a resolution of about 15 dollars per row. The simulated-history route is closed for this study; the forecast goes to forward tags without a rule from it.',
+  sourceFile: 'scripts/amt_context/run_p3c_output.txt', sourceDate: '2026-11-02', sampleSize: 1507, evPerTrade: -4.62, rigorStatus: 'explore_only_simulated_pnl_null_horizon_matched', status: 'PROVISIONAL',
+});
+process.exit(0);
