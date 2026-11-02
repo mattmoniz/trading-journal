@@ -1,0 +1,8 @@
+signals: TELL 0, CONTROL 0; reference original V1 mean per trade $+1.93 (N 1760)
+
+COUNTED (net dollars per signal; CONTROL = the same procedure on no-tell moving bars):
+  k=1 A single leg: TELL  -1.00 [-5.4, +3.7] (N 1760, 488 dates) CONTROL  -2.48 diff +1.48 CI [-2.88, +5.97] p 0.558 halves -3.1/+5.2 BH no | legs 1.00, stop-outs 0.93, first leg -1.00, reversal legs +0.00
+  k=1 B stop-and-reverse: TELL  -8.15 [-14.8, -0.7] (N 1760, 488 dates) CONTROL  -6.68 diff -1.46 CI [-7.78, +5.46] p 0.609 halves -4.6/+1.4 BH no | legs 2.78, stop-outs 2.57, first leg -1.00, reversal legs -7.15
+  k=2 A single leg: TELL  -1.20 [-7.4, +5.0] (N 1760, 488 dates) CONTROL  -2.02 diff +0.82 CI [-5.74, +6.71] p 0.775 halves -1.2/+2.6 BH no | legs 1.00, stop-outs 0.84, first leg -1.20, reversal legs +0.00
+  k=2 B stop-and-reverse: TELL  -5.33 [-17.1, +6.7] (N 1760, 488 dates) CONTROL  -5.14 diff -0.18 CI [-10.06, +10.65] p 0.942 halves -5.3/+4.3 BH no | legs 2.55, stop-outs 2.15, first leg -1.20, reversal legs -4.13
+UNCOUNTED by year (TELL, variant B, k=1 net per signal): 2023 -11.11, 2024 -6.85, 2025 -6.61
