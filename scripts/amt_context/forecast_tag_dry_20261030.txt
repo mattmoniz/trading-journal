@@ -1,0 +1,3 @@
+2026-10-30: rebuilt 2044 bars (stored session n_bars 2045), validated vs the database RTH volume: True
+decision-grid points 86; roster fires 60 (tagged 60); tell trades 9 (tagged 9)
+dry run, nothing written

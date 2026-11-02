@@ -1,0 +1,2 @@
+horizon 30 min: trained on 30803 explore points on 516 dates through 2025-05-16; alpha 1000.0; version ridge-act-h30-2025-05-16-caeaaa2f
+registered ridge-act-h30-2025-05-16-caeaaa2f CHAMPION

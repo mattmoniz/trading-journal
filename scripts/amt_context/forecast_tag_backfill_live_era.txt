@@ -1,0 +1,9 @@
+2026-10-30: rebuilt 2044 bars (stored session n_bars 2045), validated vs the database RTH volume: True
+decision-grid points 86; roster fires 60 (tagged 60); tell trades 9 (tagged 9)
+wrote 86 points, 69 tags
+2026-10-29: rebuilt 1588 bars (stored session n_bars 1589), validated vs the database RTH volume: True
+decision-grid points 64; roster fires 87 (tagged 87); tell trades 9 (tagged 9)
+wrote 64 points, 96 tags
+2026-10-28: rebuilt 1199 bars (stored session n_bars 1200), validated vs the database RTH volume: True
+decision-grid points 40; roster fires 118 (tagged 118); tell trades 3 (tagged 3)
+wrote 40 points, 121 tags

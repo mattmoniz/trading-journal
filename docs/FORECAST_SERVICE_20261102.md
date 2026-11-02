@@ -1,0 +1,25 @@
+# Live busy-or-quiet forecast service (2026-11-02)
+
+User objective (2026-11-02): a LIVE forecast that keeps learning, serving base hits and home runs. Memory: `project-live-learning-forecast-objective-20261102`. Evidence behind it: `scripts/amt_context/PREREG_ROSTER_CONTEXT.md` and the claims `roster_context_p2_forecast_beats_baseline_20261102` (the forecast works: out-of-sample rank correlation about 0.65 vs 0.26 for the clock baseline), `roster_context_tell_adds_nothing_beyond_range_20261102` (the tell adds nothing once recent range is known), `roster_context_h4_skip_busy_fades_not_shown_20261102` / `roster_context_h4c_horizon_matched_not_shown_20261102` / `roster_context_forecast_vs_fade_excursion_null_20261102` (no link to the simulated fades). So: the forecast is validated as a forecast of travel; its usefulness for trades is UNPROVEN and is what the forward data is for.
+
+## What it is
+A model that predicts, at any minute from 09:30 ET, how far NQ will travel (highest high minus lowest low, in ATR20 units) over the next H minutes (H = 30 for v1). Ridge on log travel, activity features only (pace of the 500-volume bars, range so far, overnight range, recent realized range over 15/30/60 minutes, clock bucket, day of week). No tell feature. Definitions: `scripts/amt_context/forecast_features.py` (serving) = `run_p2b.py`/`run_p3.py` (study); equality proven by `test_forecast_features.py`.
+
+## What is built (all shadow: no order, no live-path change, no restart needed)
+- Tables (`scripts/migrate_create_forecast_tables_20261102.mjs`): `forecast_models` (versioned registry, CHAMPION/CHALLENGER/RETIRED, coefficients stored so every forecast can be re-derived), `forecast_points` (forward decision-grid bars with features, every model's forecast and the realized travel once the window completed; price data only), `forecast_tags` (the forecast beside every RTH roster fire (ACTIVE and SHADOW primaries) and every V1 tell trade; outcome-blind, no P&L column).
+- `scripts/amt_context/forecast_train.py HORIZON` trains and registers a version from the explore decision grid (through 2025-05-16) plus, later, completed forward points.
+- `scripts/amt_context/forecast_tag_day.py DATE`: rebuilds the day's 500-volume bars with the sidecar's validated builder (like `tag_flips_day.py`), writes points and tags. Nightly via `forecast_tag_nightly.sh`, a step of `scripts/run_daily_calibration.sh` (8:20 PM ET Mon-Fri), forward start 2026-11-02, today and two previous weekdays, idempotent, a failed day never fails the job.
+- `scripts/amt_context/forecast_status.mjs`: COUNTS only, no skill statistic, so nightly runs cannot cause optional stopping.
+
+## The learning loop (rules fixed now, before any forward data exists)
+1. Retrain on a CALENDAR, never on a result: a CHALLENGER is trained weekly (Sunday) on the explore points plus every completed forward point older than the held-out span below.
+2. Nothing is evaluated before 40 forward trading days of completed points exist. After that, evaluation is on the most recent 20 forward days, which no candidate was trained on (the champion was trained on earlier data by construction).
+3. A challenger replaces the champion only if its out-of-sample rank correlation on those 20 held-out days beats the champion's with a day-blocked CI lower bound above 0 AND a permutation p below 0.05; at most one promotion per 4 weeks; each evaluation is a look in the ledger (family `forecast_learning_loop`). The retired champion stays in the registry.
+4. A daily skill monitor does not exist as a nightly statistic (optional stopping). Decay is checked at the scheduled looks and by one data-derived alarm: if the rolling 20-day rank correlation falls below the 5th percentile of the same statistic over the explore period, an OPEN_DECISION is flagged. Both are implemented with the first look, not before (flagged: decision `forecast_learning_loop_unbuilt_20261102`).
+5. No feature, horizon or model-class is added to rescue a weak result; a new one is a pre-registered amendment with its own look.
+
+## Consumers (anything that ACTS on the forecast): all SHADOW until the user says otherwise
+Candidates, each a separate pre-registered test on the forward tags, logging what it WOULD have done and never changing an order: skip a fade when busy; size stops and targets from expected travel (candidate for the tell, which has no target); switch setup family (quiet favors fades, busy favors continuation setups; needs the trend families that only the forward data contains); stand down when one bad trade could use the daily-loss limit. The user's standing position: no ML gate on real decisions without being asked ([[project-ml-silo-trust-unresolved-20260929]]); Stage 2 stays unchanged until its own review.
+
+## Known limits
+Training explore data ends 2025-05-16 and the sealed window is not read; the gap to the live era is not bridged. RTH only; Globex is untested (recorded gap). The simulated-history tests were null for the fades, so the forward tags are where a consumer can first prove anything.

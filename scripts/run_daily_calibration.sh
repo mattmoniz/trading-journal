@@ -319,6 +319,7 @@ timed_step daily ./venv/bin/python3 scripts/amt_s1/amt_daily_state.py
 # AGREE / DISAGREE / NONE) for today and the two previous weekdays, only from the forward start 2026-11-02. Outcome-blind (never reads net_dollars), idempotent, read-only against live data,
 # a failed day is retried the next night and never fails this job. Scored by scripts/report_flip_disagree_forward.mjs at 100/200/300 DISAGREE fires. Decision amt_tell_flip_disagree_forward_test_20261101.
 timed_step daily /bin/bash scripts/amt_tell_live/tag_flips_nightly.sh
+timed_step daily /bin/bash scripts/amt_context/forecast_tag_nightly.sh   # 2026-11-02: outcome-blind busy-or-quiet forecast tags (docs/FORECAST_SERVICE_20261102.md)
 
 # Nightly live attestation (docs/G0_GAP_AUDIT_20261101.md items 6 and 7): rebuilds today's tell trades from the tick file and compares EVERY one with what the live sidecar logged (decision hash, exit, P&L, stored bars hash),
 # checks that every real ENTRY fill of today has a matching exit fill and nothing is left open after the close, and measures the model-vs-broker P&L gap. Writes live_attestations; a DIVERGENCE or ERROR also logs a line to

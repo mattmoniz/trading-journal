@@ -5548,6 +5548,82 @@ CREATE TABLE public.es_front_calendar (
 
 
 --
+-- Name: forecast_models; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.forecast_models (
+    id integer NOT NULL,
+    version character varying(40) NOT NULL,
+    horizon_min integer NOT NULL,
+    role character varying(12) NOT NULL,
+    trained_through date NOT NULL,
+    train_n integer NOT NULL,
+    feature_names jsonb NOT NULL,
+    params jsonb NOT NULL,
+    notes jsonb,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT forecast_models_role_check CHECK (((role)::text = ANY ((ARRAY['CHAMPION'::character varying, 'CHALLENGER'::character varying, 'RETIRED'::character varying])::text[])))
+);
+
+
+--
+-- Name: forecast_models_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.forecast_models_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: forecast_models_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.forecast_models_id_seq OWNED BY public.forecast_models.id;
+
+
+--
+-- Name: forecast_points; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.forecast_points (
+    trade_date date NOT NULL,
+    bar_idx integer NOT NULL,
+    ts_sec double precision NOT NULL,
+    features jsonb NOT NULL,
+    preds jsonb DEFAULT '{}'::jsonb NOT NULL,
+    realized jsonb,
+    validated boolean DEFAULT false NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: forecast_tags; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.forecast_tags (
+    kind character varying(12) NOT NULL,
+    ref_id bigint NOT NULL,
+    trade_date date NOT NULL,
+    setup_type character varying(80),
+    fired_at timestamp without time zone,
+    ts_sec double precision NOT NULL,
+    bar_idx integer NOT NULL,
+    in_primary_window boolean NOT NULL,
+    features jsonb NOT NULL,
+    preds jsonb NOT NULL,
+    validated boolean DEFAULT false NOT NULL,
+    tagged_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT forecast_tags_kind_check CHECK (((kind)::text = ANY ((ARRAY['ROSTER_FIRE'::character varying, 'TELL_TRADE'::character varying])::text[])))
+);
+
+
+--
 -- Name: gated_candidates; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -10963,6 +11039,13 @@ ALTER TABLE ONLY public.engine_reads ALTER COLUMN id SET DEFAULT nextval('public
 
 
 --
+-- Name: forecast_models id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.forecast_models ALTER COLUMN id SET DEFAULT nextval('public.forecast_models_id_seq'::regclass);
+
+
+--
 -- Name: gated_candidates id; Type: DEFAULT; Schema: public; Owner: -
 --
 
@@ -11726,6 +11809,38 @@ ALTER TABLE ONLY public.engine_reads
 
 ALTER TABLE ONLY public.es_front_calendar
     ADD CONSTRAINT es_front_calendar_pkey PRIMARY KEY (trade_date);
+
+
+--
+-- Name: forecast_models forecast_models_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.forecast_models
+    ADD CONSTRAINT forecast_models_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: forecast_models forecast_models_version_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.forecast_models
+    ADD CONSTRAINT forecast_models_version_key UNIQUE (version);
+
+
+--
+-- Name: forecast_points forecast_points_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.forecast_points
+    ADD CONSTRAINT forecast_points_pkey PRIMARY KEY (trade_date, bar_idx);
+
+
+--
+-- Name: forecast_tags forecast_tags_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.forecast_tags
+    ADD CONSTRAINT forecast_tags_pkey PRIMARY KEY (kind, ref_id);
 
 
 --
@@ -13178,6 +13293,20 @@ CREATE INDEX idx_dpl_structural_state ON public.daily_performance_log USING btre
 --
 
 CREATE INDEX idx_dpl_trade_date ON public.daily_performance_log USING btree (trade_date);
+
+
+--
+-- Name: idx_forecast_models_one_champion; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX idx_forecast_models_one_champion ON public.forecast_models USING btree (horizon_min) WHERE ((role)::text = 'CHAMPION'::text);
+
+
+--
+-- Name: idx_forecast_tags_date; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_forecast_tags_date ON public.forecast_tags USING btree (trade_date);
 
 
 --
