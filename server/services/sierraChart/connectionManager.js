@@ -17,7 +17,7 @@ import { handleOrderUpdate, runReconciliation, extractPositionForSymbol, getBrok
 import { resolveMnqFrontMonthSymbolFromEnv } from './contractSymbol.js';
 import { query } from '../../db.js';
 import { getPriceMultiplier } from './priceMultiplier.js';
-import { runBootSelfTest, bootSelfTestAllowsRearm } from './bootSelfTest.js';
+import { runBootSelfTest, markBootSelfTestCrashed, bootSelfTestAllowsRearm } from './bootSelfTest.js';
 
 let client = null;
 let lastReconciliationReport = null;
@@ -112,7 +112,7 @@ export async function startConnectionManager() {
   bootHaltDone = true;
   // G0 boot self-test (2026-11-02): runs to completion BEFORE the first connect/reconcile, because that reconcile is what can
   // auto-rearm. A failure or a throw leaves no passing result, and maybeAutoRearmAfterReconcile() fails closed on that.
-  await runBootSelfTest().catch((err) => console.error('[BOOT_SELFTEST_FAILED] self-test crashed:', err));
+  await runBootSelfTest().catch((err) => markBootSelfTestCrashed(err).catch((e2) => console.error('[BOOT_SELFTEST_FAILED] could not record the crash:', e2.message)));
   await connectOnce();
 }
 

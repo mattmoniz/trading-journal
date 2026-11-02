@@ -285,7 +285,13 @@ export function etNaiveStringToUtcIso(y, mo, d, h, mi, s) {
   );
   const targetWallClock = Date.UTC(y, mo - 1, d, h, mi, s);
   const diffMs = targetWallClock - etWallClockOfGuess;
-  return new Date(utcGuess.getTime() + diffMs).toISOString();
+  const firstPass = utcGuess.getTime() + diffMs;
+  // Second pass (2026-11-02): the first correction uses the ET offset at the GUESSED instant, which is wrong for the few hours on a
+  // DST-change day where the guess and the true instant straddle the transition (up to a one-hour error, e.g. 2026-03-08 03:30 ET).
+  // Re-applying the correction at the first-pass instant removes it; away from a transition the second diff is 0 and nothing changes.
+  const parts2 = fmt.formatToParts(new Date(firstPass)).reduce((acc, p) => { acc[p.type] = p.value; return acc; }, {});
+  const etWallClockOfFirst = Date.UTC(+parts2.year, +parts2.month - 1, +parts2.day, parts2.hour === '24' ? 0 : +parts2.hour, +parts2.minute, +parts2.second);
+  return new Date(firstPass + (targetWallClock - etWallClockOfFirst)).toISOString();
 }
 
 function parseDateTime(dateTimeStr) {

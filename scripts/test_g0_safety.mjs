@@ -1,8 +1,10 @@
-// G0 safety tests (2026-11-02): entry feed gate, boot self-test (incl. mutation tests), auto-rearm wiring. Touches no live state:
-// never writes the kill switch file, never persists to live_attestations, never calls the order sweeps.
+// G0 safety tests (2026-11-02): entry feed gate, boot self-test (incl. mutation tests), auto-rearm wiring. Does not touch the kill switch
+// file, never persists to live_attestations, never calls the order sweeps. Honest scope: one check briefly removes DTC_DLL_LIMIT_USD from
+// THIS process's env (restored, asserted below) and one does a rolled-back DB insert. It does not run sweepEntries end to end.
 import fs from 'fs';
+import { etNaiveTimestampToMs } from '../server/services/acdShared.js';
 import { feedAgeMinutes, entryFeedDecision, entryFeedGate, FEED_BLOCK_MINUTES, FEED_WARN_MINUTES } from '../server/services/feedFreshness.js';
-import { runBootSelfTest, buildChecks, bootSelfTestAllowsRearm, getBootSelfTestState } from '../server/services/sierraChart/bootSelfTest.js';
+import { runBootSelfTest, markBootSelfTestCrashed, buildChecks, bootSelfTestAllowsRearm, getBootSelfTestState } from '../server/services/sierraChart/bootSelfTest.js';
 
 let fails = 0;
 const t = (name, ok, extra = '') => { console.log(`${ok ? '  ok  ' : '  FAIL'}  ${name}${extra ? ' -- ' + extra : ''}`); if (!ok) fails++; };
@@ -44,6 +46,27 @@ t('MUTATION: a hanging check times out as a failure', m4.passed === false && m4.
 t('the state getter reflects the last run', getBootSelfTestState()?.passed === false);
 await runBootSelfTest({ checks: buildChecks({ ks: haltedKs, eligible: inelig }), persistResult: false });
 t('a later passing run re-allows auto-rearm', bootSelfTestAllowsRearm() === true);
+
+// review-driven additions (DeepSeek code review 2026-11-02)
+t('future tolerance boundary: -1 min passes, -2.1 min blocks', entryFeedDecision(-1).ok === true && entryFeedDecision(-2.1).ok === false);
+const ms = etNaiveTimestampToMs;
+t('DST spring-forward: 01:30 EST to 03:30 EDT is one hour', ms('2026-03-08 03:30:00') - ms('2026-03-08 01:30:00') === 3600000);
+t('DST fall-back: 00:00 EDT to 03:00 EST is four hours', ms('2026-11-01 03:00:00') - ms('2026-11-01 00:00:00') === 4 * 3600000);
+const SENTINEL = '4242'; process.env.DTC_DLL_LIMIT_USD = SENTINEL;
+const m5 = await runBootSelfTest({ checks: buildChecks({ ks: haltedKs, eligible: inelig, dllEvaluate: async () => ({ blocked: false, reason: 'x' }) }), persistResult: false });
+t('MUTATION: a daily-loss gate that does not block an unset limit fails the self-test', m5.passed === false && m5.failures.includes('dll_unset_limit_blocks_with_reason'));
+t('the daily-loss env value is restored after a check', process.env.DTC_DLL_LIMIT_USD === SENTINEL);
+const m6 = await runBootSelfTest({ checks: buildChecks({ ks: haltedKs, eligible: inelig, dbProbe: async () => { throw new Error('insert refused'); } }), persistResult: false });
+t('MUTATION: a failing DB probe fails the self-test', m6.passed === false && m6.failures.includes('db_rolled_back_insert'));
+// a late-finishing check must not change the result after the timeout
+let release; const gate = new Promise((r) => { release = r; });
+const late = await runBootSelfTest({ checks: [['slow', async () => { await gate; return { ok: true }; }]], timeoutMs: 100, persistResult: false });
+const before = JSON.stringify(late.checks); release(); await new Promise((r) => setTimeout(r, 50));
+t('a late check cannot mutate the recorded result after the timeout', JSON.stringify(late.checks) === before && getBootSelfTestState().passed === false);
+// a crashed self-test is recorded as a visible failure and keeps auto-rearm suppressed
+await markBootSelfTestCrashed(new Error('simulated crash'), { persistResult: false });
+t('a crashed self-test is a recorded failure and suppresses auto-rearm', getBootSelfTestState().failures.includes('self_test_crashed') && bootSelfTestAllowsRearm() === false);
+delete process.env.DTC_DLL_LIMIT_USD;
 
 // --- wiring (source-level invariants): the gate and the rearm suppression are actually connected
 const src = (p) => fs.readFileSync(new URL(p, import.meta.url), 'utf8');
