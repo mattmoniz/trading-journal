@@ -1,0 +1,9 @@
+events: MAJOR 1461, MINOR 1044
+
+COUNTED (y30 = points in the TELL direction; AGREE = tell equals the level side):
+  MAJOR: AGREE  +2.10 [-3.5, +7.2] (N 718) | DISAGREE  -0.69 [-5.3, +3.8] (N 743) | AGREE minus DISAGREE +2.79 CI [-3.74, +9.42] p 0.397 halves +2.3/+3.2 BH no
+  MINOR: AGREE  +0.36 [-4.4, +5.3] (N 520) | DISAGREE  +0.90 [-4.0, +6.3] (N 524) | AGREE minus DISAGREE -0.54 CI [-7.61, +6.35] p 0.866 halves +1.8/-2.3 BH no
+UNCOUNTED y15: MAJOR agree +0.4 / disagree -1.6; MINOR agree -0.2 / disagree -0.7
+UNCOUNTED y60: MAJOR agree +1.4 / disagree +0.1; MINOR agree +1.6 / disagree +3.1
+UNCOUNTED the rule (AGREE at major + DISAGREE at minor): N 1242, mean y30 +1.59; by year: 2023 -0.60 (N 395), 2024 +3.70 (N 533), 2025 +0.78 (N 314)
+UNCOUNTED per family inside MAJOR (agree / disagree y30, N): OR_HL +4.3 / +5.9 (300); MIDS +5.4 / +1.2 (272); IB_HL -15.4 / -2.6 (129); OVN +9.7 / +13.6 (89); PRIOR_DAY +11.0 / -13.3 (187); VALUE_AREA -6.0 / +1.0 (172); WM_PIVOTS -16.5 / -1.0 (96); OPENS_VWAP +12.8 / -6.5 (142); PERIOD_HLP -9.0 / -9.0 (74)
