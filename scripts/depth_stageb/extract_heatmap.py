@@ -16,7 +16,7 @@ def sc_micros(date, hh, mm):
 
 def find_files(date, contract):
     """contract like NQZ26 (calendar contract of the date) -> depth file NQZ6.CME.DATE.depth and scid NQZ26.scid"""
-    letter, yr = contract[2], contract[-1]; dep = [f for d in DEPTH_DIRS for f in glob.glob(f'{d}/NQ{letter}{yr}.CME.{date}.depth')]
+    letter, yr = contract[2], contract[-1]; dep = [f for d in DEPTH_DIRS for pat in (f'NQ{letter}{yr}.CME.{date}.depth', f'{contract}.{date}.depth') for f in glob.glob(f'{d}/{pat}')]
     scid = [f for d in SCID_DIRS for f in glob.glob(f'{d}/{contract}.scid')]; return (max(dep, key=os.path.getsize) if dep else None), (scid[0] if scid else None)
 
 def bsearch(mm, target):
@@ -115,7 +115,8 @@ def extract(date, contract):
     start = lo + int(clr[-1]); i1 = bsearch(dm, t1); D = np.array(dm[start:i1]); sm = np.memmap(spath, dtype=SCID_DT, mode='r', offset=56); a = bsearch(sm, t0 - 5_000_000); b = bsearch(sm, t1)
     T = np.array(sm[a:b]); ok = ((T['o'] == 0.0) | (np.abs(T['o'] - (-1.99900095e+37)) < 1e30) | (np.abs(T['o'] - (-1.99900197e+37)) < 1e30)) & (T['vol'] > 0) & (T['c'] > 0)
     T = T[ok]; side = np.where(T['askvol'] > T['bidvol'], 1, np.where(T['bidvol'] > T['askvol'], -1, 0)).astype(np.int8)
-    res = kernel(D['dt'], D['cmd'], D['flags'], D['price'] / 100.0, D['qty'], T['dt'], (T['c'] / 100.0 if np.median(T['c']) > 1e6 else T['c'].astype(np.float64)), T['vol'].astype(np.int32), side, np.int64(t0), nsec)
+    dscale = 100.0 if float(np.median(D['price'][D['price'] > 0])) > 1e6 else 1.0      # older depth files store price x 100, the newest (2026-11-02) real points: detect, never assume
+    res = kernel(D['dt'], D['cmd'], D['flags'], D['price'] / dscale, D['qty'], T['dt'], (T['c'] / 100.0 if np.median(T['c']) > 1e6 else T['c'].astype(np.float64)), T['vol'].astype(np.int32), side, np.int64(t0), nsec)
     names = ['sz', 'pull', 'trd', 'add', 'bb', 'ba', 'buy', 'sell', 'ntr']; out = dict(zip(names, res[:9])); out['finalized'] = res[9]; return out, dict(depth_records=len(D), trades=len(T), nsec=nsec)
 
 if __name__ == '__main__':
