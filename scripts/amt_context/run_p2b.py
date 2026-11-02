@@ -10,8 +10,9 @@ FLAGS = ['tell_now', 'tell_any_5m', 'tell_any_15m', 'tell_any_30m', 'tell_any_60
 TELL_OTHER = ['tell_bars_5m', 'tell_bars_15m', 'tell_bars_30m', 'tell_bars_60m', 'c4max_now', 'minutes_since_last_tell']
 ACT = ['A_now', 'rth_range_so_far_atr', 'overnight_range_atr', 'minutes_since_rth_open']; RR = ['rr15', 'rr30', 'rr60']
 
-def build_points():
-    _, ctxs, _ = TS.sessions_and_contexts(); rows = []
+def build_points(ctxs=None):
+    if ctxs is None: _, ctxs, _ = TS.sessions_and_contexts()
+    rows = []
     for d, ctx in ctxs.items():
         S = ctx['S']; end, comp = S['end'], S['comp']; n = ctx['n']; fl = TS.bar_flags(ctx); dow = pd.Timestamp(d).dayofweek
         for i in [i for i in range(V.MOVE_N, n) if comp[i] and V.DEC_FIRST <= end[i] <= V.DEC_LAST][::V.THIN]:
