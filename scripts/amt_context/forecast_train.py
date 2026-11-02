@@ -1,5 +1,5 @@
 """Train and register a forecast model version (docs/FORECAST_SERVICE_20261102.md). Ridge on log E_h with the study's activity features, alpha by time-ordered inner CV (run_p2b.choose_alpha). Reads explore
-decision points (through 2025-05-16) and, from `forecast_points`, any forward points whose window has completed. Usage: ../../venv/bin/python forecast_train.py HORIZON_MIN [--role CHAMPION|CHALLENGER] [--dry]"""
+decision points (through 2025-05-16) ONLY. NOTE (DeepSeek review D, verified 2026-11-02): it does NOT yet read forward points from `forecast_points`, so a retrain today reproduces the champion; the forward-data path is part of the unbuilt learning loop. Usage: ../../venv/bin/python forecast_train.py HORIZON_MIN [--role CHAMPION|CHALLENGER] [--dry]"""
 import sys, json, hashlib, datetime
 import numpy as np, pandas as pd
 sys.path.insert(0, '/home/mmoniz/trading-journal/scripts/ml_meta_labeling')
