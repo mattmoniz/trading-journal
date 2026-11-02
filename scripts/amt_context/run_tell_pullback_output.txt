@@ -1,0 +1,5 @@
+V1 trades 1760; confirmed 876; limit filled 465 (53% of confirmed)
+means ($ per trade): ORIGINAL all +1.93; PULLBACK filled (N 465) +5.29 CI [-6.4, +18.0]; per ORIGINAL signal (missed = 0) +1.40; original net of the signals the limit MISSED (confirmed, unfilled) +19.50 (N 411)
+  TA1 filled mean minus original mean: +3.36 CI [-6.18, +13.66] p 0.527 halves -1.71 / +8.02 BH no
+  TA2 per-signal total minus original mean: -0.53 CI [-5.45, +4.15] p 0.840 halves +1.97 / -2.51 BH no
+UNCOUNTED by year (filled mean $): 2023 -7.5 (N 167), 2024 +14.4 (N 178), 2025 +9.6 (N 120)
