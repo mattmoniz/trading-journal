@@ -1,0 +1,3 @@
+import { logLook } from '../lib/look_ledger.mjs';
+const id = await logLook({ family: 'range_budget_20261102', dataWindow: 'explore<=2025-04-02', kind: 'EXPLORE', tests: 3, label: 'Range budget (exhaustion) screen: U_hat = range so far / forecast day range at 30-minute checkpoints; T1_HIGH, T1_LOW (continuation of an extreme, top vs bottom budget third) and T2 (extension probability); controls with the no-forecast budget, other horizons, eras uncounted', script: 'scripts/range_budget/run_range_budget.py', prereg: 'docs/RANGE_BUDGET_PREREG_20261102.md', ref: 'range_budget_20261102' });
+console.log('look logged id', id); process.exit(0);
