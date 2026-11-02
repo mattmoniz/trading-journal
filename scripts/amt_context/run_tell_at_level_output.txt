@@ -1,0 +1,13 @@
+signal bars: TELL 1760, CONTROL 25704; level rejections (events): TELL 147 on 129 dates, CONTROL 2048 on 472 dates; touch-then-break (not traded): TELL 134, CONTROL 2222
+rejection share of (rejections + breaks): TELL 52.3%, CONTROL 48.0%
+
+RESOLUTION (CI half-width of the TELL absolute mean, points): 15m 6.5, 30m 8.1, 60m 10.3
+
+COUNTED: pooled levels, y = points moved AWAY from the level after a 1-3 bar rejection (gross; cost 1.25 + slip)
+  H 15m: TELL mean +1.83 [-4.44, +8.61] (N 147, 129 dates), CONTROL mean -1.63, TELL minus CONTROL +3.45 CI [-2.98, +10.54] p 0.292 halves +1.08 / +5.33 BH no
+  H 60m: TELL mean +3.52 [-6.56, +14.03] (N 147, 129 dates), CONTROL mean -1.31, TELL minus CONTROL +4.83 CI [-5.38, +15.68] p 0.351 halves -1.40 / +10.02 BH no
+  H 30m: TELL mean +0.18 [-7.87, +8.32] (N 147, 129 dates), CONTROL mean -1.45, TELL minus CONTROL +1.62 CI [-6.53, +9.90] p 0.681 halves -0.83 / +3.53 BH no
+
+UNCOUNTED per level (mean y30, N): VWAP TELL -3.21 (N 68) CONTROL -2.38 (N 783); ONH TELL +7.39 (N 23) CONTROL -2.27 (N 318); ONL TELL +12.59 (N 20) CONTROL +2.13 (N 281); IBH TELL -21.45 (N 16) CONTROL -2.08 (N 365); IBL TELL +8.26 (N 20) CONTROL -0.71 (N 301)
+UNCOUNTED tell direction vs the level (the user case): tell TOWARD the level: N 79, mean y30 away-from-level -2.44; tell AWAY FROM the level: N 68, mean y30 away-from-level +3.21
+UNCOUNTED by year (TELL mean y30): 2023 -1.80 (N 49), 2024 +1.29 (N 62), 2025 +0.94 (N 36)
