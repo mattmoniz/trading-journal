@@ -1,0 +1,6 @@
+TELL N 1752 | tell direction equals the prior-10-bar move direction: 84% | first break of the 10-bar range goes the pre-move direction: 76.4% (N 1739)
+   share of fires where the move at +5/15/30/60 min is in the fire direction: 5m 50.6%, 15m 49.5%, 30m 49.5%, 60m 49.9%
+   first to reach +k before -k within 60 min (fire direction): k=10: 48.8% (N 1735), k=25: 48.9% (N 1689), k=50: 50.3% (N 1268)
+CONTROL N 25700 | tell direction equals the prior-10-bar move direction: n/a | first break of the 10-bar range goes the pre-move direction: 76.0% (N 25440)
+   share of fires where the move at +5/15/30/60 min is in the fire direction: 5m 49.4%, 15m 50.0%, 30m 50.0%, 60m 50.8%
+   first to reach +k before -k within 60 min (fire direction): k=10: 50.7% (N 25591), k=25: 50.4% (N 24249), k=50: 49.8% (N 15737)
