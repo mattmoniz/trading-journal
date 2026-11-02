@@ -1,0 +1,6 @@
+days 463 (2023-03-31..2025-04-02); hold-out NOT touched; SD of the last-30-minute move 48.1 points, mean -0.99
+RESOLUTION: correlation half-width about 0.093; break-even correlation about 0.032
+f1 first 30 min    Spearman -0.011 CI [-0.110, +0.085] placebo p 0.813 halves -0.093 / +0.044 BH no | strong-|f| third (N 156) gross of trading the sign: +0.22 points (cost 1.25)
+f2 open to 15:30   Spearman -0.062 CI [-0.159, +0.038] placebo p 0.182 halves -0.107 / -0.028 BH no | strong-|f| third (N 156) gross of trading the sign: -3.40 points (cost 1.25)
+f3 15:00-15:30     Spearman -0.049 CI [-0.151, +0.053] placebo p 0.303 halves -0.108 / -0.005 BH no | strong-|f| third (N 156) gross of trading the sign: +3.01 points (cost 1.25)
+uncounted by year (Spearman f2 vs y): 2023 -0.101 (N 178), 2024 -0.037 (N 229), 2025 -0.082 (N 56)
