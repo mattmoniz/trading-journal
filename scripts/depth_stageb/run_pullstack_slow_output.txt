@@ -1,0 +1,11 @@
+sessions usable 72
+events: FLIP 132 (31 sessions, mean 2.5 per session), PERSISTENT-STATE 728
+
+RESOLUTION (FLIP absolute-mean CI half-width, points): 300s 2.0, 900s 2.9, 1800s 4.0
+
+COUNTED: slow FLIP minus PERSISTENT same-sign state (points, gross mid-to-mid; bar about 1.4)
+  H  300s: FLIP mean -1.04 [-3.00, +0.91] (N 132, 31 sessions), PERSISTENT -0.15, difference -0.89 CI [-3.10, +1.41] p 0.447 halves -1.29 / -0.14 BH no  UNDERPOWERED
+  H 1800s: FLIP mean -1.70 [-5.60, +2.34] (N 132, 31 sessions), PERSISTENT -0.95, difference -0.75 CI [-6.46, +5.16] p 0.803 halves -2.71 / +2.38 BH no  UNDERPOWERED
+  H  900s: FLIP mean +0.42 [-2.05, +3.84] (N 132, 31 sessions), PERSISTENT +0.33, difference +0.10 CI [-3.89, +4.44] p 0.965 halves -0.42 / +1.05 BH no  UNDERPOWERED
+
+UNCOUNTED: FLIP up y900 -2.72 (N 55); FLIP down y900 +2.67 (N 77); PERSISTENT y300/900/1800: -0.15/+0.33/-0.95
