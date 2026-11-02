@@ -1,0 +1,12 @@
+V1 tell trades 1760; evaluated 1379 on 376 dates
+harness check: baseline re-run mismatches 0 of 1379
+
+ARM W (widen-only): mean net base $+4.37, arm $+4.08; paired difference $-0.29/trade, day-blocked CI [-3.29, +2.72]; halves +1.87 / -1.84
+  shuffled-scale placebo: mean arm $+3.91, p(placebo >= observed) = 0.4106  ->  H_S NOT PASSED
+
+uncounted: symmetric arm (scale clipped 0.5..2): mean $+4.10, paired difference $-0.27
+by forecast third: N, baseline mean $, arm W mean $, mean scale, baseline stop-out share
+  low  N= 460 base $+7.16 armW $+7.16 scale 1.00 stop-outs 53%
+  mid  N= 459 base $+8.44 armW $+7.95 scale 1.08 stop-outs 63%
+  high N= 460 base $-2.48 armW $-2.87 scale 1.51 stop-outs 73%
+mean stop distance (ATR points): baseline 39.3, arm W 47.3
