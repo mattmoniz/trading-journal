@@ -15,6 +15,9 @@
 REPO="$(git rev-parse --show-toplevel)"
 cd "$REPO" || exit 1
 
+# CLAUDE.md size gate (own override ALLOW_CLAUDE_MD_GROWTH=1; deliberately BEFORE the ALLOW_HARDCODED early exit so that override does not skip it)
+"$REPO/scripts/git-hooks/check-claude-md-size.sh" || exit 1
+
 [ "$ALLOW_HARDCODED" = "1" ] && exit 0
 
 source "$REPO/scripts/hardcoded-threshold-patterns.sh"
