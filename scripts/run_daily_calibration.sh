@@ -321,6 +321,9 @@ timed_step daily ./venv/bin/python3 scripts/amt_s1/amt_daily_state.py
 timed_step daily /bin/bash scripts/amt_tell_live/tag_flips_nightly.sh
 timed_step daily /bin/bash scripts/amt_context/forecast_tag_nightly.sh   # 2026-11-02: outcome-blind busy-or-quiet forecast tags (docs/FORECAST_SERVICE_20261102.md)
 
+# Regime gauge calibration (2026-11-02, docs/REGIME_GAUGE_20261102.md): fills the realized RTH range into regime_outlook for completed dates; prints COUNTS until 30 realized outlooks exist, then the mean realized range by bucket as a monitor. Never changes the model; always exits 0.
+timed_step daily ./venv/bin/python3 scripts/regime/regime_calibration.py
+
 # Nightly live attestation (docs/G0_GAP_AUDIT_20261101.md items 6 and 7): rebuilds today's tell trades from the tick file and compares EVERY one with what the live sidecar logged (decision hash, exit, P&L, stored bars hash),
 # checks that every real ENTRY fill of today has a matching exit fill and nothing is left open after the close, and measures the model-vs-broker P&L gap. Writes live_attestations; a DIVERGENCE or ERROR also logs a line to
 # scratch/server_errors.jsonl. Read-only against live data, checks today and the previous weekday (catch-up), mutation-tested 2026-11-01, never fails this job. Feeds the Stage 2 review (docs/AMT_TELL_STAGE2_REVIEW_RULE_20261101.md).

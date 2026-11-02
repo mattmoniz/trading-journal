@@ -69,5 +69,5 @@ def cutoffs(preds, upto_idx=None, window=250):
 def bucket(pred_log, cut): return 'QUIET' if pred_log <= cut['q33'] else ('BUSY' if pred_log >= cut['q67'] else 'NORMAL')
 
 def live_model(conn, upto=None):
-    """final model on all COMPLETE valid days + cutoffs from the walk-forward predictions."""
-    rows = build_rows(conn, upto); done, preds = walk_forward(rows); p = fit(done); p['version'] = 'regime-day-v1-' + p['through'] + '-' + hashlib.sha256(json.dumps(p, sort_keys=True).encode()).hexdigest()[:8]; return p, cutoffs(preds), rows, done, preds
+    """final model on all COMPLETE valid days (strictly before `upto` when given, so a historical date is never in its own training set) + cutoffs from the walk-forward predictions on those days. Returns (params, cutoffs, rows, done, preds)."""
+    rows = build_rows(conn, upto); done0 = [r for r in rows if r['rng'] is not None and (upto is None or r['date'] < upto)]; done, preds = walk_forward(done0); p = fit(done); p['version'] = 'regime-day-v1-' + p['through'] + '-' + hashlib.sha256(json.dumps(p, sort_keys=True).encode()).hexdigest()[:8]; return p, cutoffs(preds), rows, done, preds

@@ -1,0 +1,11 @@
+valid complete days 761 (through 2026-10-30); out-of-sample predicted days 641 (2023-10-27..2026-10-30); live model regime-day-v1-2026-10-30-9664b5ee, alpha 100.0; cutoffs from the last 250 OOS predictions: q33 -0.086, q67 +0.060
+
+OUT-OF-SAMPLE Spearman with the realized RTH range: model +0.421; overnight range alone +0.406; prior-day range alone +0.276; overnight volume alone +0.405
+by chronological quarter (model / overnight range alone): 2023-10-27..: +0.403 / +0.475 | 2024-07-08..: +0.405 / +0.319 | 2025-03-25..: +0.492 / +0.532 | 2026-02-19..: +0.362 / +0.366
+
+realized RTH range by the bucket the gauge would have shown (expanding terciles, first 60 OOS days skipped):
+  QUIET  N 189 days: mean range    260 pts (median    230), mean range / ATR20 0.84, SD of the range   124; about $520 per contract end to end on an average day
+  NORMAL N 186 days: mean range    333 pts (median    281), mean range / ATR20 1.04, SD of the range   186; about $665 per contract end to end on an average day
+  BUSY   N 206 days: mean range    389 pts (median    329), mean range / ATR20 1.29, SD of the range   246; about $778 per contract end to end on an average day
+  all   N 581 days: mean range    329 pts; BUSY/QUIET ratio of mean ranges 1.49
+  share of the biggest 10% of days that were labelled BUSY: 54% (a random label would give 33%); share of the smallest 10% labelled QUIET: 58%

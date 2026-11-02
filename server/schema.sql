@@ -9040,6 +9040,28 @@ ALTER SEQUENCE public.profit_lock_events_id_seq OWNED BY public.profit_lock_even
 
 
 --
+-- Name: regime_outlook; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.regime_outlook (
+    trade_date date NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    model_version text NOT NULL,
+    features jsonb NOT NULL,
+    pred_log double precision NOT NULL,
+    atr20_pts double precision NOT NULL,
+    expected_range_pts double precision NOT NULL,
+    ratio_to_atr20 double precision NOT NULL,
+    bucket text NOT NULL,
+    cutoffs jsonb NOT NULL,
+    realized_range_pts double precision,
+    realized_ratio double precision,
+    realized_bucket text,
+    CONSTRAINT regime_outlook_bucket_check CHECK ((bucket = ANY (ARRAY['QUIET'::text, 'NORMAL'::text, 'BUSY'::text])))
+);
+
+
+--
 -- Name: research_looks; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -12697,6 +12719,14 @@ ALTER TABLE ONLY public.profit_lock_config
 
 ALTER TABLE ONLY public.profit_lock_events
     ADD CONSTRAINT profit_lock_events_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: regime_outlook regime_outlook_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.regime_outlook
+    ADD CONSTRAINT regime_outlook_pkey PRIMARY KEY (trade_date);
 
 
 --
