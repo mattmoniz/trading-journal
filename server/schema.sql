@@ -8905,6 +8905,49 @@ ALTER SEQUENCE public.profit_lock_events_id_seq OWNED BY public.profit_lock_even
 
 
 --
+-- Name: research_looks; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.research_looks (
+    id integer NOT NULL,
+    logged_at timestamp with time zone DEFAULT now() NOT NULL,
+    family text NOT NULL,
+    data_window text NOT NULL,
+    window_kind character varying(10) NOT NULL,
+    tests integer DEFAULT 1 NOT NULL,
+    label text NOT NULL,
+    script text,
+    prereg text,
+    claim_slug text,
+    outcome text,
+    ref text,
+    notes jsonb,
+    CONSTRAINT research_looks_tests_check CHECK ((tests >= 0)),
+    CONSTRAINT research_looks_window_kind_check CHECK (((window_kind)::text = ANY ((ARRAY['EXPLORE'::character varying, 'SEALED'::character varying, 'FORWARD'::character varying])::text[])))
+);
+
+
+--
+-- Name: research_looks_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.research_looks_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: research_looks_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.research_looks_id_seq OWNED BY public.research_looks.id;
+
+
+--
 -- Name: risk_settings; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -11050,6 +11093,13 @@ ALTER TABLE ONLY public.profit_lock_events ALTER COLUMN id SET DEFAULT nextval('
 
 
 --
+-- Name: research_looks id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.research_looks ALTER COLUMN id SET DEFAULT nextval('public.research_looks_id_seq'::regclass);
+
+
+--
 -- Name: risk_settings id; Type: DEFAULT; Schema: public; Owner: -
 --
 
@@ -12445,6 +12495,22 @@ ALTER TABLE ONLY public.profit_lock_events
 
 
 --
+-- Name: research_looks research_looks_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.research_looks
+    ADD CONSTRAINT research_looks_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: research_looks research_looks_ref_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.research_looks
+    ADD CONSTRAINT research_looks_ref_key UNIQUE (ref);
+
+
+--
 -- Name: risk_settings risk_settings_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -13288,6 +13354,20 @@ CREATE INDEX idx_ps_calculated_date ON public.pattern_stats USING btree (calcula
 --
 
 CREATE INDEX idx_ps_degrading ON public.pattern_stats USING btree (degrading_alert);
+
+
+--
+-- Name: idx_research_looks_family_window; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_research_looks_family_window ON public.research_looks USING btree (family, data_window, logged_at);
+
+
+--
+-- Name: idx_research_looks_sealed_once; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX idx_research_looks_sealed_once ON public.research_looks USING btree (family, data_window) WHERE ((window_kind)::text = 'SEALED'::text);
 
 
 --
