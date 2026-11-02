@@ -1,0 +1,11 @@
+Sessions usable 516; V1 fires 1760 (expected 1760); hold-out NOT touched
+tell fires with no flip in the window 0, skipped (stop invalid) 2; ARM events 1616 on 488 dates (agree with the tell 346, disagree 1270); CONTROL events 8039
+  ARM      N=1616 mean $-4.08 WR 14% exits stop 86% time 14% median stop 14.2 pts
+  CONTROL  N=8039 mean $-1.74 WR 17% exits stop 82% time 18% median stop 13.8 pts
+
+ARM absolute $-4.08 day-blocked CI [-9.57, +2.10] | placebo mean $-2.38 p95 $-0.00 | ARM minus CONTROL (entry-time-mix weighted) $-2.14 CI [-7.57, +4.23], halves -2.70/-1.51 -> not shown
+=== descriptive: ARM split by agreement with the tell direction
+  flip AGREES with the tell (confirmation)   N=346 mean $-0.17 CI [-15.87, +17.93]
+  flip DISAGREES (reversal)                  N=1270 mean $-5.15 CI [-10.26, +0.41]
+
+summary {'ARM': False}
