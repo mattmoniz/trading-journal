@@ -315,4 +315,9 @@ timed_step daily /usr/bin/node scripts/monitor_rotation_gate_forward.mjs
 # outcome statistic, so nightly runs cannot cause optional stopping. Research only; nothing reads it live. OPEN_DECISION amt_s2_s3_forward_look_due.
 timed_step daily ./venv/bin/python3 scripts/amt_s1/amt_daily_state.py
 
+# Delta-flip tags for the live tell fires (scripts/amt_vbars/PREREG_FLIP_DISAGREE_FORWARD.md, frozen 2026-11-01): writes amt_tell_flip_tags (the approximate DDY flip vote at each live V1 tell fire,
+# AGREE / DISAGREE / NONE) for today and the two previous weekdays, only from the forward start 2026-11-02. Outcome-blind (never reads net_dollars), idempotent, read-only against live data,
+# a failed day is retried the next night and never fails this job. Scored by scripts/report_flip_disagree_forward.mjs at 100/200/300 DISAGREE fires. Decision amt_tell_flip_disagree_forward_test_20261101.
+timed_step daily /bin/bash scripts/amt_tell_live/tag_flips_nightly.sh
+
 echo "=== Daily calibration complete: $(date) ==="

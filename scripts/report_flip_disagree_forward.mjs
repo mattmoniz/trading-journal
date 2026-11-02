@@ -14,6 +14,7 @@ function ci(a, b) {   // day-blocked: resample trading days, pool the rows of th
 }
 console.log(`forward rows (V1 split, closed, tagged, trade_date >= ${FROM}): ${rows.length}; DISAGREE ${dis.length} fires on ${days} distinct days; rest ${rest.length}`);
 const floor = dis.length >= 100 && days >= 50;
+if (process.argv.includes('--count')) { console.log(floor ? 'MILESTONE REACHED: run `node scripts/report_flip_disagree_forward.mjs --log-look` ONCE (one look per milestone: 100 / 200 / 300 DISAGREE fires)' : 'count only (no outcome is printed before a milestone)'); process.exit(0); }
 if (!floor) { console.log(`Milestone not reached (first look at 100 DISAGREE fires on >= 50 days). No numbers are reported before then (one look per milestone).`); process.exit(0); }
 if (process.argv.includes('--log-look')) await logLook({ family: 'AMT_TELL_FLIP_DISAGREE_FWD', dataWindow: 'FORWARD_LIVE_FROM_2026-11-02', kind: 'FORWARD', tests: 1, label: `milestone look at ${dis.length} DISAGREE fires`, script: 'scripts/report_flip_disagree_forward.mjs', prereg: 'scripts/amt_vbars/PREREG_FLIP_DISAGREE_FORWARD.md', outcome: 'PENDING', ref: `flipdis_fwd_${Math.floor(dis.length / 100) * 100}` });
 const c = ci(dis, rest);
