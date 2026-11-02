@@ -1,0 +1,24 @@
+decision points 30819 on 516 dates
+
+=== E_30 [PRIMARY, counted]: 23624 out-of-sample rows on 396 dates; chosen alphas (full model per block): [1000.0, 100.0, 1000.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 10.0]
+  out-of-sample Spearman: base +0.2628, full +0.6033, flags +0.3913, notell +0.5877
+  H2 full-base       diff +0.3405 CI [+0.2984, +0.3827] permutation p 0.0010 halves +0.2649 / +0.4215  -> PASS
+  H3a full-flags     diff +0.2120 CI [+0.1828, +0.2395] permutation p 0.0010 halves +0.1764 / +0.2434  -> PASS
+  H3b full-notell    diff +0.0155 CI [+0.0072, +0.0248] permutation p 0.0020 halves +0.0146 / +0.0172  -> PASS
+
+=== E_15 [secondary, uncounted]: 23624 out-of-sample rows on 396 dates; chosen alphas (full model per block): [100.0, 100.0, 1000.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 0.1]
+  out-of-sample Spearman: base +0.2950, full +0.6153, flags +0.4085, notell +0.6016
+  H2 full-base       diff +0.3202 CI [+0.2825, +0.3595] halves +0.2433 / +0.4068
+  H3a full-flags     diff +0.2067 CI [+0.1796, +0.2342] halves +0.1684 / +0.2418
+  H3b full-notell    diff +0.0137 CI [+0.0062, +0.0212] halves +0.0104 / +0.0170
+
+=== E_60 [secondary, uncounted]: 23624 out-of-sample rows on 396 dates; chosen alphas (full model per block): [1000.0, 100.0, 1000.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0]
+  out-of-sample Spearman: base +0.1897, full +0.5758, flags +0.3414, notell +0.5631
+  H2 full-base       diff +0.3861 CI [+0.3373, +0.4322] halves +0.3152 / +0.4717
+  H3a full-flags     diff +0.2344 CI [+0.1990, +0.2681] halves +0.2077 / +0.2544
+  H3b full-notell    diff +0.0127 CI [+0.0018, +0.0235] halves +0.0124 / +0.0143
+
+Benjamini-Hochberg q=0.10 over the 4 counted hypotheses (H4 not yet run, counted as unrejected):
+  H2 full-base: p 0.0010, BH threshold 0.025 -> rejects the null
+  H3a full-flags: p 0.0010, BH threshold 0.050 -> rejects the null
+  H3b full-notell: p 0.0020, BH threshold 0.075 -> rejects the null

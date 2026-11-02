@@ -1,0 +1,7 @@
+import { recordClaim } from '../record_claim.mjs';
+await recordClaim({
+  slug: 'roster_context_p2_forecast_beats_baseline_20261102',
+  claimText: 'Roster-context study P2 (PREREG_ROSTER_CONTEXT.md + Amendment 1; explore only, walk-forward ridge on log E_30, 23,624 out-of-sample rows on 396 dates, first 120 dates train-only, refit every 20; look ids 32-37 in family roster_context_20261102). Out-of-sample Spearman of prediction vs realized E_30: clock-bucket baseline 0.263, clock + five tell flags 0.391, activity features only 0.588, everything 0.603. H2 full minus baseline +0.3405 (day-blocked CI +0.298..+0.383, permutation p 0.001, halves +0.265/+0.422) PASS; H3a full minus clock+flags +0.2120 (+0.183..+0.240, p 0.001) PASS; H3b full minus no-tell-features +0.0155 (+0.0072..+0.0248, p 0.002, halves +0.0146/+0.0172) PASS; same sign at 15 and 60 minutes (H3b +0.0137, +0.0127). BH q=0.10: all three reject. READING: a causal expansion forecast works (nearly all skill from activity features: pace, range so far, overnight range, clock); the tell features add a small increment (about 0.016 of rank correlation). CAVEAT: the activity set omits recent realized range, so H3b may overstate the tell; Amendment 2 reruns it with that control. NOT SHOWN: anything in dollars or direction (H4 not run).',
+  sourceFile: 'scripts/amt_context/run_p2_output.txt', sourceDate: '2026-11-02', sampleSize: 23624, evPerTrade: null, rigorStatus: 'explore_only_forecast_skill_shown_dollars_not_tested', status: 'PROVISIONAL',
+});
+process.exit(0);
