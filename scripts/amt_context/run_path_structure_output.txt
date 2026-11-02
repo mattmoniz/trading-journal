@@ -1,0 +1,112 @@
+COUNTS: V1 signal bars after the first 120 dates 1379; usable (forecast available) 1379; grid bars (all dates) 30560, usable after the first 120 dates 23425
+with a complete 60-minute window: TELL 1378 on 375 dates; ALL 23400 on 396 dates; CONTROL (moving, no tell) 19641; ALL points that are tell grid bars 3642
+HARNESS CHECK c=0.25: touch rate 99.5% vs recorded bracket fill rate 99% -> consistent
+HARNESS CHECK c=0.5: touch rate 83.2% vs recorded bracket fill rate 83% -> consistent
+HARNESS CHECK TELL population before the 60-minute window requirement: 1379 (bracket run: 1,379) -> reproduced
+
+=================== distance c = 0.25 x forecast E_30 (mean k: TELL 26.7, ALL 22.4 pts; floor binding for 45.3% of ALL points) ===================
+  TELL     touch 99% (ambig 0.0%); of 1366 touches: revert 47.9% extend 51.3% timeout 0.8% ambig 0.0%; same-bar revert possible 0.4%, same-bar extend 0.0%
+  CONTROL  touch 99% (ambig 0.0%); of 19426 touches: revert 50.4% extend 48.6% timeout 1.1% ambig 0.0%; same-bar revert possible 0.4%, same-bar extend 0.1%
+  ALL      touch 99% (ambig 0.0%); of 23149 touches: revert 50.3% extend 48.7% timeout 1.0% ambig 0.0%; same-bar revert possible 0.4%, same-bar extend 0.1%
+  RESOLUTION and Q = P(revert | resolved), 95% day-blocked CI (cost break-even floors next to ALL):
+    TELL     Q 48.3%  CI [45.7, 50.9] (half-width 2.6 pts)  N resolved 1355  halves 49.9 / 47.1
+    CONTROL  Q 50.9%  CI [50.0, 51.8] (half-width 0.9 pts)  N resolved 19217  halves 50.6 / 51.2
+    ALL      Q 50.8%  CI [50.0, 51.6] (half-width 0.8 pts)  N resolved 22913  halves 50.7 / 50.9
+  M tests (ALL): fade needs Q > p*_fade 53.4% -> not passed (one-sided p 1.0000); breakout needs Q < 45.8% -> not passed (one-sided p 1.0000)
+  T test: TELL minus CONTROL in Q (entry-time-mix weighted) -2.6 pts, CI [-5.3, +0.0], halves -0.8 / -3.9, two-sided p 0.0513
+  uncounted splits (Q, N resolved):
+    TELL by touch side: up Q 48.2% (N 672) | down Q 48.3% (N 683); by forecast third: L Q 49.0% (N 263) | M Q 48.8% (N 430) | H Q 47.9% (N 578); by entry bin: 0 Q 49.4% (N 634) | 1 Q 45.5% (N 385) | 2 Q 49.4% (N 336)
+    TELL by quarter: Q 48.5% (N 270) | Q 51.2% (N 297) | Q 44.1% (N 347) | Q 49.4% (N 441)
+    ALL by touch side: up Q 50.4% (N 11537) | down Q 51.2% (N 11376); by forecast third: L Q 51.3% (N 7194) | M Q 50.7% (N 6517) | H Q 50.2% (N 7210); by entry bin: 0 Q 50.3% (N 7679) | 1 Q 51.8% (N 7380) | 2 Q 50.4% (N 7854)
+    ALL by quarter: Q 51.2% (N 6075) | Q 50.3% (N 5871) | Q 50.6% (N 5307) | Q 51.1% (N 5660)
+    TELL touch WITH the tell direction: Q 47.3% (N 676) | AGAINST: Q 49.2% (N 679)
+  uncounted asymmetry grid: P(target toward P before stop), target t x k / stop s x k beyond the touch level, vs driftless reference s/(s+t):
+    TELL     0.5/0.5: 0.521 (ref 0.500, N 1365); 0.5/1.0: 0.675 (ref 0.667, N 1361); 0.5/2.0: 0.805 (ref 0.800, N 1344); 1.0/0.5: 0.314 (ref 0.333, N 1365); 1.0/1.0: 0.483 (ref 0.500, N 1355); 1.0/2.0: 0.661 (ref 0.667, N 1271); 2.0/0.5: 0.182 (ref 0.200, N 1342); 2.0/1.0: 0.305 (ref 0.333, N 1275); 2.0/2.0: 0.484 (ref 0.500, N 1069)
+    CONTROL  0.5/0.5: 0.510 (ref 0.500, N 19409); 0.5/1.0: 0.676 (ref 0.667, N 19398); 0.5/2.0: 0.811 (ref 0.800, N 18974); 1.0/0.5: 0.340 (ref 0.333, N 19401); 1.0/1.0: 0.509 (ref 0.500, N 19217); 1.0/2.0: 0.686 (ref 0.667, N 17856); 2.0/0.5: 0.197 (ref 0.200, N 18956); 2.0/1.0: 0.327 (ref 0.333, N 17783); 2.0/2.0: 0.504 (ref 0.500, N 14371)
+    ALL      0.5/0.5: 0.510 (ref 0.500, N 23131); 0.5/1.0: 0.674 (ref 0.667, N 23115); 0.5/2.0: 0.809 (ref 0.800, N 22633); 1.0/0.5: 0.340 (ref 0.333, N 23119); 1.0/1.0: 0.508 (ref 0.500, N 22913); 1.0/2.0: 0.685 (ref 0.667, N 21333); 2.0/0.5: 0.197 (ref 0.200, N 22606); 2.0/1.0: 0.326 (ref 0.333, N 21282); 2.0/2.0: 0.503 (ref 0.500, N 17281)
+  uncounted run length M (max excursion beyond the touch level before the revert, in k): TELL mean 1.60 p50 1.06 p90 3.77 p99 7.03; CONTROL mean 1.53 p50 0.95 p90 3.76 p99 7.23; ALL mean 1.54 p50 0.95 p90 3.78 p99 7.18
+
+=================== distance c = 0.5 x forecast E_30 (mean k: TELL 50.7, ALL 42.2 pts; floor binding for 0.0% of ALL points) ===================
+  TELL     touch 83% (ambig 0.0%); of 1147 touches: revert 41.2% extend 38.9% timeout 20.0% ambig 0.0%; same-bar revert possible 0.0%, same-bar extend 0.1%
+  CONTROL  touch 79% (ambig 0.0%); of 15546 touches: revert 40.9% extend 40.2% timeout 18.9% ambig 0.0%; same-bar revert possible 0.1%, same-bar extend 0.0%
+  ALL      touch 80% (ambig 0.0%); of 18675 touches: revert 40.9% extend 40.4% timeout 18.7% ambig 0.0%; same-bar revert possible 0.1%, same-bar extend 0.0%
+  RESOLUTION and Q = P(revert | resolved), 95% day-blocked CI (cost break-even floors next to ALL):
+    TELL     Q 51.4%  CI [47.9, 54.9] (half-width 3.5 pts)  N resolved 918  halves 47.8 / 54.0
+    CONTROL  Q 50.4%  CI [49.0, 51.8] (half-width 1.4 pts)  N resolved 12611  halves 49.6 / 51.4
+    ALL      Q 50.4%  CI [49.0, 51.7] (half-width 1.4 pts)  N resolved 15187  halves 49.8 / 51.0
+  M tests (ALL): fade needs Q > p*_fade 51.9% -> not passed (one-sided p 0.9860); breakout needs Q < 47.7% -> not passed (one-sided p 1.0000)
+  T test: TELL minus CONTROL in Q (entry-time-mix weighted) +0.5 pts, CI [-2.7, +3.9], halves -2.3 / +2.2, two-sided p 0.7431
+  uncounted splits (Q, N resolved):
+    TELL by touch side: up Q 51.3% (N 423) | down Q 51.5% (N 495); by forecast third: L Q 59.1% (N 164) | M Q 48.1% (N 283) | H Q 50.5% (N 404); by entry bin: 0 Q 51.9% (N 420) | 1 Q 53.7% (N 270) | 2 Q 47.8% (N 228)
+    TELL by quarter: Q 49.2% (N 191) | Q 46.4% (N 192) | Q 50.8% (N 236) | Q 56.5% (N 299)
+    ALL by touch side: up Q 50.3% (N 7173) | down Q 50.4% (N 8014); by forecast third: L Q 50.9% (N 4340) | M Q 48.9% (N 4488) | H Q 52.2% (N 4893); by entry bin: 0 Q 52.0% (N 4921) | 1 Q 50.9% (N 4943) | 2 Q 48.3% (N 5323)
+    ALL by quarter: Q 49.5% (N 4208) | Q 50.1% (N 3906) | Q 49.3% (N 3555) | Q 52.6% (N 3518)
+    TELL touch WITH the tell direction: Q 51.7% (N 443) | AGAINST: Q 51.2% (N 475)
+  uncounted asymmetry grid: P(target toward P before stop), target t x k / stop s x k beyond the touch level, vs driftless reference s/(s+t):
+    TELL     0.5/0.5: 0.506 (ref 0.500, N 1141); 0.5/1.0: 0.685 (ref 0.667, N 1077); 0.5/2.0: 0.890 (ref 0.800, N 906); 1.0/0.5: 0.317 (ref 0.333, N 1095); 1.0/1.0: 0.514 (ref 0.500, N 918); 1.0/2.0: 0.784 (ref 0.667, N 662); 2.0/0.5: 0.137 (ref 0.200, N 940); 2.0/1.0: 0.252 (ref 0.333, N 652); 2.0/2.0: 0.524 (ref 0.500, N 328)
+    CONTROL  0.5/0.5: 0.503 (ref 0.500, N 15458); 0.5/1.0: 0.674 (ref 0.667, N 14704); 0.5/2.0: 0.867 (ref 0.800, N 12429); 1.0/0.5: 0.330 (ref 0.333, N 14769); 1.0/1.0: 0.504 (ref 0.500, N 12611); 1.0/2.0: 0.770 (ref 0.667, N 8962); 2.0/0.5: 0.126 (ref 0.200, N 12331); 2.0/1.0: 0.225 (ref 0.333, N 8745); 2.0/2.0: 0.487 (ref 0.500, N 4294)
+    ALL      0.5/0.5: 0.504 (ref 0.500, N 18575); 0.5/1.0: 0.675 (ref 0.667, N 17703); 0.5/2.0: 0.867 (ref 0.800, N 14983); 1.0/0.5: 0.329 (ref 0.333, N 17754); 1.0/1.0: 0.504 (ref 0.500, N 15187); 1.0/2.0: 0.770 (ref 0.667, N 10801); 2.0/0.5: 0.128 (ref 0.200, N 14863); 2.0/1.0: 0.228 (ref 0.333, N 10583); 2.0/2.0: 0.492 (ref 0.500, N 5227)
+  uncounted run length M (max excursion beyond the touch level before the revert, in k): TELL mean 1.01 p50 0.77 p90 2.20 p99 4.37; CONTROL mean 1.02 p50 0.76 p90 2.23 p99 4.35; ALL mean 1.02 p50 0.77 p90 2.23 p99 4.32
+
+=================== distance c = 0.75 x forecast E_30 (mean k: TELL 76.1, ALL 63.3 pts; floor binding for 0.0% of ALL points) ===================
+  TELL     touch 53% (ambig 0.0%); of 735 touches: revert 29.9% extend 27.1% timeout 43.0% ambig 0.0%; same-bar revert possible 0.0%, same-bar extend 0.0%
+  CONTROL  touch 48% (ambig 0.0%); of 9472 touches: revert 27.1% extend 26.6% timeout 46.2% ambig 0.0%; same-bar revert possible 0.1%, same-bar extend 0.0%
+  ALL      touch 49% (ambig 0.0%); of 11479 touches: revert 27.6% extend 26.8% timeout 45.6% ambig 0.0%; same-bar revert possible 0.1%, same-bar extend 0.0%
+  RESOLUTION and Q = P(revert | resolved), 95% day-blocked CI (cost break-even floors next to ALL):
+    TELL     Q 52.5%  CI [47.0, 57.9] (half-width 5.4 pts)  N resolved 419  halves 52.7 / 52.4
+    CONTROL  Q 50.4%  CI [48.1, 52.8] (half-width 2.3 pts)  N resolved 5092  halves 49.2 / 51.8
+    ALL      Q 50.8%  CI [48.4, 52.9] (half-width 2.2 pts)  N resolved 6246  halves 49.4 / 52.3
+  M tests (ALL): fade needs Q > p*_fade 51.3% -> not passed (one-sided p 0.6481); breakout needs Q < 48.4% -> not passed (one-sided p 0.9750)
+  T test: TELL minus CONTROL in Q (entry-time-mix weighted) +1.4 pts, CI [-3.5, +6.3], halves +2.3 / +0.1, two-sided p 0.5771
+  uncounted splits (Q, N resolved):
+    TELL by touch side: up Q 52.7% (N 169) | down Q 52.4% (N 250); by forecast third: L Q 47.8% (N 69) | M Q 54.9% (N 122) | H Q 52.9% (N 189); by entry bin: 0 Q 56.2% (N 201) | 1 Q 51.0% (N 104) | 2 Q 47.4% (N 114)
+    TELL by quarter: Q 50.6% (N 81) | Q 54.8% (N 84) | Q 49.5% (N 107) | Q 54.4% (N 147)
+    ALL by touch side: up Q 54.6% (N 2659) | down Q 48.0% (N 3587); by forecast third: L Q 48.2% (N 1680) | M Q 50.6% (N 1928) | H Q 54.3% (N 1978); by entry bin: 0 Q 53.3% (N 1897) | 1 Q 49.9% (N 2014) | 2 Q 49.5% (N 2335)
+    ALL by quarter: Q 48.6% (N 1719) | Q 50.3% (N 1544) | Q 50.2% (N 1453) | Q 54.3% (N 1530)
+    TELL touch WITH the tell direction: Q 50.2% (N 231) | AGAINST: Q 55.3% (N 188)
+  uncounted asymmetry grid: P(target toward P before stop), target t x k / stop s x k beyond the touch level, vs driftless reference s/(s+t):
+    TELL     0.5/0.5: 0.536 (ref 0.500, N 704); 0.5/1.0: 0.729 (ref 0.667, N 597); 0.5/2.0: 0.935 (ref 0.800, N 478); 1.0/0.5: 0.316 (ref 0.333, N 598); 1.0/1.0: 0.525 (ref 0.500, N 419); 1.0/2.0: 0.849 (ref 0.667, N 265); 2.0/0.5: 0.058 (ref 0.200, N 445); 2.0/1.0: 0.120 (ref 0.333, N 233); 2.0/2.0: 0.400 (ref 0.500, N 70)
+    CONTROL  0.5/0.5: 0.496 (ref 0.500, N 8964); 0.5/1.0: 0.707 (ref 0.667, N 7443); 0.5/2.0: 0.931 (ref 0.800, N 5850); 1.0/0.5: 0.292 (ref 0.333, N 7506); 1.0/1.0: 0.504 (ref 0.500, N 5092); 1.0/2.0: 0.852 (ref 0.667, N 3106); 2.0/0.5: 0.055 (ref 0.200, N 5765); 2.0/1.0: 0.123 (ref 0.333, N 2948); 2.0/2.0: 0.433 (ref 0.500, N 863)
+    ALL      0.5/0.5: 0.497 (ref 0.500, N 10898); 0.5/1.0: 0.710 (ref 0.667, N 9074); 0.5/2.0: 0.933 (ref 0.800, N 7134); 1.0/0.5: 0.295 (ref 0.333, N 9172); 1.0/1.0: 0.508 (ref 0.500, N 6246); 1.0/2.0: 0.854 (ref 0.667, N 3817); 2.0/0.5: 0.056 (ref 0.200, N 7023); 2.0/1.0: 0.124 (ref 0.333, N 3607); 2.0/2.0: 0.439 (ref 0.500, N 1051)
+  uncounted run length M (max excursion beyond the touch level before the revert, in k): TELL mean 0.74 p50 0.57 p90 1.61 p99 2.75; CONTROL mean 0.75 p50 0.58 p90 1.58 p99 3.32; ALL mean 0.75 p50 0.59 p90 1.57 p99 3.29
+
+=================== distance c = 1.0 x forecast E_30 (mean k: TELL 101.5, ALL 84.3 pts; floor binding for 0.0% of ALL points) ===================
+  TELL     touch 29% (ambig 0.0%); of 395 touches: revert 17.2% extend 20.0% timeout 62.8% ambig 0.0%; same-bar revert possible 0.0%, same-bar extend 0.0%
+  CONTROL  touch 26% (ambig 0.0%); of 5144 touches: revert 16.9% extend 17.1% timeout 66.0% ambig 0.0%; same-bar revert possible 0.1%, same-bar extend 0.0%
+  ALL      touch 27% (ambig 0.0%); of 6247 touches: revert 17.2% extend 17.1% timeout 65.7% ambig 0.0%; same-bar revert possible 0.1%, same-bar extend 0.0%
+  RESOLUTION and Q = P(revert | resolved), 95% day-blocked CI (cost break-even floors next to ALL):
+    TELL     Q 46.3%  CI [37.3, 55.6] (half-width 9.1 pts)  N resolved 147  halves 57.8 / 37.3
+    CONTROL  Q 49.7%  CI [45.5, 54.1] (half-width 4.3 pts)  N resolved 1749  halves 49.8 / 49.6
+    ALL      Q 50.1%  CI [45.9, 54.2] (half-width 4.2 pts)  N resolved 2141  halves 50.6 / 49.5
+  M tests (ALL): fade needs Q > p*_fade 51.0% -> not passed (one-sided p 0.6684); breakout needs Q < 48.8% -> not passed (one-sided p 0.7061)
+  T test: TELL minus CONTROL in Q (entry-time-mix weighted) -4.0 pts, CI [-11.9, +4.7], halves +6.0 / -12.3, two-sided p 0.3592
+  uncounted splits (Q, N resolved):
+    TELL by touch side: up Q 53.3% (N 45) | down Q 43.1% (N 102); by forecast third: L Q 45.8% (N 24) | M Q 43.8% (N 48) | H Q 49.2% (N 59); by entry bin: 0 Q 52.2% (N 67) | 1 Q 37.5% (N 40) | 2 Q 45.0% (N 40)
+    TELL by quarter: Q 41.2% (N 34) | Q 76.7% (N 30) | Q 28.1% (N 32) | Q 43.1% (N 51)
+    ALL by touch side: up Q 57.2% (N 827) | down Q 45.6% (N 1314); by forecast third: L Q 43.1% (N 547) | M Q 51.4% (N 728) | H Q 54.7% (N 623); by entry bin: 0 Q 52.5% (N 608) | 1 Q 46.1% (N 640) | 2 Q 51.3% (N 893)
+    ALL by quarter: Q 53.0% (N 572) | Q 48.0% (N 550) | Q 43.5% (N 487) | Q 55.1% (N 532)
+    TELL touch WITH the tell direction: Q 40.5% (N 74) | AGAINST: Q 52.1% (N 73)
+  uncounted asymmetry grid: P(target toward P before stop), target t x k / stop s x k beyond the touch level, vs driftless reference s/(s+t):
+    TELL     0.5/0.5: 0.475 (ref 0.500, N 339); 0.5/1.0: 0.711 (ref 0.667, N 253); 0.5/2.0: 0.948 (ref 0.800, N 193); 1.0/0.5: 0.242 (ref 0.333, N 265); 1.0/1.0: 0.463 (ref 0.500, N 147); 1.0/2.0: 0.873 (ref 0.667, N 79); 2.0/0.5: 0.019 (ref 0.200, N 206); 2.0/1.0: 0.060 (ref 0.333, N 84); 2.0/2.0: 0.333 (ref 0.500, N 15)
+    CONTROL  0.5/0.5: 0.504 (ref 0.500, N 4343); 0.5/1.0: 0.756 (ref 0.667, N 3271); 0.5/2.0: 0.948 (ref 0.800, N 2653); 1.0/0.5: 0.249 (ref 0.333, N 3179); 1.0/1.0: 0.497 (ref 0.500, N 1749); 1.0/2.0: 0.861 (ref 0.667, N 1032); 2.0/0.5: 0.020 (ref 0.200, N 2472); 2.0/1.0: 0.057 (ref 0.333, N 957); 2.0/2.0: 0.265 (ref 0.500, N 215)
+    ALL      0.5/0.5: 0.506 (ref 0.500, N 5312); 0.5/1.0: 0.758 (ref 0.667, N 4000); 0.5/2.0: 0.951 (ref 0.800, N 3239); 1.0/0.5: 0.252 (ref 0.333, N 3897); 1.0/1.0: 0.501 (ref 0.500, N 2141); 1.0/2.0: 0.870 (ref 0.667, N 1257); 2.0/0.5: 0.021 (ref 0.200, N 3024); 2.0/1.0: 0.060 (ref 0.333, N 1169); 2.0/2.0: 0.286 (ref 0.500, N 255)
+  uncounted run length M (max excursion beyond the touch level before the revert, in k): TELL mean 0.64 p50 0.52 p90 1.39 p99 2.44; CONTROL mean 0.60 p50 0.46 p90 1.25 p99 2.67; ALL mean 0.60 p50 0.46 p90 1.25 p99 2.66
+
+=================== SUMMARY OF COUNTED TESTS ===================
+  M c=0.25 fade: rule not passed, p 1.0000, BH q=0.10 does not reject
+  M c=0.25 brk: rule not passed, p 1.0000, BH q=0.10 does not reject
+  M c=0.5 fade: rule not passed, p 0.9860, BH q=0.10 does not reject
+  M c=0.5 brk: rule not passed, p 1.0000, BH q=0.10 does not reject
+  M c=0.75 fade: rule not passed, p 0.6481, BH q=0.10 does not reject
+  M c=0.75 brk: rule not passed, p 0.9750, BH q=0.10 does not reject
+  M c=1.0 fade: rule not passed, p 0.6684, BH q=0.10 does not reject
+  M c=1.0 brk: rule not passed, p 0.7061, BH q=0.10 does not reject
+  T c=0.25: diff -2.6 pts, CI [-5.3, +0.0], p 0.0513, rule not passed (same sign in >= 3 of 4 cells: False), BH q=0.10 does not reject
+  T c=0.5: diff +0.5 pts, CI [-2.7, +3.9], p 0.7431, rule not passed (same sign in >= 3 of 4 cells: False), BH q=0.10 does not reject
+  T c=0.75: diff +1.4 pts, CI [-3.5, +6.3], p 0.5771, rule not passed (same sign in >= 3 of 4 cells: False), BH q=0.10 does not reject
+  T c=1.0: diff -4.0 pts, CI [-11.9, +4.7], p 0.3592, rule not passed (same sign in >= 3 of 4 cells: False), BH q=0.10 does not reject
+
+=================== SENSITIVITY (uncounted): k in ATR20 fractions, all 516 dates, tell grid bars vs control, no model ===================
+  c_ATR=0.1: mean k 25.5 pts; tell Q 49.4% [47.8, 51.0] N 4091; control Q 50.1% [49.1, 51.0] N 20115; tell minus control -0.7 pts CI [-2.5, +0.9]
+  c_ATR=0.2: mean k 50.5 pts; tell Q 52.0% [48.7, 55.3] N 1741; control Q 50.4% [48.2, 52.4] N 6685; tell minus control +1.6 pts CI [-1.2, +4.5]
+  c_ATR=0.3: mean k 75.8 pts; tell Q 53.3% [48.1, 58.6] N 574; control Q 52.0% [47.5, 56.8] N 1943; tell minus control +1.6 pts CI [-3.4, +6.4]
