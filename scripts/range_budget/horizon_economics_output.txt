@@ -1,0 +1,9 @@
+explore days 463; cost 1.25 points per trade
+horizon | SD of move (pts) | gross $/trade at corr 0.05 | break-even corr | independent obs in explore | smallest corr resolvable (2 SE) | ratio resolvable/break-even
+   5m |    17.6 |   1.41 | 0.0890 |  33336 | 0.0110 |   0.1x
+  15m |    30.0 |   2.40 | 0.0521 |  11112 | 0.0190 |   0.4x
+  30m |    42.3 |   3.38 | 0.0370 |   5556 | 0.0268 |   0.7x
+  60m |    60.3 |   4.83 | 0.0259 |   2778 | 0.0379 |   1.5x
+ 120m |    87.6 |   7.01 | 0.0178 |   1389 | 0.0537 |   3.0x
+ 240m |   125.5 |  10.04 | 0.0124 |    463 | 0.0929 |   7.5x
+daily close-to-close |   215.9 |  17.27 | 0.0072 |    462 | 0.0930 |  12.9x
