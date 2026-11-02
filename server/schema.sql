@@ -4549,6 +4549,30 @@ ALTER SEQUENCE public.amt_tell_alarms_id_seq OWNED BY public.amt_tell_alarms.id;
 
 
 --
+-- Name: amt_tell_flip_tags; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.amt_tell_flip_tags (
+    tell_trade_id bigint NOT NULL,
+    trade_date date NOT NULL,
+    bar_rule character varying(10) NOT NULL,
+    sig_idx integer NOT NULL,
+    tell_dir smallint NOT NULL,
+    vote smallint NOT NULL,
+    grp character varying(10) NOT NULL,
+    prior_streak integer DEFAULT 0 NOT NULL,
+    n_flips_30 integer DEFAULT 0 NOT NULL,
+    flip_source character varying(24) NOT NULL,
+    true_vote smallint,
+    true_grp character varying(10),
+    validated boolean,
+    bars_n integer,
+    tagged_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT amt_tell_flip_tags_grp_check CHECK (((grp)::text = ANY ((ARRAY['AGREE'::character varying, 'DISAGREE'::character varying, 'NONE'::character varying])::text[])))
+);
+
+
+--
 -- Name: amt_tell_session_stats; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -11399,6 +11423,14 @@ ALTER TABLE ONLY public.amt_tell_alarms
 
 
 --
+-- Name: amt_tell_flip_tags amt_tell_flip_tags_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.amt_tell_flip_tags
+    ADD CONSTRAINT amt_tell_flip_tags_pkey PRIMARY KEY (tell_trade_id);
+
+
+--
 -- Name: amt_tell_session_stats amt_tell_session_stats_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -12969,6 +13001,13 @@ CREATE INDEX idx_amt_daily_state_fwd ON public.amt_daily_state USING btree (is_f
 --
 
 CREATE INDEX idx_amt_tell_alarms_at ON public.amt_tell_alarms USING btree (at DESC);
+
+
+--
+-- Name: idx_amt_tell_flip_tags_date; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_amt_tell_flip_tags_date ON public.amt_tell_flip_tags USING btree (trade_date);
 
 
 --

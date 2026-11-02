@@ -1,0 +1,19 @@
+# Pre-registration: the tell when the delta flip DISAGREES, scored FORWARD on live tell fires (written 2026-11-01 BEFORE any forward tag exists)
+
+Origin: the trader confirmed (2026-11-01) the number "+$13.18": in the flip-guide test the tell side made +13.18 per trade when a (approximate) delta flip in the last 10 bars DISAGREED with the tell (N=395, CI -3.43..+32.87), against -5.39 when it agreed and +0.65 with no flip; the earlier delta read showed the same shape (+14.28, N=324). Both come from the explore window we have looked at 14 times with no pass, and the cell was the best of three groups chosen after the fact, so it is a HYPOTHESIS, not a finding (`amt_tell_ddy_flip_approx_side_guide_not_shown_20261101`, `docs/DIRECTION_FEATURE_DICTIONARY_20261101.md`). The clean test is fresh data: this scores the frozen rule forward on live tell fires. No sealed hold-out is spent and no live order behaviour changes.
+
+## The frozen rule
+At each live tell fire (the research V1 book, split bar reading, rows of `amt_tell_trades`), the APPROXIMATE flip vote = the most recent DDY flip (approximate: 10-bar WMA of ask-minus-bid delta on the 500-contract bars, state change after the previous state lasted at least 10 bars; reproduces 566 of 786 real flips on the trader's own export, precision 0.71, recall 0.72; code `scripts/amt_tell_live/ddy_flip.py`) in the 10 bars up to and including the signal bar. Groups: DISAGREE (vote = opposite of the tell direction), AGREE, NONE. The hypothesis: DISAGREE fires have a higher per-trade result than the rest.
+When the trader's TRUE flips are logged live (Sierra study "Write Bar and Study Data To File" on the 500-volume chart), a `true_vote` is tagged alongside and the same rule is scored on it as a second, exact series; the approximate series is never replaced.
+## Outcome and population
+Per-trade `net_dollars` of the V1 split rows (the research trade as the sidecar computes it, model P&L, closed rows only). Forward window: trade_date on or after 2026-11-02 (the first full RTH session after this freeze); rows before it are never counted, whatever they show. Tagging is automatic and outcome-blind (a nightly tagger writes `amt_tell_flip_tags` from the stored tell rows and the rebuilt bars; it never reads `net_dollars`).
+## Statistics
+Per-trade means (sum / N) for DISAGREE and for the rest; day-blocked bootstrap CI (resample trading days, 2000 draws, seeded) of each mean and of DISAGREE minus the rest; N and distinct days. Reported by `node scripts/report_flip_disagree_forward.mjs`; one look per milestone below, none between.
+## Floors and milestones (stated now)
+DISAGREE fires are about 22 percent of fires (about 1.5-2 per live session), so milestones are data-gated: first look at 100 DISAGREE fires on at least 50 distinct days (about 11 weeks), second at 200, third at 300. With a per-trade spread of about 100 dollars the interval at 100 fires is about +/-20 dollars per trade: only a large effect can show; the look at 100 is mostly a sanity check and the real decision needs the 200-300 look.
+## Reading rule (absolute dollars; stated before any forward data)
+At a milestone the rule "is supported" only if: DISAGREE mean > 0 with the day-blocked CI lower bound > 0, AND DISAGREE minus the rest > 0 with the CI excluding zero, AND the true-flip series (when it has at least 50 DISAGREE fires) has the same sign. A "supported" rule is a LEAD for a trading change decision made by the user, never an automatic change; the live Stage 2 rule is not changed by this test. A DISAGREE CI entirely below zero, or a difference entirely below zero, closes the hypothesis.
+## Look ledger
+Each milestone look is one test in `research_looks` (family `AMT_TELL_FLIP_DISAGREE_FWD`, window kind FORWARD) logged before the numbers are read.
+## Not tested
+Other flip varieties, the AGREE and NONE groups as rules, any change to Stage 2.
