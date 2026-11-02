@@ -1,0 +1,10 @@
+decision points 30819; with ONV 30819 on 516 dates (sessions dropped for ONV: 0); ONV mean +0.013 sd 0.296
+
+23624 out-of-sample rows on 396 dates. Spearman: clock +0.2628, BASE +0.6467 (run_p2b notell2 +0.6467, clock +0.2628), PLUS +0.6567
+
+Amendment 6 PLUS - BASE: +0.0100  day-blocked CI [+0.0041, +0.0157]  permutation p 0.0390  halves +0.0104 / +0.0079  -> PASS
+uncounted: spearman(ONV, overnight_range_atr) over dates +0.731; PLUS standardized ONV coefficient in the last refit +0.0894 (alpha 1000.0)
+  quarter 1 2023-09-20..2024-02-08: BASE +0.5554 PLUS +0.5610 diff +0.0056
+  quarter 2 2024-02-09..2024-07-01: BASE +0.6040 PLUS +0.6187 diff +0.0147
+  quarter 3 2024-07-02..2024-12-23: BASE +0.6412 PLUS +0.6360 diff -0.0051
+  quarter 4 2024-12-26..2025-05-16: BASE +0.7565 PLUS +0.7729 diff +0.0163

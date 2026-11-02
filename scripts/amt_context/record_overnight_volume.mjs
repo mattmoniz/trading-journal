@@ -1,0 +1,7 @@
+import { recordClaim } from '../record_claim.mjs';
+await recordClaim({
+  slug: 'roster_context_overnight_volume_small_increment_20261102',
+  claimText: 'Amendment 6 of PREREG_ROSTER_CONTEXT.md (written and committed before the script existed; look id 47; explore only; one counted test). Overnight volume ONV = log(overnight 500-volume bar count / its 20-session mean) added to the no-tell 30-minute forecast. Harness: BASE reproduced run_p2b exactly (notell2 +0.6467, clock +0.2628) on 30,819 points, 516 dates, 0 sessions dropped. Out-of-sample Spearman PLUS +0.6567 vs BASE +0.6467: difference +0.0100, day-blocked CI +0.0041..+0.0157, date-permutation p 0.039, halves +0.0104/+0.0079 -> PASS as registered. Caveats stated with the result: the increment is tiny (about 1 Spearman point; the CI lower bound is +0.004); p 0.039 is close to the 0.05 line; quarters +0.0056/+0.0147/-0.0051/+0.0163 (quarter 3 negative); ONV correlates +0.73 with overnight range over dates, so it is largely the same information; standardized coefficient +0.089. READING (pre-registered): PLUS becomes a CHALLENGER only (FORECAST_SERVICE rules: no champion swap, no wiring; live serving would need the feature in forecast_features.py with a parity test). NOT SHOWN: that +0.01 Spearman changes any decision; no trade rule has used the forecast so far (all links were nulls).',
+  sourceFile: 'scripts/amt_context/run_overnight_volume_output.txt', sourceDate: '2026-11-02', sampleSize: 23624, rigorStatus: 'explore_only_small_pass_challenger_only', status: 'PROVISIONAL',
+});
+process.exit(0);
