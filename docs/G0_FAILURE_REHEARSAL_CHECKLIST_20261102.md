@@ -18,3 +18,6 @@ Rule: sim account only (the profile file must say sim and `DTC_AUTO_REARM_SAFE=t
 | 6 | Sleep / wake of the machine | after wake: one server process, stale-feed gate engaged until bars resume, no entry on old information, attestation row for the day present |
 | 7 | DTC disconnect mid-order | order state reconciled from the broker on reconnect, no phantom position, switch not silently re-armed against a mismatch |
 Record each result (date, pass or fail, what was read) under this table; a failed scenario blocks calling G0 done.
+
+## Results
+- 2026-11-02 06:39 EST, scenario 1: PASS. One server process, `[bootSelfTest] PASSED (6 checks)`, `live_attestations` boot_selftest = OK, Sim1 auto-armed after a clean reconcile, `GET /api/sierra-chart/summary` ARMED, live-flags `bootSelfTest.passed = true`, tell sidecar LIVE. Open item: `could not learn the price multiplier for MNQZ26.CME yet` logged once at startup (retried; confirm at the first fill).
