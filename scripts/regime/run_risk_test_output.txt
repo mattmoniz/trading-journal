@@ -1,0 +1,33 @@
+evaluated explore days 267 (2024-01-30..2025-04-02); BUSY 96, NORMAL 69, QUIET 102
+
+RESOLUTION (before any verdict): day-blocked bootstrap CI half-widths on the BUSY/QUIET ratios are printed with each ratio below; days per extreme bucket 96 / 102; the paired pass-share CI is +/-1.96 SD/sqrt(40) over 40 pools of 500 paths.
+
+GATE: C0 pass share at E = 0 is 23.2 percent (theory 22.3 +/- 4)
+
+== T1 / T2: do BUSY-gauge days really swing more? ==
+T1 mean max adverse excursion: BUSY/QUIET ratio 1.425  CI [1.280, 1.587]  placebo p 0.000  halves 1.449 / 1.414  same sign both halves: True
+T2 daily random-direction P&L SD: BUSY/QUIET ratio 1.433  CI [1.226, 1.674]  placebo p 0.005  halves 1.627 / 1.337  same sign both halves: True
+  context: mean max adverse of a random-direction window trade: BUSY 79.7 pts, NORMAL 64.1, QUIET 55.9; daily SD proxy BUSY 223 pts, QUIET 156
+  UNCOUNTED baseline (buckets from the overnight range alone): T1 ratio 1.360
+  UNCOUNTED baseline (buckets from the overnight range alone): T2 ratio 1.480
+  by year 2024: T1 ratio 1.322 (BUSY 75 / QUIET 84 days)
+  by year 2025: T1 ratio 1.686 (BUSY 21 / QUIET 18 days)
+
+== T3-T6: paired change vs C0 at E = 0 (percentage points; breach, pass; 95% CI) ==
+C0 shares at E = 0: pass 23.2 breach 76.8 frozen 0.0 open 0.0; median day of pass 29
+C1: pass change +0.5 [-0.9, +1.9]; breach change -76.8 [-77.5, -76.1]; own shares pass 23.7 breach 0.0 frozen 76.3  -> PRESERVES
+C2: pass change +3.3 [+1.8, +4.8]; breach change -76.8 [-77.5, -76.1]; own shares pass 26.5 breach 0.0 frozen 73.5  -> HELPS
+C3: pass change -0.0 [-0.7, +0.7]; breach change -0.1 [-0.7, +0.6]; own shares pass 23.1 breach 76.8 frozen 0.0  -> NOT SHOWN
+C4: pass change +2.2 [+0.5, +3.9]; breach change -76.8 [-77.5, -76.1]; own shares pass 25.3 breach 0.0 frozen 73.4  -> HELPS
+
+UNCOUNTED 5-day-block check at E = 0:
+  C1: pass change +0.5 [-0.8, +1.7]; breach change -77.2 [-77.8, -76.6]
+  C2: pass change +3.5 [+1.9, +5.2]; breach change -77.2 [-77.8, -76.6]
+  C3: pass change +0.2 [-0.5, +0.8]; breach change -0.2 [-0.9, +0.5]
+  C4: pass change +3.0 [+0.9, +5.0]; breach change -77.2 [-77.8, -76.6]
+
+HYPOTHETICAL edge scenarios (fixed-dollar net edge per day; NO edge is known to exist; an upper bound for the gauge):
+ E = 10: C0 pass 28.7 breach 71.3; C1 pass +0.9 [-0.6,+2.4] breach -71.3; C2 pass +4.1 [+2.4,+5.7] breach -71.3; C3 pass +1.4 [+0.7,+2.1] breach -1.5; C4 pass +4.6 [+2.6,+6.6] breach -71.3
+ E = 25: C0 pass 38.0 breach 62.0; C1 pass +2.0 [+0.2,+3.9] breach -62.0; C2 pass +5.2 [+3.3,+7.1] breach -62.0; C3 pass +4.2 [+3.4,+5.0] breach -4.3; C4 pass +7.7 [+5.4,+10.1] breach -62.0
+
+LABELS: {'C1': 'PRESERVES', 'C2': 'HELPS', 'C3': 'NOT SHOWN', 'C4': 'HELPS'} | T1 passes | T2 passes

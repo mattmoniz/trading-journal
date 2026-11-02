@@ -1,0 +1,3 @@
+import { logLook } from '../lib/look_ledger.mjs';
+const id = await logLook({ family: 'regime_risk_test_20261102', dataWindow: 'explore<=2025-04-02', kind: 'EXPLORE', tests: 6, label: 'Regime gauge vs the $2k trailing-floor risk test: BUSY/QUIET swing-size ratios (T1,T2) and paired pass/breach change of cushion stop, day budget, BUSY stand-down and combined (T3-T6) on explore minute bars, random-direction trades, shadow only', script: 'scripts/regime/run_risk_test.py', prereg: 'docs/REGIME_RISK_TEST_PREREG_20261102.md', ref: 'regime_risk_test_20261102' });
+console.log('look logged id', id); process.exit(0);
