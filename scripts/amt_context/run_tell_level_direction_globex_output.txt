@@ -1,0 +1,12 @@
+Globex signal bars TELL 4667, CONTROL 8751; near a level (event): TELL 3465 on 475 dates, CONTROL 5726
+
+RESOLUTION (TELL absolute-mean CI half-width, points): 15m 0.8, 30m 1.5, 60m 2.1
+
+COUNTED (Globex): y = points in the direction that FADES the nearest level
+  H 30m: TELL mean -0.68 [-2.24, +0.78] (N 3465, 475 dates), CONTROL -1.27, TELL minus CONTROL +0.59 CI [-1.09, +2.21] p 0.461 halves +1.20 / +0.16 BH no
+  H 15m: TELL mean -0.78 [-1.62, +0.07] (N 3423, 475 dates), CONTROL -1.10, TELL minus CONTROL +0.32 CI [-0.66, +1.33] p 0.528 halves +1.04 / -0.21 BH no
+  H 60m: TELL mean -1.44 [-3.64, +0.62] (N 3465, 475 dates), CONTROL -1.30, TELL minus CONTROL -0.14 CI [-2.47, +2.08] p 0.921 halves +0.78 / -0.83 BH no
+
+UNCOUNTED by time block (y30: TELL mean (N) | CONTROL mean (N)): 18:30-00 -1.6 (499) | -1.2 (633); 00-03 -1.1 (445) | -0.9 (934); 03-08 -0.6 (1711) | -1.4 (2919); 08-09 -0.1 (810) | -1.3 (1240)
+UNCOUNTED per level (TELL y30 (N) | CONTROL y30 (N)): ONH_run -0.4 (834) | -0.8 (1285); ONL_run -2.8 (782) | -2.9 (992); PDC +3.3 (267) | -1.0 (546); PDH +0.7 (179) | -1.9 (316); PDL -4.3 (253) | -2.5 (278); PDPOC +3.2 (267) | +1.0 (452); VWAP -0.7 (883) | -1.1 (1857)
+UNCOUNTED tell direction vs the level-chosen side: tell AGREES: N 1225, mean y30 -0.49; tell DISAGREES: N 2240, mean y30 -0.79; by year: 2023 +0.45 (N 1098), 2024 -0.76 (N 1527), 2025 -2.03 (N 840)

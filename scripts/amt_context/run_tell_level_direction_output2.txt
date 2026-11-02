@@ -1,0 +1,11 @@
+signal bars TELL 1760, CONTROL 25704; near a level (event): TELL 876 (50%), CONTROL 12690 (49%)
+
+RESOLUTION (TELL absolute-mean CI half-width, points): 15m 2.6, 30m 3.6, 60m 5.1
+
+COUNTED: y = points in the direction that FADES the nearest level (positive = the level held; negative = it was a launch pad)
+  H 30m: TELL mean +2.72 [-1.01, +6.19] (N 876, 405 dates), CONTROL -1.22, TELL minus CONTROL +3.95 CI [+0.34, +7.41] p 0.034 halves +1.18 / +6.12 BH survives
+  H 60m: TELL mean +3.56 [-1.67, +8.53] (N 876, 405 dates), CONTROL -1.35, TELL minus CONTROL +4.90 CI [-0.23, +9.88] p 0.064 halves +0.91 / +8.08 BH survives
+  H 15m: TELL mean +0.62 [-1.99, +3.30] (N 876, 405 dates), CONTROL -0.96, TELL minus CONTROL +1.57 CI [-1.01, +4.22] p 0.205 halves +1.50 / +1.65 BH no
+
+UNCOUNTED per nearest level (TELL mean y30, N): IBH -4.2 (91); IBL -0.9 (105); ONH +3.9 (88); ONL +5.5 (80); PDC +7.1 (81); PDH +3.1 (63); PDL +2.7 (60); PDPOC +11.4 (71); VWAP +1.5 (237)
+UNCOUNTED tell direction vs the level-chosen direction: tell AGREES: N 436, mean y30 +4.98; tell DISAGREES: N 440, mean y30 +0.49; by year: 2023 -0.94 (N 283), 2024 +5.60 (N 378), 2025 +2.50 (N 215)
