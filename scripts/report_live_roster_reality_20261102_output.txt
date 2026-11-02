@@ -1,0 +1,59 @@
+✅ Connected to PostgreSQL database
+
+==== window >= 2026-10-12 (current mechanism combination): 291 real primary trades on 12 trading days; total $-510
+family | session | N | days | win% | mean/trade | 95% CI (day-blocked) | total $ | worst day $ | top-5-day share of profit | mark-to-market %
+AMT_TELL (Stage 2) | RTH | 16 | 2 | 13% | -28.41 | [NaN, NaN] | -455 | -308 | n/a | 0%
+LEVEL_FADE (overnight names) | Globex | 54 | 7 | 48% | 18.46 | [-19.7, 52.3] | 997 | -371 | 100% | 19%
+LEVEL_FADE / other | Globex | 33 | 7 | 52% | 15.46 | [-17.4, 47.3] | 510 | -215 | 100% | 12%
+LEVEL_FADE / other | RTH | 164 | 11 | 41% | -2.65 | [-11.4, 6.7] | -434 | -366 | 100% | 40%
+POC_ROTATION_JOIN | Globex | 16 | 6 | 6% | -48.16 | [-80.6, -7.0] | -771 | -408 | 100% | 25%
+POC_ROTATION_JOIN | RTH | 8 | 4 | 0% | -44.75 | [-70.1, -10.7] | -358 | -227 | n/a | 75%
+
+==== window >= 2026-09-17 (context): 602 real primary trades on 27 trading days; total $-3709
+family | session | N | days | win% | mean/trade | 95% CI (day-blocked) | total $ | worst day $ | top-5-day share of profit | mark-to-market %
+AMT_TELL (Stage 2) | RTH | 16 | 2 | 13% | -28.41 | [NaN, NaN] | -455 | -308 | n/a | 0%
+LEVEL_FADE (overnight names) | Globex | 80 | 15 | 40% | 1.36 | [-30.0, 26.3] | 109 | -371 | 93% | 15%
+LEVEL_FADE / other | Globex | 77 | 14 | 48% | 11.23 | [-7.1, 32.6] | 865 | -215 | 97% | 5%
+LEVEL_FADE / other | RTH | 405 | 26 | 39% | -7.65 | [-14.6, -0.4] | -3099 | -739 | 91% | 32%
+POC_ROTATION_JOIN | Globex | 16 | 6 | 6% | -48.16 | [-79.4, -7.1] | -771 | -408 | 100% | 25%
+POC_ROTATION_JOIN | RTH | 8 | 4 | 0% | -44.75 | [-70.1, -10.7] | -358 | -227 | n/a | 75%
+
+==== ACTIVE vs SHADOW, POC_ROTATION_JOIN and FLUSH, primary rows, trade_date >= 2026-10-12 (same exclusions as above) ====
+family | origin | session | N | days | win% | mean/trade | total $
+FLUSH | SHADOW | Globex | 10 | 10 | 60% | 121.46 | 1215
+FLUSH | SHADOW | RTH | 13 | 13 | 62% | 3.04 | 40
+POC_ROTATION_JOIN | ACTIVE | Globex | 16 | 6 | 6% | -48.16 | -771
+POC_ROTATION_JOIN | ACTIVE | RTH | 8 | 4 | 0% | -44.75 | -358
+POC_ROTATION_JOIN | SHADOW | Globex | 46 | 13 | 28% | 15.50 | 713
+POC_ROTATION_JOIN | SHADOW | RTH | 19 | 9 | 21% | 24.55 | 467
+
+per-day since 2026-10-21 (POC join forced SHADOW): date | family | origin | session | N | total $
+2026-10-21 | FLUSH | SHADOW | Globex | 1 | 545
+2026-10-21 | FLUSH | SHADOW | RTH | 1 | -287
+2026-10-21 | POC_ROTATION_JOIN | ACTIVE | Globex | 4 | -408
+2026-10-21 | POC_ROTATION_JOIN | SHADOW | RTH | 3 | 190
+2026-10-22 | FLUSH | SHADOW | Globex | 1 | -307
+2026-10-22 | FLUSH | SHADOW | RTH | 1 | 156
+2026-10-22 | POC_ROTATION_JOIN | SHADOW | Globex | 1 | 165
+2026-10-22 | POC_ROTATION_JOIN | SHADOW | RTH | 1 | -42
+2026-10-23 | FLUSH | SHADOW | RTH | 1 | -260
+2026-10-23 | POC_ROTATION_JOIN | SHADOW | Globex | 7 | -120
+2026-10-23 | POC_ROTATION_JOIN | SHADOW | RTH | 2 | -84
+2026-10-25 | FLUSH | SHADOW | Globex | 1 | 215
+2026-10-26 | FLUSH | SHADOW | Globex | 1 | -206
+2026-10-26 | FLUSH | SHADOW | RTH | 1 | -229
+2026-10-26 | POC_ROTATION_JOIN | SHADOW | Globex | 10 | 58
+2026-10-27 | FLUSH | SHADOW | Globex | 1 | 73
+2026-10-27 | FLUSH | SHADOW | RTH | 1 | 129
+2026-10-27 | POC_ROTATION_JOIN | SHADOW | Globex | 5 | -112
+2026-10-27 | POC_ROTATION_JOIN | SHADOW | RTH | 2 | 311
+2026-10-28 | FLUSH | SHADOW | RTH | 1 | 131
+2026-10-28 | POC_ROTATION_JOIN | SHADOW | Globex | 1 | -42
+2026-10-28 | POC_ROTATION_JOIN | SHADOW | RTH | 4 | 10
+2026-10-29 | FLUSH | SHADOW | Globex | 1 | 557
+2026-10-29 | POC_ROTATION_JOIN | SHADOW | Globex | 8 | 22
+2026-10-29 | POC_ROTATION_JOIN | SHADOW | RTH | 4 | -168
+2026-10-30 | FLUSH | SHADOW | RTH | 1 | 131
+2026-10-30 | POC_ROTATION_JOIN | SHADOW | Globex | 5 | 683
+2026-10-30 | POC_ROTATION_JOIN | SHADOW | RTH | 1 | 254
+2026-11-02 | POC_ROTATION_JOIN | SHADOW | Globex | 2 | -84
