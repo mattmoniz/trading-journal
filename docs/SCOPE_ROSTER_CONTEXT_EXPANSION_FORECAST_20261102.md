@@ -43,3 +43,8 @@ It creates no side edge and does not make the tell tradable by itself. With one 
 1. Population: explore on BACKFILL only, confirmation deferred (recommended), or extract Jul-Oct 2026 sessions now (section 5).
 2. OK to keep the primary RTH 10:00-14:30 with Globex as a recorded untested gap.
 3. Later: a go for any hold-out spend and for the forward-tagging write path at a restart.
+
+## Update 2026-11-02 (P0 done)
+- Population decision resolved (user delegated): explore on BACKFILL through 2025-05-16, exploration only; no sealed-window read; confirmation on forward tags. Plan frozen in `scripts/amt_context/PREREG_ROSTER_CONTEXT.md` (written before any outcome; counts only were read).
+- New fact from counts: ALL 1,787 backfill rows in the tell window (10:00-14:30 ET, through 2025-05-16, 120 types) are level-fade or magnet types. A fade-versus-trend split is therefore NOT testable on backfill; it can only come from forward live tags (H5).
+- `scripts/amt_context/tell_state.py` (`state_at`) built on the research functions; `parity_state.py` passes: 960 cut points on 60 sessions, 0 violations, and both mutation variants (2-minute lookahead, whole-session overnight range) are caught on all 240 cut points each (`parity_state_output.txt`). No outcome has been read yet; the next step (P1) logs a look in the ledger first.

@@ -1,0 +1,32 @@
+# Pre-registration: the tell as context for roster setups, with an expansion-forecast model (written 2026-11-02 BEFORE any outcome was read)
+
+Scope and reasons: `docs/SCOPE_ROSTER_CONTEXT_EXPANSION_FORECAST_20261102.md`. Population decision (resolved 2026-11-02, user delegated): explore on the simulated BACKFILL rows through 2025-05-16, exploration only; forecast trained on the explore decision points; NO read of the sealed window (sessions after 2025-05-16 stay unextracted); confirmation only on forward live tags. Any hold-out spend needs the user.
+Nothing below was computed from outcomes. Only counts were read: `decision_points_explore.csv` columns `date,t,dir` (41,272 rows, 516 dates, 2023-04-04..2025-05-16, by clock hour 10:14,854 11:10,143 12:7,067 13:6,166 14:3,042) and `active_setups` row counts. 536 explore sessions load; 516 have the 20-session baseline the research code requires.
+
+## Facts that bound the study (counts, no outcomes)
+- BACKFILL rows through 2025-05-16 fired RTH 10:00-14:30 ET: 1,787 rows, 120 setup types, and ALL of them are level-fade or magnet types (name contains `_FADE_` or `MAGNET`). There is no breakout or trend family in the simulated history, so a fade-versus-trend split is NOT testable here; it can only come from forward live tags.
+- Per type the average is about 15 rows, so type-level conclusions are impossible; the pooled fade family is the only roster-level unit (cv-033: pooling is a question, so the family result is a lead, not a verdict).
+- Real roster rows begin 2026-07-09 and are not used (sealed window). Globex is not tested (recorded gap, hr-002; `PREREG_GLOBEX.md` is a draft). Primary window: fire or decision time 10:00-14:30 ET; state lookbacks are truncated at 09:30 ET (`minutes_since_rth_open` is reported).
+
+## Frozen definitions
+- Tell state: `scripts/amt_context/tell_state.py` (`state_at`), which calls the research functions in `scripts/amt_vbars/trade.py` literally. `tell_on` at a completed bar = the research TELL5 (pace A>=1, back-and-forth Q>=QCUT, oscillation R>=RCUT, strides, ladder L>=2) in either direction while price is inside the boundary (`inside_range`). Lookbacks 5/15/30/60 minutes. State uses only bars with end <= the time, floored to the minute. Causality is a TEST: `parity_state.py` (prefix-invariance plus two mutation tests) must pass before any outcome is read.
+- Target: E_W = (highest high minus lowest low of the completed bars with end in (ts, ts+W]) divided by ATR20, direction-free, W in {15, 30, 60} minutes. PRIMARY horizon W = 30. 15 and 60 are reported, not counted. ATR20 = mean RTH range of the prior 20 sessions (research definition).
+- Decision grid for the forecast: the research grid, every 10th completed bar ending 10:00-14:30 ET, one row per bar (not per side), recomputed from the session files, not taken from the CSV.
+- Feature set (frozen): everything `state_at` returns except `i0`, `bar_end_sec`, `age_of_last_bar_s`; plus clock minute and day of week. No other feature may be added after seeing a result.
+- Baseline forecast: mean E_W of the training dates in the same 30-minute clock bucket (shrunk to the global mean when a bucket has fewer than 50 training rows).
+- Model: ridge regression on log E_W, regularisation chosen by time-ordered cross-validation inside the training dates only (grid 0.1, 1, 10, 100, 1000, fixed now). A gradient-boosted model is allowed ONLY if the ridge result passes H2, and then as a labelled secondary.
+- Walk-forward: expanding by date, first 120 dates train only, refit every 20 dates.
+- Statistics: day-blocked bootstrap CI (3000 resamples, seed 20261102) for every interval; label-permutation null by permuting E vectors across days (blocks), 1000 draws; chronological halves by median date; Benjamini-Hochberg q=0.10 across the counted hypotheses.
+
+## Hypotheses (counted family H2, H3, H4; H1 is descriptive context, not counted)
+- H1 (P1): E_30 is higher when `tell_any_30m` is true than when false, within clock-hour strata; report the stratum-weighted difference with CI. Descriptive; uses full-sample strata.
+- H2 (P2, PRIMARY): the ridge forecast beats the baseline forecast out of sample for E_30, measured as the difference in Spearman rank correlation (model minus baseline). PASS = CI lower bound > 0 AND permutation p < 0.05 AND the difference > 0 in both chronological halves.
+- H3 (P2): the ridge forecast beats a model that has only the clock bucket plus the five `tell_*` flags, same metric and pass rule (does anything beyond "tell yes or no" matter).
+- H4 (P3, only if H2 passes): on the 1,787 BACKFILL fade rows, skipping rows whose forecast E_30 is in the top third (cutoff from the training dates before the row, expanding) gives a lower total simulated P&L loss than skipping the same number of random rows (matched placebo, 1000 draws). Outcome = sum of `actual_pnl` of the skipped rows, a day-blocked CI of the mean per skipped row, paired against the placebo, reported per day and per trade. PASS = skipped rows have negative mean P&L with CI upper bound < 0 AND beat the placebo at p < 0.05 AND both halves point the same way. Half-size is reported, not counted. BACKFILL is simulated, so a pass is a hypothesis for forward tags, never a dollar claim (hr-006).
+- H5 (P4, forward only): the same rule on forward live tags (ACTIVE and SHADOW, `is_cluster_primary`, RTH 10:00-14:30). Not evaluated before 60 trading days of tags and at least 300 qualifying rows; the first look is a counted look; a fade-versus-trend split is only possible here.
+
+## Kill rules
+P1: H1 shows no E_30 difference beyond what the earlier expansion study showed -> stop the tell-state line and record it. P2: H2 fails -> the forecast is dropped (no boosted model, no extra features, no new horizons to rescue it); the tell stays an expansion marker. P3: H4 fails -> no roster rule is proposed; P4 stays as a passive log only. A pass anywhere is a lead for the next stage, not a result.
+
+## Ledger and discipline
+Every script that reads E_W, `actual_pnl` or `mfe/mae` first logs a look with `scripts/lib/look_ledger.mjs` (family `roster_context_20261102`, window `explore<=2025-05-16`, label counts of what it reads); results via `recordClaim()`. No sealed look is spent. The explore dates have been used by many earlier studies, so positive results here carry a selection caveat and are hypotheses. Decisions and horizons are fixed above; any addition is a written amendment BEFORE it is run, with the rerun disclosed alongside the original.
