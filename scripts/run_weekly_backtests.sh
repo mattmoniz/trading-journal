@@ -508,6 +508,9 @@ run node scripts/calibrate_sweep_drive_cutoff.mjs
 # Standing ML gate rule: weekly scorecard of the live checkpoint on trades it never saw (performance_audit ML_UNSEEN_SCORECARD); flags an OPEN_DECISION only after two consecutive passes. Never changes live behavior.
 run node scripts/ml_unseen_scorecard.mjs
 
+# Forecast learning loop (2026-11-02, docs/FORECAST_SERVICE_20261102.md): counts until the first look at 40 complete forward trading days, then one non-overlapping look per 20 days (challenger vs champion vs PERSIST, promotion rule, decay alarm). Shadow only.
+run /bin/bash scripts/amt_context/forecast_loop_weekly.sh
+
 if [ ${#FAILED_STEPS[@]} -gt 0 ]; then
   echo "=== ${#FAILED_STEPS[@]} step(s) failed:"
   printf "  %s\n" "${FAILED_STEPS[@]}"

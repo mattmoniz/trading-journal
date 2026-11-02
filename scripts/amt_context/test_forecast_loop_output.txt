@@ -1,0 +1,12 @@
+ok   guard: a point ON the trained_through date is excluded, later ones kept
+ok   calendar: spans (20,40), (40,60), (60,80), (80,100)
+ok   calendar: every span starts where the previous ended (no shared days)
+ok   synthetic: a better model beats a noise model (diff +0.64, CI lower +0.51, p 0.001)
+ok   synthetic: an identical model is not promoted (diff +0.0000, p 1.000)
+ok   forward frame: no point after the cutoff (104 rows through 10-29, 190 through 10-30)
+ok   training frame: no cutoff = explore only (30803 rows); with a cutoff the forward rows are appended (30993 rows, 190 forward)
+ok   reproduction: retraining on the explore frame reproduces the registered champion ridge-act-h30-2025-05-16-caeaaa2f exactly
+ok   predict(): stored params reproduce the hand computation
+ok   PERSIST model uses only the trailing ranges and the clock
+ok   mutation: an evaluator using >= would include the trained_through date, and test 1 catches it
+all forecast loop tests passed
