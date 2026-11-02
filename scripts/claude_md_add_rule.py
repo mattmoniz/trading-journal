@@ -23,7 +23,7 @@ def main():
     if key != 'where_to_look' or pointer:
         m = re.search(rf'(?m)^## {re.escape(name)}\b.*$', s); assert m, f'section {name} not found in CLAUDE.md'
         nxt = re.search(r'(?m)^## ', s[m.end():]); end = m.end() + nxt.start() if nxt else len(s)
-        block = s[m.end():end].rstrip('\n'); new_block = block + f'\n- {line} [→](docs/CLAUDE_MD_ARCHIVE/{key}.md#{eid})\n\n'
+        block = s[m.end():end].rstrip('\n'); new_block = block + f'\n- {line} ({eid})\n\n'
         new_s = s[:m.end()] + new_block + s[end:]
     nb = len(new_s.encode())
     if nb > MAX_BYTES: sys.exit(f'REFUSED: CLAUDE.md would be {nb} bytes (cap {MAX_BYTES}). Archive or shorten existing entries first (the archive keeps the full text).')
