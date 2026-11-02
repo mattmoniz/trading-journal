@@ -1,0 +1,9 @@
+rows 1507, with mfe/mae 1507, missing 0
+
+by forecast third (H4 expanding thirds): N, mean excursion mfe+mae (points), mean mfe, mean mae, mean |pnl| ($)
+  low  N= 441 exc   73.71  mfe   33.63  mae   40.08  |pnl|   90.78
+  mid  N= 540 exc   75.29  mfe   35.82  mae   39.47  |pnl|   91.36
+  high N= 526 exc   74.63  mfe   36.65  mae   37.98  |pnl|   93.58
+
+Spearman(forecast, mfe+mae) = -0.0263, day-blocked 95% CI [-0.1608, +0.1071], halves +0.2361 / -0.1820
+Spearman(forecast, |pnl|) = -0.0061
