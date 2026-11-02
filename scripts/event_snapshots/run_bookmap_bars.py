@@ -10,6 +10,7 @@ HZ = (5, 15, 30); SEGS = {'RTH': (57600.0, 77400.0), 'GLOBEX': (1800.0, 55800.0)
 def roll(a, k, f=np.add):
     """trailing window reduction over the last k values (NaN where fewer than k)."""
     n = len(a); out = np.full(n, np.nan)
+    if n < k: return out
     if f is np.add: cs = np.cumsum(np.r_[0.0, a]); out[k - 1:] = cs[k:] - cs[:-k]
     else:
         from numpy.lib.stride_tricks import sliding_window_view as sw; w = sw(a, k); out[k - 1:] = (w.max(1) if f is np.maximum else w.min(1))
