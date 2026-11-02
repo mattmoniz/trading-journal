@@ -320,4 +320,9 @@ timed_step daily ./venv/bin/python3 scripts/amt_s1/amt_daily_state.py
 # a failed day is retried the next night and never fails this job. Scored by scripts/report_flip_disagree_forward.mjs at 100/200/300 DISAGREE fires. Decision amt_tell_flip_disagree_forward_test_20261101.
 timed_step daily /bin/bash scripts/amt_tell_live/tag_flips_nightly.sh
 
+# Nightly live attestation (docs/G0_GAP_AUDIT_20261101.md items 6 and 7): rebuilds today's tell trades from the tick file and compares EVERY one with what the live sidecar logged (decision hash, exit, P&L, stored bars hash),
+# checks that every real ENTRY fill of today has a matching exit fill and nothing is left open after the close, and measures the model-vs-broker P&L gap. Writes live_attestations; a DIVERGENCE or ERROR also logs a line to
+# scratch/server_errors.jsonl. Read-only against live data, checks today and the previous weekday (catch-up), mutation-tested 2026-11-01, never fails this job. Feeds the Stage 2 review (docs/AMT_TELL_STAGE2_REVIEW_RULE_20261101.md).
+timed_step daily ./venv/bin/python3 scripts/attest_live_day.py --days 1
+
 echo "=== Daily calibration complete: $(date) ==="

@@ -5980,6 +5980,41 @@ ALTER SEQUENCE public.level_regime_performance_id_seq OWNED BY public.level_regi
 
 
 --
+-- Name: live_attestations; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.live_attestations (
+    id integer NOT NULL,
+    checked_at timestamp with time zone DEFAULT now() NOT NULL,
+    trade_date date NOT NULL,
+    check_name character varying(40) NOT NULL,
+    status character varying(12) NOT NULL,
+    detail jsonb,
+    CONSTRAINT live_attestations_status_check CHECK (((status)::text = ANY ((ARRAY['OK'::character varying, 'DIVERGENCE'::character varying, 'ERROR'::character varying, 'SKIPPED'::character varying])::text[])))
+);
+
+
+--
+-- Name: live_attestations_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.live_attestations_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: live_attestations_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.live_attestations_id_seq OWNED BY public.live_attestations.id;
+
+
+--
 -- Name: live_reads; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -10963,6 +10998,13 @@ ALTER TABLE ONLY public.level_regime_performance ALTER COLUMN id SET DEFAULT nex
 
 
 --
+-- Name: live_attestations id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.live_attestations ALTER COLUMN id SET DEFAULT nextval('public.live_attestations_id_seq'::regclass);
+
+
+--
 -- Name: live_reads id; Type: DEFAULT; Schema: public; Owner: -
 --
 
@@ -11756,6 +11798,22 @@ ALTER TABLE ONLY public.level_regime_performance
 
 ALTER TABLE ONLY public.level_regime_performance
     ADD CONSTRAINT level_regime_performance_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: live_attestations live_attestations_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.live_attestations
+    ADD CONSTRAINT live_attestations_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: live_attestations live_attestations_trade_date_check_name_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.live_attestations
+    ADD CONSTRAINT live_attestations_trade_date_check_name_key UNIQUE (trade_date, check_name);
 
 
 --
@@ -13155,6 +13213,13 @@ CREATE INDEX idx_learning_digest_created ON public.learning_digest_events USING 
 --
 
 CREATE INDEX idx_learning_digest_shown ON public.learning_digest_events USING btree (shown) WHERE (NOT shown);
+
+
+--
+-- Name: idx_live_attestations_status; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_live_attestations_status ON public.live_attestations USING btree (status, trade_date);
 
 
 --
