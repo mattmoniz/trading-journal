@@ -1,4 +1,0 @@
-REAL: 960 cut points on 60 sessions, violations 0 []
-MUTATION leak_2min: 240 cut points, violations 240 -> CAUGHT
-MUTATION leaky_overnight: 240 cut points, violations 240 -> CAUGHT
-PARITY OK

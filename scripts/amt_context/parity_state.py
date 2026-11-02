@@ -24,7 +24,7 @@ def cut_times(S, K):
 
 def run(n_sessions, K, mutate=None):
     sess, ctxs, inputs = TS.sessions_and_contexts(); ks = sorted(ctxs); pool = ks[::max(1, len(ks) // n_sessions)][:n_sessions]
-    checked = 0; violations = []
+    checked = 0; violations = []; fast_flags = {}
     for d in pool:
         S, ctx = sess[d], ctxs[d]
         full_ctx = ctx
@@ -34,6 +34,9 @@ def run(n_sessions, K, mutate=None):
             atr, base = inputs[d]; pctx = T.prep(TS.prefix_session(S, i0), atr, base)
             if pctx is None: continue
             got = TS.state_at(pctx, ts); want = TS.state_at(full_ctx, ts, leak=2 if mutate == 'leak_2min' else 0)
+            if mutate is None:
+                fl = fast_flags.setdefault(d, TS.bar_flags(full_ctx)); bad_fast = diff(TS.state_at(full_ctx, ts, flags=fl), want)
+                if bad_fast: violations.append((d, ts, ['fast_path:' + k for k in bad_fast]))
             checked += 1; bad = diff(got, want)
             if bad: violations.append((d, ts, bad))
     return checked, violations

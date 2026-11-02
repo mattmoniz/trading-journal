@@ -1,0 +1,12 @@
+decision points 30821 on 516 dates; tell30 on 19674 (63.8%), dates with any tell30 503
+arm sizes per clock hour (tell-on / tell-off): {np.int64(10): (8420, 2102), np.int64(11): (4655, 2344), np.int64(12): (3013, 2421), np.int64(13): (2446, 2703), np.int64(14): (1140, 1577)}
+
+H1: E_W tell-on minus tell-off (ATR20 units), stratum-weighted by tell-on counts, day-blocked 95% CI
+  W=15           diff +0.0439 CI [+0.0333, +0.0566]  raw means on 0.230 off 0.168  halves +0.0303 / +0.0538
+  W=30 [PRIMARY] diff +0.0612 CI [+0.0474, +0.0777]  raw means on 0.317 off 0.234  halves +0.0444 / +0.0740
+  W=60           diff +0.0766 CI [+0.0599, +0.0948]  raw means on 0.426 off 0.327  halves +0.0564 / +0.0953
+
+same contrast with pace held roughly fixed (A >= 1 only, the tell requires fast pace):
+  W=15 diff +0.0379 (n tell-on 15423, off 6147)
+  W=30 diff +0.0553 (n tell-on 15423, off 6147)
+  W=60 diff +0.0682 (n tell-on 15423, off 6147)

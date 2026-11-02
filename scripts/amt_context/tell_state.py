@@ -35,12 +35,12 @@ def bar_flags(ctx, upto=None, leak=0):
     return c4, on
 
 
-def state_at(ctx, ts_sec, leak=0):
+def state_at(ctx, ts_sec, leak=0, flags=None):
     """Tell state at ts_sec (seconds since 18:00 ET). Returns a dict of plain floats/bools/None, or None when no complete bar exists at or after 09:30 by ts."""
     S = ctx['S']; end, comp = S['end'], S['comp']
     ok = np.where(comp & (end <= ts_sec + (leak * 60.0 if leak else 0.0)) & (end >= STATE_FROM))[0]
     if len(ok) == 0 or ts_sec < STATE_FROM: return None
-    i0 = int(ok[-1]); c4, on = bar_flags(ctx, upto=i0)
+    i0 = int(ok[-1]); c4, on = flags if flags is not None else bar_flags(ctx, upto=i0)   # flags: precomputed bar_flags(ctx) for the whole session (a speed path; equal to the per-cut result, checked in parity_state.py)
     tell_any = on[1] | on[-1]; idx = np.where(tell_any[:i0 + 1])[0]
     out = dict(i0=i0, bar_end_sec=float(end[i0]), age_of_last_bar_s=float(ts_sec - end[i0]),
                tell_now=bool(tell_any[i0]), c4max_now=int(max(c4[1][i0], c4[-1][i0])),
