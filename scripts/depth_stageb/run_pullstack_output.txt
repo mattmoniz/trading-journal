@@ -1,0 +1,12 @@
+sessions usable 72 of 73
+events: FLIP+PUSH 923 (52 sessions), PUSH-ONLY 3531, FLIP-NO-PUSH 9436; flips per session mean 199.2
+
+RESOLUTION (FLIP+PUSH absolute-mean CI half-width, points): 60s 0.70, 300s 1.38, 900s 2.71
+
+COUNTED: FLIP+PUSH minus PUSH-ONLY (points, gross mid-to-mid; economic bar about 1.4)
+  H  60s: FLIP+PUSH mean +0.38 [-0.32, +1.07] (N 923, 52 sessions), PUSH-ONLY +0.10, difference +0.27 CI [-0.48, +1.03] p 0.449 halves -0.32 / +0.65 BH no
+  H 300s: FLIP+PUSH mean +0.12 [-1.28, +1.49] (N 923, 52 sessions), PUSH-ONLY -0.53, difference +0.64 CI [-1.45, +2.73] p 0.545 halves -0.58 / +1.41 BH no
+  H 900s: FLIP+PUSH mean +0.39 [-2.41, +3.00] (N 923, 52 sessions), PUSH-ONLY -0.49, difference +0.88 CI [-2.89, +4.24] p 0.586 halves +0.99 / +0.80 BH no
+
+UNCOUNTED: FLIPPUSH mean y at 60/300/900 s: +0.38/+0.12/+0.39 (N 923); PUSHONLY mean y at 60/300/900 s: +0.10/-0.53/-0.49 (N 3531); FLIPNOPUSH mean y at 60/300/900 s: -0.02/+0.16/+0.38 (N 9436)
+UNCOUNTED FLIP+PUSH by flip direction (y300): up +1.58 (N 478), down -1.46 (N 445)
