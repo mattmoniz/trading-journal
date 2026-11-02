@@ -1,0 +1,13 @@
+decision points 30819 on 516 dates; share on: tell_now 8.4%, tell_any_5m 29.3%, tell_any_30m 63.8%; A_now tercile cuts [1.044, 1.585]
+
+pace-matched strata: clock hour x A_now tercile
+  flag          n_on   n_off   E_30 diff   95% CI (day-blocked)        halves
+  tell_now       2591   28228   +0.0257    [+0.0158, +0.0367]    +0.0140 / +0.0315
+  tell5          9035   21784   +0.0343    [+0.0231, +0.0463]    +0.0212 / +0.0416
+  tell30        19673   11146   +0.0540    [+0.0400, +0.0698]    +0.0374 / +0.0699
+
+range strata (the original H1 strata): clock hour x range-so-far tercile
+  flag          n_on   n_off   E_30 diff   95% CI (day-blocked)        halves
+  tell_now       2591   28228   +0.0385    [+0.0282, +0.0490]    +0.0266 / +0.0424
+  tell5          9035   21784   +0.0489    [+0.0376, +0.0611]    +0.0342 / +0.0571
+  tell30        19673   11146   +0.0612    [+0.0471, +0.0784]    +0.0444 / +0.0740
