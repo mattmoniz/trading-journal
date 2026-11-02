@@ -10,7 +10,7 @@ FLAGS = ['tell_now', 'tell_any_5m', 'tell_any_15m', 'tell_any_30m', 'tell_any_60
 TELL_OTHER = ['tell_bars_5m', 'tell_bars_15m', 'tell_bars_30m', 'tell_bars_60m', 'c4max_now', 'minutes_since_last_tell']
 ACT = ['A_now', 'rth_range_so_far_atr', 'overnight_range_atr', 'minutes_since_rth_open']; RR = ['rr15', 'rr30', 'rr60']
 
-def build_points(ctxs=None):
+def build_points(ctxs=None, horizons=(15, 30, 60), full_only=False):
     if ctxs is None: _, ctxs, _ = TS.sessions_and_contexts()
     rows = []
     for d, ctx in ctxs.items():
@@ -23,11 +23,12 @@ def build_points(ctxs=None):
             r.update(date=d, dow=dow, bucket=int(((end[i] - V.DEC_FIRST) // 1800) if end[i] >= V.DEC_FIRST else 0))
             for M in (15, 30, 60):
                 w = comp & (end <= end[i]) & (end > end[i] - M * 60.0); r[f'rr{M}'] = float((S['h'][w].max() - S['l'][w].min()) / ctx['atr']) if w.any() else np.nan
-            for W in (15, 30, 60):
+            for W in horizons:
                 hz = comp & (end > end[i]) & (end <= end[i] + W * 60.0)
-                r[f'E{W}'] = float((S['h'][hz].max() - S['l'][hz].min()) / ctx['atr']) if hz.any() else np.nan
+                r[f'E{W}'] = float((S['h'][hz].max() - S['l'][hz].min()) / ctx['atr']) if (hz.any() and (not full_only or end[comp].max() >= end[i] + W * 60.0 - 60.0)) else np.nan
+                r[f'full{W}'] = bool(end[comp].max() >= end[i] + W * 60.0 - 60.0)
             rows.append(r)
-    df = pd.DataFrame(rows).dropna(subset=['E30', 'rr15', 'rr30', 'rr60']).reset_index(drop=True)
+    df = pd.DataFrame(rows).dropna(subset=(['E30'] if 30 in horizons else [f'E{h}' for h in horizons]) + ['rr15', 'rr30', 'rr60']).reset_index(drop=True)
     for c in FLAGS: df[c] = df[c].astype(float)
     return df
 
