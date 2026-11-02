@@ -1,0 +1,28 @@
+HARNESS CHECK: first-break CONTROL (moving only, both sides inside) reproduced: 10896 points on 470 dates, T 3225 O 2101 N 5570  (research output: 10896 points on 470 dates, T 3225 O 2101 N 5570)
+grid points with a usable forecast after the first 120 dates: 23425 on 396 dates; the first 2000 only seed the cutoffs
+evaluated points (both sides inside, nearer side defined, 30-minute window complete): 8098 on 336 dates; ties dropped 6; labels H 2548 M 2677 L 2873
+dropped for no complete bar inside the 30-minute window: 0
+
+unconditional (all evaluated): first break on d* 83.2% of 3734 breaking points (break rate 46.1%); mean S30 -0.0005 ATR
+  H: N 2548 on 202 dates; share on d* 86.2% of 1173; break rate 46.0%; mean S30 +0.0006 (excess +0.0012)
+  M: N 2677 on 259 dates; share on d* 82.3% of 1237; break rate 46.2%; mean S30 -0.0067 (excess -0.0061)
+  L: N 2873 on 199 dates; share on d* 81.5% of 1324; break rate 46.1%; mean S30 +0.0041 (excess +0.0046)
+
+B1 share of first breaks on d* (HIGH minus LOW): +0.0469  day-blocked CI [-0.0196, +0.1162]  permutation p 0.0719  halves +0.0829 / +0.0027  -> NOT PASSED
+
+B2 mean S30, i.e. excess HIGH minus LOW: -0.0035  day-blocked CI [-0.0326, +0.0244]  permutation p 0.6254  halves +0.0019 / -0.0075  -> NOT PASSED
+
+S60 mean difference (uncounted): +0.0010  day-blocked CI [-0.0373, +0.0409]  permutation p 0.4496  halves +0.0269 / -0.0199
+BH q=0.10 over B1,B2: {'B1': 'does not reject', 'B2': 'does not reject'}
+
+uncounted: chronological quarters (points HIGH / LOW, B1, B2)
+  2023-10-30..2024-03-13  H 581 / L 618  B1 -0.0063  B2 -0.0189
+  2024-03-14..2024-07-17  H 567 / L 805  B1 +0.1490  B2 +0.0170
+  2024-07-18..2025-01-07  H 661 / L 667  B1 -0.0012  B2 +0.0128
+  2025-01-08..2025-05-16  H 739 / L 783  B1 +0.0086  B2 -0.0210
+
+uncounted: near-versus-far reading. d* is the NEARER side by construction, so the split is by how lopsided the range is (nearer/farther distance, below or above the median ratio); B1 in each:
+  lopsided (ratio <= median): N 4049, share on d* 94.2%, B1 +0.0135, B2 -0.0003
+  centered (ratio > median): N 4049, share on d* 64.9%, B1 +0.0713, B2 -0.0069
+
+READING (pre-registered): both fail -> direction cues do not sharpen with the forecast

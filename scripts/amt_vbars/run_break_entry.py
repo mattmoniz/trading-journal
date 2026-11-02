@@ -38,13 +38,18 @@ def agg(rows, dts):
     for r in rows: Sm[idx[r['date']], r['bin']] += r['net']; N[idx[r['date']], r['bin']] += 1
     return Sm, N
 
-def wdiff_ci(A, C, rng):
+def wdiff_draws(A, C, rng):
+    """(point estimate, list of day-bootstrap draws) of the entry-time-mix-weighted TELL minus CONTROL difference; wdiff_ci takes the percentiles."""
     dts = sorted({r['date'] for r in A} | {r['date'] for r in C}); Sa, Na = agg(A, dts); Sc, Nc = agg(C, dts); D = len(dts)
     def one(wgt):
         na, nc = wgt @ Na, wgt @ Nc
         if (na == 0).any() or (nc == 0).any(): return None
         return float(np.sum(na / na.sum() * ((wgt @ Sa) / na - (wgt @ Sc) / nc)))
     point = one(np.ones(D)); out = [v for v in (one(np.bincount(rng.integers(0, D, D), minlength=D).astype(float)) for _ in range(BOOT)) if v is not None]
+    return point, out
+
+def wdiff_ci(A, C, rng):
+    point, out = wdiff_draws(A, C, rng)
     return point, float(np.percentile(out, 2.5)), float(np.percentile(out, 97.5))
 
 def abs_ci(A, rng):

@@ -1,0 +1,41 @@
+HARNESS CHECK S-STOP window 5 min: 2591 points on 442 dates, mean per point $-2.43 (research $-2.43) -> reproduced
+HARNESS CHECK S-STOP window 30 min: 2591 points on 442 dates, mean per point $-1.52 (research $-1.52) -> reproduced
+funnel (after the first 120 dates): {'tell_trades': 1379, 'tell_no_row': 0, 'tell_window': 0, 'ctl_points': 19662, 'ctl_no_row': 0, 'ctl_window': 9}
+TELL points 1379 on 376 dates; CONTROL_MOVING points 19653 on 396 dates; mean forecast E_30 (points): TELL 101.4, CONTROL 82.3
+
+=== S-STOP, k = 0.25 x forecast E_30 (mean k TELL 25.4 pts) ===
+  TELL    points 1379 on 376 dates | fill rate 99% ambiguous 0.0% of fills | mean per point $-2.71 | per fill $-2.72
+  CONTROL points 19653 | fill rate 99% ambiguous 0.0% | mean per point $-5.28
+  TELL absolute per point $-2.71 day-blocked CI [-8.08, +3.02]
+  TELL minus CONTROL (entry-time-mix weighted) $+3.42 CI [-1.85, +8.73] one-sided bootstrap p 0.0980 halves +1.53 / +6.56
+  READING: not shown
+  uncounted: TELL mean per point by causal forecast third (first 100 tell points seed the cutoffs): H N=443 $-7.74, M N=437 $+5.21, L N=399 $-6.79
+
+=== S-STOP, k = 0.5 x forecast E_30 (mean k TELL 50.7 pts) ===
+  TELL    points 1379 on 376 dates | fill rate 83% ambiguous 0.0% of fills | mean per point $-5.38 | per fill $-6.46
+  CONTROL points 19653 | fill rate 79% ambiguous 0.0% | mean per point $-4.08
+  TELL absolute per point $-5.38 day-blocked CI [-12.10, +1.01]
+  TELL minus CONTROL (entry-time-mix weighted) $-0.44 CI [-6.30, +4.91] one-sided bootstrap p 0.5581 halves +0.90 / -0.62
+  READING: not shown
+  uncounted: TELL mean per point by causal forecast third (first 100 tell points seed the cutoffs): H N=443 $-10.41, M N=437 $-1.15, L N=399 $-6.15
+
+=== S-LIMIT, k = 0.25 x forecast E_30 (mean k TELL 25.4 pts) ===
+  TELL    points 1379 on 376 dates | fill rate 99% ambiguous 0.0% of fills | mean per point $-5.61 | per fill $-5.64
+  CONTROL points 19653 | fill rate 99% ambiguous 0.0% | mean per point $-2.43
+  TELL absolute per point $-5.61 day-blocked CI [-8.39, -2.90]
+  TELL minus CONTROL (entry-time-mix weighted) $-3.20 CI [-6.01, -0.53] one-sided bootstrap p 0.9917 halves -1.22 / -5.17
+  READING: not shown
+  uncounted: ambiguous bars scored as the first-filled side reaching its target (best case) -> TELL absolute $-5.61 per point (worst-case rule above is the registered one)
+  uncounted: TELL mean per point by causal forecast third (first 100 tell points seed the cutoffs): H N=443 $-5.64, M N=437 $-4.58, L N=399 $-6.59
+
+=== S-LIMIT, k = 0.5 x forecast E_30 (mean k TELL 50.7 pts) ===
+  TELL    points 1379 on 376 dates | fill rate 83% ambiguous 0.0% of fills | mean per point $+0.46 | per fill $+0.56
+  CONTROL points 19653 | fill rate 79% ambiguous 0.0% | mean per point $-1.66
+  TELL absolute per point $+0.46 day-blocked CI [-4.24, +5.38]
+  TELL minus CONTROL (entry-time-mix weighted) $+1.79 CI [-2.27, +6.04] one-sided bootstrap p 0.2123 halves -2.83 / +5.80
+  READING: not shown
+  uncounted: ambiguous bars scored as the first-filled side reaching its target (best case) -> TELL absolute $+0.46 per point (worst-case rule above is the registered one)
+  uncounted: TELL mean per point by causal forecast third (first 100 tell points seed the cutoffs): H N=443 $+2.98, M N=437 $-5.71, L N=399 $+5.23
+
+BH q=0.10 over the four cells (one-sided p of TELL minus CONTROL): {'S-STOP c=0.25': 'does not reject', 'S-LIMIT c=0.5': 'does not reject', 'S-STOP c=0.5': 'does not reject', 'S-LIMIT c=0.25': 'does not reject'}
+summary (all conditions met): {'S-STOP c=0.25': False, 'S-STOP c=0.5': False, 'S-LIMIT c=0.25': False, 'S-LIMIT c=0.5': False}
