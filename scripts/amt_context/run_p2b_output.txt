@@ -1,0 +1,5 @@
+decision points 30819 on 516 dates
+
+=== E_30 [PRIMARY, counted]: 23624 out-of-sample rows on 396 dates; chosen alphas (full model per block): [1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 100.0, 1000.0, 1000.0, 100.0, 1000.0, 1000.0, 100.0, 100.0, 100.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0]
+  out-of-sample Spearman: base +0.2628, full2 +0.6490, notell2 +0.6467
+  H3b2 full2-notell2 diff +0.0023 CI [-0.0024, +0.0072] permutation p 0.1149 halves +0.0034 / +0.0022  -> not passed
