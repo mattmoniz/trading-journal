@@ -3,12 +3,12 @@ import sys, glob, os
 import numpy as np
 DIR = '/home/mmoniz/trading-journal/scratch/depth_stageb_20261102'; NS = 23400; END_OK = 23100; SEED, BOOT = 20261102, 3000; HZ = (60, 300, 900); R = 20; ECON = 1.4
 
-def session(date):
+def session(date, w=30):
     z = np.load(f'{DIR}/{date}.npz'); bb, ba = z['bb'].astype(int), z['ba'].astype(int)
     if (bb < 0).mean() > 0.02 or (ba < 0).mean() > 0.02: return None
     ok = (bb >= 0) & (ba >= 0); add, pull = z['add'].astype(float), z['pull'].astype(float); n = len(bb); off = np.where(ok, ba - bb, 1); cols_b = np.arange(R - 4, R + 1); N = np.zeros(n); Dn = np.zeros(n)
     ab = add[:, cols_b].sum(1); pb = pull[:, cols_b].sum(1); idx = np.clip(R + off[:, None] + np.arange(5)[None, :], 0, 2 * R); aa = np.take_along_axis(add, idx, 1).sum(1); pa = np.take_along_axis(pull, idx, 1).sum(1)
-    N = (ab - pb) - (aa - pa); Dn = ab + pb + aa + pa; cN, cD = np.cumsum(np.r_[0.0, N]), np.cumsum(np.r_[0.0, Dn]); t = np.arange(n); i0 = np.maximum(0, t - 29); U = (cN[t + 1] - cN[i0]) / np.maximum(1.0, cD[t + 1] - cD[i0])
+    N = (ab - pb) - (aa - pa); Dn = ab + pb + aa + pa; cN, cD = np.cumsum(np.r_[0.0, N]), np.cumsum(np.r_[0.0, Dn]); t = np.arange(n); i0 = np.maximum(0, t - (w - 1)); U = (cN[t + 1] - cN[i0]) / np.maximum(1.0, cD[t + 1] - cD[i0])
     mid = np.where(ok, (bb + ba) / 8.0, np.nan); spread = np.where(ok, (ba - bb) / 4.0, np.nan); return dict(U=U, mid=mid, spread=spread, ok=ok)
 
 def main():
