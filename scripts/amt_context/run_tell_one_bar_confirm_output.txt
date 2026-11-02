@@ -1,0 +1,7 @@
+V1 trades 1760; CONFIRMED (next bar closes in the tell direction) 876 (50%); delayed trades 876; skipped (delayed entry not on the profit side of the stop) 0
+
+RESOLUTION: delayed-trade mean CI [-6.6, +10.5] dollars (half-width 8.6)
+means (per trade, $): ORIGINAL all +1.93; ORIGINAL confirmed (N 876) +11.58; ORIGINAL against (N 884) -7.63; DELAYED confirmed (N 876) +1.57; mean entry price shift of the delay +5.05 points
+  T1 original confirmed minus against: +19.22 CI [+7.42, +30.52] p 0.002 halves +8.83 / +27.93 BH survives
+  T2 delayed minus all original: -0.36 CI [-6.34, +5.78] p 0.913 halves -2.09 / +1.34 BH no
+UNCOUNTED: stop-out share original all 62%, delayed 58%; by year (delayed mean $): 2023 -8.9 (N 295), 2024 +6.7 (N 358), 2025 +7.2 (N 223)
