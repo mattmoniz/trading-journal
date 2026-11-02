@@ -1,0 +1,14 @@
+usable signal bars: TELL 1760, CONTROL 25701; broke the 10-bar range within 15 min (either variant): TELL 99.3%, CONTROL 99.0%; ambiguous bars (both sides): TELL 0, CONTROL 3
+events: S tell 1747 control 25440; C tell 1729 control 24971
+
+RESOLUTION (TELL absolute-mean CI half-width, points): S15m 2.1, S30m 3.2, S60m 4.0, C15m 2.1, C30m 3.2, C60m 4.0
+
+COUNTED: y = points moved in the break direction after entry (gross of the 1.25-point cost; slip included)
+  variant S H 15m: TELL mean -0.16 [-2.25, +1.93] (N 1747, 488 dates), CONTROL -0.63, TELL minus CONTROL +0.47 CI [-1.69, +2.63] p 0.676 halves -0.26 / +1.13 BH no
+  variant S H 30m: TELL mean -1.01 [-4.19, +2.19] (N 1747, 488 dates), CONTROL -0.40, TELL minus CONTROL -0.61 CI [-3.78, +2.70] p 0.726 halves -1.03 / -0.22 BH no
+  variant S H 60m: TELL mean -1.62 [-5.64, +2.37] (N 1746, 487 dates), CONTROL +0.73, TELL minus CONTROL -2.35 CI [-6.44, +1.67] p 0.251 halves -2.06 / -2.60 BH no
+  variant C H 15m: TELL mean -0.18 [-2.27, +1.94] (N 1729, 487 dates), CONTROL -0.57, TELL minus CONTROL +0.38 CI [-1.73, +2.53] p 0.712 halves -0.62 / +1.26 BH no
+  variant C H 30m: TELL mean -1.44 [-4.52, +1.81] (N 1729, 487 dates), CONTROL -0.41, TELL minus CONTROL -1.03 CI [-4.23, +2.33] p 0.566 halves -1.97 / -0.17 BH no
+  variant C H 60m: TELL mean -1.31 [-5.25, +2.68] (N 1728, 486 dates), CONTROL +0.96, TELL minus CONTROL -2.27 CI [-6.37, +1.94] p 0.300 halves -2.90 / -1.80 BH no
+UNCOUNTED variant S: breaks UP 50%; break AGREES with the tell direction N 1292 mean y30 +0.53; OPPOSES N 455 mean y30 -5.40; by year 2023 -0.34 (N 558), 2024 -0.92 (N 748), 2025 -2.02 (N 441)
+UNCOUNTED variant C: breaks UP 52%; break AGREES with the tell direction N 1218 mean y30 +0.29; OPPOSES N 511 mean y30 -5.56; by year 2023 -0.81 (N 554), 2024 -0.89 (N 740), 2025 -3.16 (N 435)
