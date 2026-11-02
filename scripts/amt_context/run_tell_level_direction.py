@@ -35,10 +35,10 @@ def main():
                 if i < 20 or i + 4 >= ctx['n']: continue
                 ch = choose(ctx, vw, i, pl)
                 if ch is None: continue
-                dr, lvl, dist = ch; r = dict(date=d, arm=arm, dr=dr, level=lvl, agree=(None if arm == 'CONTROL' else dr == tdir))
+                dr, lvl, dist = ch; r = dict(date=d, arm=arm, dr=dr, level=lvl, agree=(None if arm == 'CONTROL' else dr == tdir), hour=int(((S['start'][i] + 18 * 3600) // 3600) % 24), minute_open=float((S['start'][i] - V.RTH_OPEN) / 60.0))
                 for H in HZ: r[f'y{H}'] = outcomes(S, i + 1, dr, H)
                 rows.append(r)
-    R = pd.DataFrame(rows); cT = int((R.arm == 'TELL').sum()); cC = int((R.arm == 'CONTROL').sum()); print(f'signal bars TELL {npts["TELL"]}, CONTROL {npts["CONTROL"]}; near a level (event): TELL {cT} ({100 * cT / npts["TELL"]:.0f}%), CONTROL {cC} ({100 * cC / npts["CONTROL"]:.0f}%)')
+    R = pd.DataFrame(rows); R.to_csv('/home/mmoniz/trading-journal/scratch/tell_level_direction_rows_20261102.csv', index=False); cT = int((R.arm == 'TELL').sum()); cC = int((R.arm == 'CONTROL').sum()); print(f'signal bars TELL {npts["TELL"]}, CONTROL {npts["CONTROL"]}; near a level (event): TELL {cT} ({100 * cT / npts["TELL"]:.0f}%), CONTROL {cC} ({100 * cC / npts["CONTROL"]:.0f}%)')
     res = {}
     for H in HZ:
         g = lambda a: R[R.arm == a].dropna(subset=[f'y{H}']).groupby('date')[f'y{H}'].agg(['sum', 'count']); gT, gC = g('TELL'), g('CONTROL'); ud = np.array(sorted(set(gT.index) | set(gC.index)))
