@@ -1,0 +1,15 @@
+funnel (row counts): {'rows': 1787, 'null_pnl': 0, 'no_ctx': 178, 'in_first_train': 0, 'no_state': 2} -> usable 1607 rows on 106 dates, 119 setup types
+first 100 rows only seed the cutoff and are not evaluated; evaluated 1507 rows on 98 dates; overall mean simulated P&L per row $-4.99
+
+SKIPPED (forecast top third): N=526 on 63 dates, mean $-5.31/row, day-blocked 95% CI [-20.47, +9.68]; KEPT: N=981, mean $-4.82
+  effect of skipping them: total $+2794 over 98 days = $+28.51/day; half-size (reported, uncounted) $+1397
+  first half: skipped N=204 mean $-8.13, kept N=350 mean $+1.81
+  second half: skipped N=322 mean $-3.53, kept N=631 mean $-8.50
+  matched random-skip placebo (same count per half, 1000 draws): mean $-4.74, p(placebo <= observed) = 0.4386
+
+H4 pass rule (skipped CI upper bound < 0, placebo p < 0.05, skipped mean below kept mean in BOTH halves): NOT PASSED
+
+descriptive (uncounted): simulated P&L by forecast third at the row, expanding cutoffs
+  low  N= 441 mean $-8.06 CI [-24.21, +8.78]
+  mid  N= 540 mean $-2.17 CI [-15.98, +11.30]
+  high N= 526 mean $-5.31 CI [-19.90, +10.21]
