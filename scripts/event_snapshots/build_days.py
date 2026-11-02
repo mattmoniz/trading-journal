@@ -16,8 +16,12 @@ def day_record(d, s, ctx, prior_ok):
     prof = T.Prof(ctx); end, comp = S['end'], S['comp']; grid = []
     for i in range(n - 1):
         if i % 10 or not (V.DEC_FIRST <= end[i] <= V.DEC_LAST) or not comp[i]: continue
-        tell = any(T.ncomp_at(ctx, prof, i, dd, need_nodes=False)[1] for dd in (1, -1)); grid.append((i, bool(tell), bool(ctx['moving1'][i] or ctx['moving-1'][i])))
-    tells = [dict(sig=int(t['sig']), ei=int(t['ei']), xj=int(t['xj']), dir=int(t['dir']), entry=float(t['entry']), stop=float(t['stop'])) for t in T.simulate(ctx, 'V1', dict(fires=0, skip=0, trades=0, fallback=0))]
+        r = {dd: T.ncomp_at(ctx, prof, i, dd, need_nodes=True) for dd in (1, -1)}; c4 = {dd: int(ctx['fast'][i]) + int(ctx['flip'][i]) + int(ctx['osc'][i]) + int(ctx[f'strides{dd}'][i]) for dd in (1, -1)}
+        grid.append((i, bool(r[1][1] or r[-1][1]), bool(ctx['moving1'][i] or ctx['moving-1'][i]), c4[1], int(r[1][0]) - c4[1], c4[-1], int(r[-1][0]) - c4[-1]))   # (bar, tell, moving, c4 up, ladder up, c4 down, ladder down)
+    tells = []; prof2 = T.Prof(ctx)
+    for t in T.simulate(ctx, 'V1', dict(fires=0, skip=0, trades=0, fallback=0)):
+        sg = int(t['sig']); dd = int(t['dir']); n5, _ = T.ncomp_at(ctx, prof2, sg, dd, need_nodes=True); c4 = int(ctx['fast'][sg]) + int(ctx['flip'][sg]) + int(ctx['osc'][sg]) + int(ctx[f'strides{dd}'][sg])
+        tells.append(dict(sig=sg, ei=int(t['ei']), xj=int(t['xj']), dir=dd, entry=float(t['entry']), stop=float(t['stop']), c4=c4, ladder=int(n5) - c4))
     np.savez_compressed(f'{OUT}/day_{d}.npz', start=S['start'], end=S['end'], o=S['o'], h=S['h'], l=S['l'], c=S['c'], vol=S['vol'], bid=S['bid'], ask=S['ask'], comp=S['comp'], ntr=np.array([b['n'] for b, _ in bars]),
                         vap_i=np.array(vi), vap_px=np.array(px), vap_tot=np.array(tot), vap_bid=np.array(bv), vap_ask=np.array(av))
     json.dump(dict(date=d, n=int(n), atr=float(ctx['atr']), onh=float(ctx['onh']), onl=float(ctx['onl']), tells=tells, grid=grid, validated=True), open(f'{OUT}/day_{d}.json', 'w'))
