@@ -1,0 +1,28 @@
+sessions usable 72 of 73
+big moves 566 on 51 sessions (up 282, down 284); a big move = 5-minute move >= the prior-20-session 95th percentile
+resolution: 566 events -> AUC half-width about 0.04
+
+COUNTED (i): AUC of each signed pre-move feature for UP vs DOWN among big moves (0.5 = no information)
+  imb1         AUC 0.552 CI [0.498, 0.603] placebo p 0.021 halves 0.511 / 0.574 BH survives
+  imb5         AUC 0.571 CI [0.527, 0.618] placebo p 0.003 halves 0.590 / 0.564 BH survives  <== CANDIDATE
+  imb10        AUC 0.577 CI [0.540, 0.612] placebo p 0.001 halves 0.589 / 0.572 BH survives  <== CANDIDATE
+  d_imb10_60   AUC 0.521 CI [0.476, 0.567] placebo p 0.413 halves 0.556 / 0.503 BH no
+  pull_diff60  AUC 0.788 CI [0.750, 0.826] placebo p 0.001 halves 0.806 / 0.779 BH survives  <== CANDIDATE
+  trade_imb60  AUC 0.287 CI [0.239, 0.338] placebo p 0.001 halves 0.325 / 0.272 BH survives  <== CANDIDATE
+  absorb_diff  AUC 0.330 CI [0.297, 0.366] placebo p 0.001 halves 0.349 / 0.320 BH survives  <== CANDIDATE
+  mom60        AUC 0.230 CI [0.187, 0.272] placebo p 0.001 halves 0.221 / 0.235 BH survives  <== CANDIDATE
+
+UNCOUNTED (ii): these features are known before the move; difference between big moves and matched quiet moments is a VOLATILITY signal (unsigned features, standardized mean difference):
+  depth10      big-move mean +4.392 vs quiet +4.590 (standardized difference -0.75, events 566, quiet samples 2264)
+  spread       big-move mean +0.662 vs quiet +0.579 (standardized difference +0.51, events 566, quiet samples 2264)
+  intensity60  big-move mean +1652.883 vs quiet +832.966 (standardized difference +1.11, events 566, quiet samples 2264)
+
+STORY (uncounted): mean of key signed features at offsets around the move start t (UP vs DOWN events)
+  imb5         UP   -300s:-0.002 -120s:-0.005  -60s:+0.005  -30s:+0.002   +0s:+0.023  +30s:-0.015 +120s:+0.008 +300s:+0.013
+  imb5         DOWN -300s:+0.011 -120s:-0.011  -60s:-0.016  -30s:-0.006   +0s:-0.022  +30s:+0.011 +120s:-0.003 +300s:-0.000
+  pull_diff60  UP   -300s:-0.008 -120s:-0.032  -60s:+0.023  -30s:+0.053   +0s:+0.178  +30s:-0.042 +120s:-0.073 +300s:-0.284
+  pull_diff60  DOWN -300s:-0.004 -120s:+0.018  -60s:-0.012  -30s:-0.014   +0s:-0.206  +30s:+0.050 +120s:+0.022 +300s:+0.301
+  trade_imb60  UP   -300s:-0.004 -120s:-0.005  -60s:+0.009  -30s:-0.008   +0s:-0.042  +30s:-0.020 +120s:+0.048 +300s:+0.089
+  trade_imb60  DOWN -300s:-0.004 -120s:+0.003  -60s:+0.002  -30s:+0.017   +0s:+0.044  +30s:+0.020 +120s:-0.049 +300s:-0.090
+  absorb_diff  UP   -300s:+0.001 -120s:+0.023  -60s:-0.029  -30s:-0.019   +0s:-0.147  +30s:+0.028 +120s:+0.046 +300s:+0.211
+  absorb_diff  DOWN -300s:-0.002 -120s:-0.015  -60s:+0.004  -30s:+0.002   +0s:+0.144  +30s:-0.075 +120s:+0.024 +300s:-0.208

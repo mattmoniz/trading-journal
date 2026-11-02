@@ -98,11 +98,11 @@ def main():
     for k, d in enumerate(dates):
         D = load(d)
         if D is None: print(d, 'dropped (book missing > 2% of seconds)'); continue
-        S_[d] = stats_day(D); D_[d] = D
+        S_[d] = stats_day(D); del D      # one ~460 MB session in memory at a time (the first version held all 73 and exhausted WSL memory)
     ds = sorted(S_); print(f'sessions usable {len(ds)} of {len(dates)} extracted')
     for k, d in enumerate(ds):
         if k < 20: continue
-        th = thresholds([S_[x] for x in ds[k - 20:k]]); det = detect(D_[d], S_[d], th); nsess += 1; mid = D_[d]['mid']
+        D = load(d); th = thresholds([S_[x] for x in ds[k - 20:k]]); det = detect(D, S_[d], th); nsess += 1; mid = D['mid']
         for dt in DETS:
             if not det[dt]: continue
             td = np.array([m[0] for m in det[dt]]); sg = np.array([m[1] for m in det[dt]]); grp = np.array([m[2] for m in det[dt]]); ev = np.array([m[3] for m in det[dt]])

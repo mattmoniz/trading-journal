@@ -1,0 +1,22 @@
+2026-10-13 dropped (book missing > 2% of seconds)
+sessions usable 72 of 73 extracted
+sessions evaluated 52
+
+detector | horizon | events | sessions | event mean pts | excess over control (CI) | placebo p | halves | BH | tradable
+B1_WALL     |  60s |  5749 |  52 |  +0.03 |  -0.00 [ -0.14,  +0.14] | 0.999 | +0.02 / -0.03 | no | no
+B1_WALL     | 300s |  5749 |  52 |  +0.05 |  +0.01 [ -0.24,  +0.26] | 0.945 | +0.24 / -0.25 | no | no
+B1_WALL     | 900s |  5749 |  52 |  +0.15 |  +0.03 [ -0.40,  +0.45] | 0.919 | +0.32 / -0.29 | no | no
+B2_ABSORB   |  60s |   104 |  40 |  -1.49 |  -1.49 [ -4.00,  +0.48] | 0.136 | +0.72 / -4.39 | no | no
+B2_ABSORB   | 300s |   104 |  40 |  -2.16 |  -2.25 [ -7.12,  +1.84] | 0.328 | -0.21 / -4.92 | no | no
+B2_ABSORB   | 900s |   104 |  40 |  -6.22 |  -6.16 [-10.91,  -1.78] | 0.101 | -6.07 / -6.28 | no | no
+B3_ICEBERG  |  60s |  1882 |  51 |  +0.18 |  +0.17 [ -0.54,  +0.88] | 0.492 | +1.04 / -0.48 | no | no
+B3_ICEBERG  | 300s |  1882 |  51 |  +0.66 |  +0.55 [ -1.07,  +2.10] | 0.317 | +1.71 / -0.32 | no | no
+B3_ICEBERG  | 900s |  1882 |  51 |  +1.06 |  +1.08 [ -1.95,  +3.84] | 0.231 | +1.15 / +1.03 | no | no
+B4_PULL     |  60s | 14088 |  51 |  +0.01 |  +0.01 [ -0.06,  +0.09] | 0.907 | -0.04 / +0.06 | no | no
+B4_PULL     | 300s | 14088 |  51 |  -0.24 |  -0.24 [ -0.40,  -0.09] | 0.215 | -0.23 / -0.25 | no | no
+B4_PULL     | 900s | 14088 |  51 |  -0.28 |  -0.27 [ -0.46,  -0.08] | 0.425 | -0.25 / -0.29 | no | no
+B5_SWEEP    |  60s |    59 |  32 | UNDERPOWERED
+B5_SWEEP    | 300s |    59 |  32 | UNDERPOWERED
+B5_SWEEP    | 900s |    59 |  32 | UNDERPOWERED
+
+CANDIDATES: []

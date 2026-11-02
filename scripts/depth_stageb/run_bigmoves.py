@@ -29,7 +29,7 @@ def main():
     for d in dates:
         D = RS.load(d)
         if D is None: continue
-        D_[d] = D; S_[d] = RS.stats_day(D); F_[d] = day_features(D, S_[d])
+        S_[d] = RS.stats_day(D); F_[d] = day_features(D, S_[d]); D_[d] = dict(mid=D['mid'], ok=D['ok']); del D   # keep only small arrays, one full session at a time
     ds = sorted(D_); print(f'sessions usable {len(ds)} of {len(dates)}')
     mv = {d: np.r_[D_[d]['mid'][300:] - D_[d]['mid'][:-300], np.full(300, np.nan)] for d in ds}; ev_rows = []; ctl_rows = []
     for k, d in enumerate(ds):
