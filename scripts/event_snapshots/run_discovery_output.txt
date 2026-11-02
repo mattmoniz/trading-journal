@@ -1,0 +1,88 @@
+/home/mmoniz/trading-journal/venv/lib/python3.12/site-packages/numpy/lib/_function_base_impl.py:3023: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/home/mmoniz/trading-journal/venv/lib/python3.12/site-packages/numpy/lib/_function_base_impl.py:3024: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[None, :]
+/home/mmoniz/trading-journal/venv/lib/python3.12/site-packages/numpy/lib/_function_base_impl.py:3023: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/home/mmoniz/trading-journal/venv/lib/python3.12/site-packages/numpy/lib/_function_base_impl.py:3024: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[None, :]
+/home/mmoniz/trading-journal/venv/lib/python3.12/site-packages/numpy/lib/_nanfunctions_impl.py:1396: RuntimeWarning: All-NaN slice encountered
+  return _nanquantile_unchecked(
+/home/mmoniz/trading-journal/venv/lib/python3.12/site-packages/numpy/lib/_function_base_impl.py:3023: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/home/mmoniz/trading-journal/venv/lib/python3.12/site-packages/numpy/lib/_function_base_impl.py:3024: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[None, :]
+/home/mmoniz/trading-journal/venv/lib/python3.12/site-packages/numpy/lib/_nanfunctions_impl.py:1396: RuntimeWarning: All-NaN slice encountered
+  return _nanquantile_unchecked(
+/home/mmoniz/trading-journal/venv/lib/python3.12/site-packages/numpy/lib/_function_base_impl.py:3023: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/home/mmoniz/trading-journal/venv/lib/python3.12/site-packages/numpy/lib/_function_base_impl.py:3024: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[None, :]
+/home/mmoniz/trading-journal/venv/lib/python3.12/site-packages/numpy/lib/_function_base_impl.py:3023: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/home/mmoniz/trading-journal/venv/lib/python3.12/site-packages/numpy/lib/_function_base_impl.py:3024: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[None, :]
+/home/mmoniz/trading-journal/venv/lib/python3.12/site-packages/numpy/lib/_nanfunctions_impl.py:1396: RuntimeWarning: All-NaN slice encountered
+  return _nanquantile_unchecked(
+/home/mmoniz/trading-journal/venv/lib/python3.12/site-packages/numpy/lib/_function_base_impl.py:3023: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/home/mmoniz/trading-journal/venv/lib/python3.12/site-packages/numpy/lib/_function_base_impl.py:3024: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[None, :]
+/home/mmoniz/trading-journal/venv/lib/python3.12/site-packages/numpy/lib/_nanfunctions_impl.py:1396: RuntimeWarning: All-NaN slice encountered
+  return _nanquantile_unchecked(
+/home/mmoniz/trading-journal/venv/lib/python3.12/site-packages/numpy/lib/_function_base_impl.py:3023: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/home/mmoniz/trading-journal/venv/lib/python3.12/site-packages/numpy/lib/_function_base_impl.py:3024: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[None, :]
+/home/mmoniz/trading-journal/venv/lib/python3.12/site-packages/numpy/lib/_function_base_impl.py:3023: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/home/mmoniz/trading-journal/venv/lib/python3.12/site-packages/numpy/lib/_function_base_impl.py:3024: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[None, :]
+/home/mmoniz/trading-journal/venv/lib/python3.12/site-packages/numpy/lib/_nanfunctions_impl.py:1396: RuntimeWarning: All-NaN slice encountered
+  return _nanquantile_unchecked(
+/home/mmoniz/trading-journal/venv/lib/python3.12/site-packages/numpy/lib/_function_base_impl.py:3023: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[:, None]
+/home/mmoniz/trading-journal/venv/lib/python3.12/site-packages/numpy/lib/_function_base_impl.py:3024: RuntimeWarning: invalid value encountered in divide
+  c /= stddev[None, :]
+/home/mmoniz/trading-journal/venv/lib/python3.12/site-packages/numpy/lib/_nanfunctions_impl.py:1396: RuntimeWarning: All-NaN slice encountered
+  return _nanquantile_unchecked(
+depth-era days 111 (2026-05-29..2026-10-30); V1 tell events 545; dropped p=0 0, incomplete window 0; evaluated TELL 545 on 108 dates (tell direction differs from the pre-event direction in 92); CONTROL 2180 on 111 dates
+unconditional: mean y30 TELL -0.0023 (continuation share 48.6%), CONTROL +0.0018 (50.5%)
+
+RESOLUTION (half-width of the day-blocked 95% CI of the Spearman correlation): TELL nan, CONTROL 0.052
+
+COUNTED: Spearman(feature, y30) on depth-era TELL events (y > 0 = the pre-event move continued); BH q=0.10 over 15 features
+feature | r | CI | placebo p | halves | BH | CONTROL r (CI) | tell minus control
+delta1      | -0.020 | [-0.102, +0.067] | 0.630 | +0.003 / -0.048 | no | +0.047 [+0.007, +0.087] | -0.068
+delta3      | +0.028 | [-0.051, +0.105] | 0.521 | +0.083 / -0.035 | no | +0.057 [+0.012, +0.099] | -0.029
+delta10     | +0.018 | [-0.073, +0.108] | 0.706 | -0.006 / +0.049 | no | -0.005 [-0.051, +0.041] | +0.023
+ddiv10      | -0.035 | [-0.124, +0.059] | 0.404 | -0.017 / -0.062 | no | +0.014 [-0.022, +0.052] | -0.049
+ddiv20      | +0.032 | [-0.048, +0.112] | 0.447 | +0.058 / +0.008 | no | -0.005 [-0.040, +0.030] | +0.037
+abs3        | +0.023 | [-0.054, +0.102] | 0.549 | +0.059 / -0.009 | no | +0.030 [-0.007, +0.069] | -0.007
+pace10      | -0.072 | [-0.153, +0.005] | 0.103 | -0.081 / -0.059 | no | -0.032 [-0.072, +0.008] | -0.040
+ntr3        | +0.008 | [-0.068, +0.080] | 0.878 | -0.034 / +0.048 | no | +0.000 [-0.046, +0.048] | +0.008
+lot3        | -0.008 | [-0.078, +0.068] | 0.885 | +0.034 / -0.048 | no | -0.000 [-0.047, +0.045] | -0.008
+edge10      | -0.086 | [-0.166, -0.010] | 0.069 | -0.088 / -0.063 | no | +0.004 [-0.040, +0.046] | -0.089
+loc         | -0.010 | [-0.098, +0.073] | 0.791 | -0.002 / -0.017 | no | -0.021 [-0.110, +0.069] | +0.012
+dist_ahead  | -0.028 | [-0.131, +0.076] | 0.490 | +0.012 / -0.073 | no | -0.036 [-0.115, +0.048] | +0.008
+dist_behind | +0.028 | [-0.079, +0.134] | 0.536 | -0.009 / +0.063 | no | +0.039 [-0.051, +0.126] | -0.011
+c4          | +nan | [+nan, +nan] | 0.001 | +nan / +nan | survives | +0.024 [-0.018, +0.064] | +nan
+ladder      | +nan | [+nan, +nan] | 0.001 | +nan / +nan | survives | -0.027 [-0.091, +0.035] | +nan
+
+CANDIDATES for the explore confirmation: []
+uncounted y15: delta1 -0.007, delta3 +0.046, delta10 +0.016, ddiv10 -0.015, ddiv20 +0.051, abs3 +0.030, pace10 -0.055, ntr3 +0.014, lot3 -0.014, edge10 -0.034, loc -0.016, dist_ahead -0.025, dist_behind +0.014, c4 +nan, ladder +nan
+uncounted y60: delta1 -0.017, delta3 +0.008, delta10 -0.014, ddiv10 -0.000, ddiv20 +0.029, abs3 +0.043, pace10 -0.082, ntr3 +0.015, lot3 -0.015, edge10 -0.066, loc -0.004, dist_ahead -0.064, dist_behind +0.038, c4 +nan, ladder +nan
+
+STORY PATHS (uncounted, descriptive): mean over tell events of the aligned delta share per bar and the aligned price path in ATR units, offsets in bars from the event bar; cont = y30 > 0
+  groups: continuation N 265, pivot N 280
+  k=-20  delta cont -0.039 pivot -0.018 | price cont -0.0792 pivot -0.0748
+  k=-10  delta cont +0.037 pivot +0.025 | price cont -0.0728 pivot -0.0661
+  k= -5  delta cont +0.033 pivot +0.043 | price cont -0.0369 pivot -0.0365
+  k= -3  delta cont +0.044 pivot +0.053 | price cont -0.0245 pivot -0.0223
+  k= -1  delta cont +0.010 pivot +0.011 | price cont -0.0151 pivot -0.0135
+  k= +0  delta cont +0.077 pivot +0.071 | price cont +0.0000 pivot +0.0000
+  k= +1  delta cont +0.018 pivot +0.011 | price cont +0.0006 pivot -0.0031
+  k= +3  delta cont +0.005 pivot -0.009 | price cont +0.0051 pivot -0.0062
+  k= +5  delta cont +0.002 pivot -0.014 | price cont +0.0064 pivot -0.0114
+  k=+10  delta cont +0.004 pivot -0.029 | price cont +0.0211 pivot -0.0261
+  k=+20  delta cont -0.001 pivot -0.020 | price cont +0.0458 pivot -0.0483
