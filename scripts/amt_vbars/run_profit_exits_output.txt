@@ -1,0 +1,10 @@
+Sessions usable 516; V1 fires 1760 (expected 1760); hold-out NOT touched; V1 actual mean $+1.93 (reference only)
+fires with a T1 structural target 1753, with a T2 node target 1471; median target distance T1 102.5 pts, T2 10.5 pts; median stop 26.2
+NONE      mean $  +2.68 abs CI [-3.48, +9.28] WR 26% exits target 0% stop 66% time 34% | paired vs NONE +0.00 CI [+0.00, +0.00] halves +0.00/+0.00 | placebo mean $-0.78 p95 $+2.48 -> not shown
+T1 edge   mean $  -1.21 abs CI [-6.15, +4.38] WR 34% exits target 24% stop 61% time 16% | paired vs NONE -3.89 CI [-8.29, +0.08] halves -0.83/-6.94 | placebo mean $-1.54 p95 $+3.49 -> not shown
+T2 node   mean $  -4.35 abs CI [-7.24, -1.56] WR 54% exits target 52% stop 39% time 9% | paired vs NONE -7.03 CI [-12.74, -1.43] halves -2.14/-11.91 | placebo mean $-3.56 p95 $-1.75 -> not shown
+T3 15min  mean $  -3.40 abs CI [-6.49, -0.13] WR 37% exits target 0% stop 42% time 58% | paired vs NONE -6.08 CI [-11.96, -0.56] halves -1.00/-11.16 | placebo mean $-3.10 p95 $-0.64 -> not shown
+T3 30min  mean $  +0.19 abs CI [-3.71, +4.32] WR 34% exits target 0% stop 51% time 49% | paired vs NONE -2.49 CI [-7.85, +2.23] halves -0.40/-4.58 | placebo mean $-1.92 p95 $+1.18 -> not shown
+T3 60min  mean $  +1.49 abs CI [-3.60, +7.08] WR 31% exits target 0% stop 59% time 41% | paired vs NONE -1.19 CI [-6.04, +2.91] halves +1.07/-3.44 | placebo mean $-1.10 p95 $+1.44 -> not shown
+
+summary {'NONE': False, 'T1 edge': False, 'T2 node': False, 'T3 15min': False, 'T3 30min': False, 'T3 60min': False}
