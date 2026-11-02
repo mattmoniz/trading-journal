@@ -1,0 +1,11 @@
+decision points 30819 on 516 dates
+
+23624 out-of-sample rows on 396 dates. Spearman: clock +0.2628 (run_p2b +0.2628), BASE2 +0.6467 (run_p2b notell2 +0.6467), PERSIST +0.6280
+raw model-free Spearman with realized E_30 (uncounted): rr15 +0.5883, rr30 +0.5923, rr60 +0.5875, A_now +0.4302, rth_range_so_far_atr +0.2740, overnight_range_atr +0.3493
+
+Amendment 7 BASE2 - PERSIST: +0.0187  day-blocked CI [+0.0115, +0.0259]  permutation p 0.0220  halves +0.0208 / +0.0152  -> PASS
+share of the (BASE2 - clock) gap already recovered by PERSIST: 0.951
+  quarter 2023-09-20..2024-02-08: clock +0.2785 PERSIST +0.5395 BASE2 +0.5554
+  quarter 2024-02-09..2024-07-01: clock +0.2561 PERSIST +0.5780 BASE2 +0.6040
+  quarter 2024-07-02..2024-12-23: clock +0.3422 PERSIST +0.6306 BASE2 +0.6412
+  quarter 2024-12-26..2025-05-16: clock +0.1695 PERSIST +0.7381 BASE2 +0.7565
