@@ -1,0 +1,11 @@
+V1 tell trades 1760; dropped {'first_train': 381, 'no_row': 0, 'window': 0}; evaluated 1379 trades on 376 dates
+
+out-of-sample on 1379 tell trades: Spearman(forecast, MFE30) +0.2810, (baseline, MFE30) +0.1466, (forecast, MAE30) +0.3255, (forecast, MFE30-MAE30) -0.0219
+  T1 favorable reach: forecast minus baseline vs MFE30: +0.1345 CI [+0.0783, +0.1888] permutation p 0.0010 halves +0.1347 / +0.1480 -> PASS
+  T2 side advantage: forecast vs MFE30-MAE30: -0.0219 CI [-0.0875, +0.0437] permutation p 0.8082 halves +0.0142 / -0.0471 -> NOT PASSED
+
+descriptive (uncounted), terciles of all evaluated trades: N, mean MFE30, mean MAE30, mean V1 trade net $
+  low  N= 460 MFE30 0.115 MAE30 0.108  net $+7.16
+  mid  N= 459 MFE30 0.154 MAE30 0.154  net $+8.44
+  high N= 460 MFE30 0.218 MAE30 0.222  net $-2.48
+BH q=0.10 over T1,T2: {'T1': 'rejects', 'T2': 'does not reject'}

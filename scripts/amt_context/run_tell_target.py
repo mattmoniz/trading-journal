@@ -12,7 +12,7 @@ sp = lambda a, b: float(np.corrcoef(rankdata(a), rankdata(b))[0, 1])
 def main():
     rng = np.random.default_rng(SEED + 7); _, ctxs, _ = TS.sessions_and_contexts(); dates = np.array(sorted(ctxs)); pos = {d: k for k, d in enumerate(dates)}
     df = P.build_points(ctxs, horizons=(30,)); df = df[df['full30']].reset_index(drop=True); recs = []; drop = dict(first_train=0, no_row=0, window=0); n_trades = 0
-    for d in dates:
+    for d in map(str, dates):
         ctx = ctxs[d]; S = ctx['S']; end, comp, h, l, o = S['end'], S['comp'], S['h'], S['l'], S['o']; dow = pd.Timestamp(d).dayofweek
         for t in T.simulate(ctx, 'V1', dict(fires=0, skip=0, trades=0, fallback=0)):
             n_trades += 1
