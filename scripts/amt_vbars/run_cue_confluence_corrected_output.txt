@@ -1,0 +1,17 @@
+Sessions usable 516; V1 fires 1760 (expected 1760); POST events 1760 (fires with no usable cue in 60 minutes: 0); hold-out NOT touched
+
+=== PRE (cues known at the fire): events 1760 on 488 dates; OOS events 1419 ===
+  FULL model OOS $-1.42/trade day-blocked CI [-9.71, +7.22] | BASELINE (geometry only) $+2.19 | TELL direction $+4.14 | random-side placebo $+0.12 (p95 $+6.08)
+  FULL minus BASELINE -3.62 CI [-9.85, +2.84] | FULL minus TELL -5.57 CI [-15.08, +3.39] | day-block permutation p = 0.653 (null mean $+0.06, p95 $+6.53)
+  FULL by OOS fold: -8.13, +4.03, -7.10, +3.25 | share predicted LONG 72% | agrees with the tell side 42%
+  descriptive IN-SAMPLE standardized coefficients (not evidence): ext_buy_10 -0.12, near +0.12, td_near -0.10, abs_bear_60 -0.10, drift +0.09, flip_up_30 -0.08, flip_down_10 +0.08, spk_bull_60 +0.08
+  READING: not shown
+
+=== POST (first cue after the fire, then enter): events 1760 on 488 dates; OOS events 1419 ===
+  FULL model OOS $+1.57/trade day-blocked CI [-5.81, +9.77] | BASELINE (geometry only) $+1.65 | TELL direction $+2.64 | random-side placebo $-2.13 (p95 $+2.60)
+  FULL minus BASELINE -0.08 CI [-5.43, +5.04] | FULL minus TELL -1.07 CI [-9.82, +8.03] | day-block permutation p = 0.139 (null mean $-1.95, p95 $+2.86)
+  FULL by OOS fold: -0.28, +5.98, -11.80, +10.07 | share predicted LONG 77% | agrees with the tell side 43%
+  descriptive IN-SAMPLE standardized coefficients (not evidence): prior_streak +0.10, near +0.08, drift +0.07, t_abs +0.06, t_ext +0.05, td_near -0.04, agree +0.04, t_df -0.04
+  READING: not shown
+
+summary {'PRE': False, 'POST': False}
