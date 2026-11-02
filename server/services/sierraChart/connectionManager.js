@@ -17,9 +17,11 @@ import { handleOrderUpdate, runReconciliation, extractPositionForSymbol, getBrok
 import { resolveMnqFrontMonthSymbolFromEnv } from './contractSymbol.js';
 import { query } from '../../db.js';
 import { getPriceMultiplier } from './priceMultiplier.js';
+import { runBootSelfTest, bootSelfTestAllowsRearm } from './bootSelfTest.js';
 
 let client = null;
 let lastReconciliationReport = null;
+let rearmSuppressedLogged = false; // log the self-test suppression once per boot, not on every reconcile
 let lastInvariantCheck = null;
 let reconnectTimer = null;
 let periodicReconcileTimer = null;
@@ -108,6 +110,9 @@ function buildClient() {
 export async function startConnectionManager() {
   killSwitch.forceHaltOnBoot('process restart (fail-closed default)');
   bootHaltDone = true;
+  // G0 boot self-test (2026-11-02): runs to completion BEFORE the first connect/reconcile, because that reconcile is what can
+  // auto-rearm. A failure or a throw leaves no passing result, and maybeAutoRearmAfterReconcile() fails closed on that.
+  await runBootSelfTest().catch((err) => console.error('[BOOT_SELFTEST_FAILED] self-test crashed:', err));
   await connectOnce();
 }
 
@@ -139,6 +144,10 @@ function maybeAutoRearmAfterReconcile() {
   if (process.env.DTC_AUTO_REARM_SAFE !== 'true') return;
   const state = killSwitch.getState();
   if (state.armed) return;
+  if (!bootSelfTestAllowsRearm()) {
+    if (!rearmSuppressedLogged) { rearmSuppressedLogged = true; console.error('[sierraChart.connectionManager] auto-rearm SUPPRESSED: this boot\'s self-test did not pass (see live_attestations check boot_selftest). Arm manually after investigating.'); }
+    return;
+  }
   if (!lastReconciliationReport || !lastReconciliationReport.clean) return;
   // The open-orders report being clean is not enough: a position-invariant mismatch halts in the SAME pass, and with no resting orders the
   // report is clean, so the halt was undone immediately (2026-10-19, DeepSeek review C1). `checked:false` (no position message at all,

@@ -2056,6 +2056,26 @@ async function main() {
       }
     }
 
+    // [27] G0 fail-closed wiring (2026-11-02): the entry feed gate and the boot self-test must stay connected to the order path.
+    console.log('\n[27] G0 safety wiring (entry feed gate, boot self-test, auto-rearm suppression)');
+    {
+      const rd = (f) => fs.readFileSync(path.resolve(f), 'utf8');
+      const sweepSrc = rd('server/services/sierraChart/orderSweep.js'), cmSrc = rd('server/services/sierraChart/connectionManager.js');
+      const gateWired = /entryFeedGate\(\)/.test(sweepSrc) && /feed && !feed\.ok && wantsMarketEntry\(row\)/.test(sweepSrc);
+      if (!gateWired) fail('[27] sweepEntries no longer calls entryFeedGate()/skips on a stale feed for market entries (server/services/sierraChart/orderSweep.js) -- a stale price feed could place market entries again');
+      else ok('[27] sweepEntries gates market entries on feed freshness');
+      const fnAt = cmSrc.indexOf('function maybeAutoRearmAfterReconcile');
+      const rearmWired = fnAt > 0 && cmSrc.indexOf('bootSelfTestAllowsRearm()', fnAt) > fnAt && cmSrc.indexOf('bootSelfTestAllowsRearm()', fnAt) < cmSrc.indexOf("killSwitch.arm('auto-rearm-on-simulation-boot')", fnAt);
+      const bootWired = cmSrc.indexOf('forceHaltOnBoot(') < cmSrc.indexOf('await runBootSelfTest(') && cmSrc.indexOf('await runBootSelfTest(') < cmSrc.indexOf('await connectOnce();');
+      if (!rearmWired || !bootWired) fail('[27] connectionManager.js no longer runs the boot self-test between forceHaltOnBoot and connectOnce, or maybeAutoRearmAfterReconcile no longer consults bootSelfTestAllowsRearm() before arming');
+      else ok('[27] boot self-test runs before the first connect and gates auto-rearm');
+      // The boot self-test row must exist for any day the server booted (a boot with no row means the self-test never finished).
+      const st = await client.query(`SELECT status FROM live_attestations WHERE check_name = 'boot_selftest' AND trade_date >= CURRENT_DATE - 7 ORDER BY trade_date DESC LIMIT 1`);
+      if (!st.rows.length) warn('[27] no boot_selftest row in live_attestations in the last 7 days (expected after the first restart that includes the G0 self-test)');
+      else if (st.rows[0].status !== 'OK') fail(`[27] latest boot_selftest status is ${st.rows[0].status}, sim auto-rearm is suppressed until a boot passes`);
+      else ok('[27] latest boot_selftest passed');
+    }
+
     // ── Summary ──────────────────────────────────────────────────────────────────
     console.log(`\n${'─'.repeat(50)}`);
     if (failures === 0 && warnings === 0) {

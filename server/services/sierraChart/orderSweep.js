@@ -24,6 +24,7 @@
 
 import { query } from '../../db.js';
 import { isOrderEligible } from './orderEligibility.js';
+import { entryFeedGate } from '../feedFreshness.js';
 import { evaluateDailyLossLimit } from './dllGate.js';
 import { sweepUnknownPnl } from './brokerPnlResolver.js';
 import { repairNullFillPrices } from './fillPriceRepair.js';
@@ -240,6 +241,11 @@ async function sweepEntries(dtcClient) {
     if (has.rows.length) continue;
     await recordEntrySkip(r, `signal older than the ${ENTRY_LOOKBACK_MINUTES}-minute entry window (row was written ${r.inserted_late_min} min after its signal time, e.g. a restart or a bar delay) -- not entered`);
   }
+  // G0 entry freshness gate (2026-11-02, DeepSeek-reviewed): a MARKET entry is sent on whatever the price feed last said, so
+  // refuse NEW market entries when the NQ feed is stale or its age is unknown. Read once per sweep, outside the per-row
+  // try/catch, and it cannot throw (fails closed inside). Resting LIMIT entries at frozen levels do not depend on feed
+  // freshness and are not gated; exits, stops and the escalate path (which already fails closed) are never touched here.
+  const feed = rows.rows.some((r) => wantsMarketEntry(r)) ? await entryFeedGate() : null;
   for (const row of rows.rows) {
     try {
       const direction = resolveDirection(row);
@@ -251,6 +257,7 @@ async function sweepEntries(dtcClient) {
       // Daily loss limit (item 7). Fails closed when DTC_DLL_LIMIT_USD is unset.
       const dll = await evaluateDailyLossLimit(tradeAccount);
       if (dll.blocked) { console.log(`[sierraChart.orderSweep] setup_id=${row.id} (${row.setup_type}): entry blocked by daily loss limit -- ${dll.reason}`); await recordEntrySkip(row, `daily loss limit: ${dll.reason}`); continue; }
+      if (feed && !feed.ok && wantsMarketEntry(row)) { console.log(`[sierraChart.orderSweep] setup_id=${row.id} (${row.setup_type}): ${feed.reason}`); await recordEntrySkip(row, feed.reason); continue; }
       // Multi-position-stacking build (2026-10-13, DeepSeek-reviewed, user cap override to 10
       // -- replaces the old strict singleton check, see reconciliation.js's checkEntryGates()
       // header for the full design). This app-level check is just a fast path with a readable

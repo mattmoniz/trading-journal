@@ -4256,6 +4256,11 @@ async function checkFlagsBanner() {
       color = color === '#f87171' ? color : '#facc15';
       lines.push('Could not verify price data freshness');
     }
+    // G0 boot self-test (2026-11-02): shown only when it FAILED (null = not finished yet, which is not alarming; a failure is).
+    if (d.bootSelfTest && d.bootSelfTest.passed === false) {
+      color = '#f87171';
+      lines.push('BOOT SELF-TEST FAILED — auto-rearm is suppressed, arm manually only after checking (' + (d.bootSelfTest.failures || []).join(', ') + ')');
+    }
     // LIVE_ROSTER gate (2026-10-21): fails CLOSED, so a missing/stale/empty roster means NOTHING is live. Always shown when not OK.
     if (d.liveRosterGate && d.liveRosterState && d.liveRosterState !== 'OK') {
       color = '#f87171';

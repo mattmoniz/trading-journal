@@ -24,6 +24,8 @@ import { getMlGateFailClosedStatus } from '../services/mlLiveVetoGate.js';
 import { getAmtTellStatus } from '../services/amtTellServiceManager.js';
 import { getAmtTellSummary } from '../services/amtTellSummary.js';
 import { getAmtTellOrdersStatus } from '../services/amtTellOrders.js';
+import { FEED_WARN_MINUTES } from '../services/feedFreshness.js';
+import { getBootSelfTestState } from '../services/sierraChart/bootSelfTest.js';
 
 const router = express.Router();
 
@@ -36,7 +38,7 @@ const router = express.Router();
 // without taking long to notice a genuine outage. This is an infra/operational health
 // threshold, not a trading signal threshold -- the standing "no static thresholds" hard rule
 // is about entries/stops/targets/signal triggers, not this.
-const PRICE_BARS_STALE_MINUTES = 10;
+const PRICE_BARS_STALE_MINUTES = FEED_WARN_MINUTES; // one shared definition with the order-path entry gate (services/feedFreshness.js, 2026-11-02)
 
 // GET /api/setups/live-flags -- exposes the temporary suppression-override flags so the
 // frontend can show an unmissable banner while they're on. Added 2026-09-26 (OPEN_DECISION
@@ -154,6 +156,8 @@ router.get('/setups/live-flags', async (req, res) => {
     // placed; it's fail-closed on every server restart, so it's surfaced here as a banner.
     sierraArmed: !!killSwitch.isArmed(),
     sierraHaltedReason: killSwitch.isArmed() ? null : (killSwitch.getState().haltedReason || null),
+    // G0 boot self-test (2026-11-02): { passed, ranAt, failures } or null if it has not finished. A failure suppresses sim auto-rearm.
+    bootSelfTest: (() => { const b = getBootSelfTestState(); return b ? { passed: b.passed, ranAt: b.ranAt, failures: b.failures } : null; })(),
     priceBarsStale,
     priceBarsLastBar,
     priceBarsStaleMinutes,
