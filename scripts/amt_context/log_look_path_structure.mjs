@@ -1,0 +1,3 @@
+import { logLook } from '../lib/look_ledger.mjs';
+const id = await logLook({ family: 'path_structure_20261102', dataWindow: 'explore<=2025-05-16', kind: 'EXPLORE', tests: 12, label: 'Path-structure (hit probability) test: M1-M8 market-structure on ALL grid points (fade / breakout vs cost break-even, 4 distances) and T1-T4 tell vs control in P(revert|resolved); splits, asymmetry grid, run length, ATR-scale sensitivity uncounted', script: 'scripts/amt_context/run_path_structure.py', prereg: 'scripts/amt_context/PREREG_PATH_STRUCTURE.md', ref: 'path_structure_20261102' });
+console.log('look logged id', id); process.exit(0);
