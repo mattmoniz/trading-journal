@@ -29,7 +29,9 @@ def nearest(S, i, levels, names, minutes_open):
     return (-1, ku) if du < dl else (1, kd)
 
 def main():
-    rng = np.random.default_rng(SEED + 173); sess, ctxs, _ = TS.sessions_and_contexts(); conn = persist.connect(); LV = load_levels(conn); rows = []; allnames = [n for v in FAM.values() for n in v]; cov = 0
+    rng = np.random.default_rng(SEED + 173); import os; CSV = '/home/mmoniz/trading-journal/scratch/tell_level_families_rows_20261102.csv'; rows = []; allnames = [n for v in FAM.values() for n in v]; cov = 0
+    if os.path.exists(CSV): ctxs = {}; print('using the saved event rows (computed by the same code, identical seed)')
+    else: sess, ctxs, _ = TS.sessions_and_contexts(); conn = persist.connect(); LV = load_levels(conn)
     for d in sorted(ctxs):
         if d not in LV: continue
         cov += 1; levels = LV[d]; ctx = ctxs[d]; S = ctx['S']; end, comp = S['end'], S['comp']; prof = T.Prof(ctx)
@@ -46,7 +48,9 @@ def main():
                     dr, lvl = ch; key = (dr,)
                     if dr not in ys: ys[dr] = {H: outcomes(S, i + 1, dr, H) for H in HZ}
                     rows.append(dict(base, fam=fam, dr=dr, level=lvl, agree=(None if arm == 'CONTROL' else dr == tdir), **{f'y{H}': ys[dr][H] for H in HZ}))
-    R = pd.DataFrame(rows); R.to_csv('/home/mmoniz/trading-journal/scratch/tell_level_families_rows_20261102.csv', index=False); print(f'dates with stored levels {cov}; events {len(R)}')
+    if os.path.exists(CSV): R = pd.read_csv(CSV)
+    else: R = pd.DataFrame(rows); R.to_csv(CSV, index=False)
+    print(f'dates with stored levels {cov}; events {len(R)}')
     def cell(df, H):
         g = lambda a: df[df.arm == a].dropna(subset=[f'y{H}']).groupby('date')[f'y{H}'].agg(['sum', 'count']); gT, gC = g('TELL'), g('CONTROL'); ud = np.array(sorted(set(gT.index) | set(gC.index)))
         if len(gT) == 0 or len(gC) == 0: return None
@@ -54,13 +58,13 @@ def main():
         for _ in range(BOOT): w = np.bincount(rng.integers(0, len(ud), len(ud)), minlength=len(ud)).astype(float); bd.append(m(w, AT) - m(w, AC)); bt.append(m(w, AT))
         h = len(ud) // 2; ha = (np.arange(len(ud)) < h) * 1.0; hb = 1 - ha; p = float(min(1.0, 2 * min((np.sum(np.array(bd) <= 0) + 1) / (BOOT + 1), (np.sum(np.array(bd) >= 0) + 1) / (BOOT + 1))))
         return dict(diff=m(w1, AT) - m(w1, AC), lo=np.percentile(bd, 2.5), hi=np.percentile(bd, 97.5), tm=m(w1, AT), tl=np.percentile(bt, 2.5), th=np.percentile(bt, 97.5), cm=m(w1, AC), p=p, h1=m(ha, AT) - m(ha, AC), h2=m(hb, AT) - m(hb, AC), n=int(AT[:, 1].sum()), days=int((AT[:, 1] > 0).sum()), nc=int(AC[:, 1].sum()))
-    fams = list(FAM); res = {f: cell(R[R.fam == f], 'y30') for f in fams}; live = [f for f in fams if res[f] is not None]; order = sorted(live, key=lambda f: res[f]['p']); keep = -1
+    fams = list(FAM); res = {f: cell(R[R.fam == f], 30) for f in fams}; live = [f for f in fams if res[f] is not None]; order = sorted(live, key=lambda f: res[f]['p']); keep = -1
     for rk, f in enumerate(order): keep = rk if res[f]['p'] <= (rk + 1) / len(live) * 0.10 else keep
     print('\nRESOLUTION: ' + ', '.join(f'{f} {(res[f]["th"] - res[f]["tl"]) / 2:.1f}' for f in live)); print('\nCOUNTED (11 families, y30 = points fading the nearest level of the family; TELL minus CONTROL):')
     for rk, f in enumerate(order):
         r = res[f]; sgn = np.sign(r['diff']); ok = rk <= keep and (r['lo'] > 0 or r['hi'] < 0) and ((r['tl'] > 1.5) if sgn > 0 else (-r['th'] > 1.5)) and r['n'] >= 200 and r['days'] >= 100 and np.sign(r['h1']) == np.sign(r['h2']) == sgn
         print(f'  {f:11s} TELL {r["tm"]:+6.2f} [{r["tl"]:+.1f}, {r["th"]:+.1f}] (N {r["n"]}, {r["days"]} dates) CONTROL {r["cm"]:+6.2f} (N {r["nc"]}) diff {r["diff"]:+6.2f} CI [{r["lo"]:+.2f}, {r["hi"]:+.2f}] p {r["p"]:.3f} halves {r["h1"]:+.1f}/{r["h2"]:+.1f} BH {"survives" if rk <= keep else "no"}{"  UNDERPOWERED" if r["n"] < 200 or r["days"] < 100 else ""}{"  <== CANDIDATE" if ok else ""}')
-    a = cell(R[R.fam == 'ALL'], 'y30'); print(f'\nUNCOUNTED all stored levels pooled (nearest of all): TELL {a["tm"]:+.2f} (N {a["n"]}) CONTROL {a["cm"]:+.2f} diff {a["diff"]:+.2f} CI [{a["lo"]:+.2f}, {a["hi"]:+.2f}]')
-    for H in (15, 60): print(f'UNCOUNTED y{H} by family (diff, N): ' + '; '.join(f'{f} {cell(R[R.fam == f], f"y{H}")["diff"]:+.1f} ({res[f]["n"]})' for f in live))
+    a = cell(R[R.fam == 'ALL'], 30); print(f'\nUNCOUNTED all stored levels pooled (nearest of all): TELL {a["tm"]:+.2f} (N {a["n"]}) CONTROL {a["cm"]:+.2f} diff {a["diff"]:+.2f} CI [{a["lo"]:+.2f}, {a["hi"]:+.2f}]')
+    for H in (15, 60): print(f'UNCOUNTED y{H} by family (diff, N): ' + '; '.join(f'{f} {cell(R[R.fam == f], H)["diff"]:+.1f} ({res[f]["n"]})' for f in live))
 
 if __name__ == '__main__': main()

@@ -1,0 +1,21 @@
+using the saved event rows (computed by the same code, identical seed)
+dates with stored levels 0; events 83028
+
+RESOLUTION: OR_HL 5.2, MIDS 7.1, IB_HL 11.6, OVN 7.9, PRIOR_DAY 5.0, VALUE_AREA 6.3, CAMARILLA 3.6, FLOOR 5.8, WM_PIVOTS 11.9, OPENS_VWAP 6.3, PERIOD_HLP 7.2
+
+COUNTED (11 families, y30 = points fading the nearest level of the family; TELL minus CONTROL):
+  PERIOD_HLP  TELL  +7.12 [-0.1, +14.3] (N 185, 122 dates) CONTROL  +0.17 (N 2761) diff  +6.95 CI [-0.12, +13.82] p 0.056 halves +9.1/+5.2 BH no  UNDERPOWERED
+  OVN         TELL  +5.69 [-2.0, +13.8] (N 139, 115 dates) CONTROL  -1.27 (N 2035) diff  +6.96 CI [-0.57, +14.91] p 0.067 halves +7.4/+7.0 BH no  UNDERPOWERED
+  VALUE_AREA  TELL  -4.94 [-11.2, +1.5] (N 407, 227 dates) CONTROL  -0.02 (N 5302) diff  -4.93 CI [-11.43, +1.52] p 0.137 halves -0.3/-8.5 BH no
+  PRIOR_DAY   TELL  +4.16 [-0.8, +9.2] (N 415, 244 dates) CONTROL  +0.33 (N 5712) diff  +3.83 CI [-1.20, +8.96] p 0.137 halves +2.0/+5.1 BH no
+  CAMARILLA   TELL  +2.66 [-1.1, +6.2] (N 767, 318 dates) CONTROL  +0.09 (N 10243) diff  +2.57 CI [-1.42, +6.39] p 0.211 halves +6.1/-0.1 BH no
+  OR_HL       TELL  -4.34 [-9.5, +0.8] (N 546, 305 dates) CONTROL  -1.10 (N 7035) diff  -3.24 CI [-8.51, +1.91] p 0.227 halves +2.1/-7.2 BH no
+  MIDS        TELL  -4.47 [-11.5, +2.8] (N 448, 260 dates) CONTROL  +0.00 (N 6505) diff  -4.47 CI [-11.52, +2.81] p 0.239 halves -10.4/+0.1 BH no
+  WM_PIVOTS   TELL  -6.34 [-18.5, +5.4] (N 210, 137 dates) CONTROL  +0.53 (N 3023) diff  -6.86 CI [-18.48, +4.22] p 0.250 halves -7.2/-7.0 BH no
+  FLOOR       TELL  -3.12 [-8.9, +2.6] (N 406, 250 dates) CONTROL  +0.11 (N 6066) diff  -3.24 CI [-9.18, +2.64] p 0.287 halves -6.9/-0.9 BH no
+  IB_HL       TELL  -0.56 [-11.9, +11.3] (N 144, 113 dates) CONTROL  -3.52 (N 2311) diff  +2.97 CI [-7.90, +14.19] p 0.583 halves -0.9/+7.0 BH no  UNDERPOWERED
+  OPENS_VWAP  TELL  -0.72 [-7.1, +5.6] (N 280, 181 dates) CONTROL  +0.41 (N 4036) diff  -1.13 CI [-7.67, +5.07] p 0.733 halves +0.8/-2.5 BH no
+
+UNCOUNTED all stored levels pooled (nearest of all): TELL -0.10 (N 1597) CONTROL -0.24 diff +0.14 CI [-3.61, +3.74]
+UNCOUNTED y15 by family (diff, N): OR_HL -0.9 (546); MIDS -2.9 (448); IB_HL +0.6 (144); OVN +3.5 (139); PRIOR_DAY +1.6 (415); VALUE_AREA -3.6 (407); CAMARILLA +1.2 (767); FLOOR -0.4 (406); WM_PIVOTS -2.5 (210); OPENS_VWAP -0.7 (280); PERIOD_HLP +2.6 (185)
+UNCOUNTED y60 by family (diff, N): OR_HL -7.6 (546); MIDS -7.2 (448); IB_HL +6.3 (144); OVN +1.7 (139); PRIOR_DAY +3.4 (415); VALUE_AREA -0.7 (407); CAMARILLA +3.0 (767); FLOOR -5.0 (406); WM_PIVOTS -18.9 (210); OPENS_VWAP -2.8 (280); PERIOD_HLP +8.2 (185)
