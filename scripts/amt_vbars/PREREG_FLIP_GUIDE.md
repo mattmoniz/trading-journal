@@ -1,0 +1,21 @@
+# Pre-registration: the DDY delta flip as a guide for the SIDE of a tell fire (written 2026-11-01 BEFORE any outcome)
+
+Origin: the trader's own idea (2026-10-31): use the delta flip "to help determine the stronger side for the trade ... only part of the decision making", alongside the tell that fires the trades. Definitions: `docs/DIRECTION_FEATURE_DICTIONARY_20261101.md` Cue A1. Explore only (1,760 research V1 tell fires, 516 sessions to 2025-05-16; the sealed AMT-tell hold-out is not extracted). Script `run_flip_guide.py`, one run. This is the first test of the DDY flip against outcomes. It is part of the direction family whose earlier looks are: `run_direction.py` R2 delta, R3 flip (our own earlier reading), R4 agree (3 tests) and the first-break count; this adds 3 tests, so the family count is 6 and the stated multiplicity bar below applies (a result must hold at the pre-registered bars, not at a lone p below 0.05).
+
+## The flip (APPROXIMATE, labelled so everywhere)
+Per-bar delta = ask-side minus bid-side volume on the 500-contract bars; smoothed delta = 10-bar weighted moving average (weights 1..10); state = its sign; DDY flip (approximate) at bar t = the state changes at t after the previous state lasted at least 10 bars; direction = the new sign (up = LONG, down = SHORT). On the trader's own export this reading reproduces 566 of 786 real flips (precision 0.71, recall 0.72), so about 30 percent disagreement with the real study is carried into any claim. History cannot use the true flips (the export covers 19 sessions in Oct-Nov 2026).
+A fire has a flip vote when a flip occurred in the last 10 bars up to and including the signal bar (10 = the tell's own FLOW_N and the study's streak threshold; no search).
+
+## Arms (outcomes use the same stripped geometry as `PREREG_DIRECTION.md`: market entry next open plus one tick, the tell's own structural stop distance for either side, 120-minute time exit, 15:55 flatten, $2 per point and $2 round trip; per-trade means; day-blocked bootstrap CIs, 2000 draws, seeded)
+- R0 tell direction (the live rule). R1 opposite of the tell. PLACEBO random direction per fire (200 draws; p95 of the mean is the bar).
+- F1 FLIP-GUIDED: trade the flip direction when a flip vote exists, else the tell direction. Paired against R0 on the same fires.
+- F2 AGREE FILTER: take the tell only when a flip vote exists and equals the tell direction; reported as the three groups AGREE / DISAGREE / NO-FLIP (tell-direction outcome per group, per-trade means, AGREE minus the rest with a day-blocked CI) and AGREE's absolute mean with its CI.
+- F3 DISAGREE-FOLLOW: on fires where the flip disagrees with the tell, the flip direction versus the tell direction (paired, same fires).
+- Secondary market-behaviour check (the DeepSeek anchor): on fires with a flip vote, the signed 60-minute move (ATR20 units) in the flip direction versus the tell direction, and the first-break side (same window as `PREREG_FIRST_BREAK_SIDE.md`), against the same quantities at no-flip fires.
+
+## Reading rule (stated before the run; absolute dollars, per the DeepSeek review)
+F1 "guides direction" only if ALL hold: paired mean difference F1 minus R0 > 0 with the day-blocked CI excluding zero; F1 absolute mean > 0 with CI lower bound > 0; F1 mean above the random-direction placebo p95; same sign of the paired difference in both chronological halves. F2 "is a useful filter" only if: AGREE absolute mean > 0 with CI lower bound > 0, AGREE minus (DISAGREE and NO-FLIP together) > 0 with CI excluding zero, same sign in both halves, and AGREE N >= 200. F3 is descriptive (small N). Family of 6 tests: a pass is a LEAD for one frozen sealed look, not a result; a pass on a relative measure with a negative absolute mean is NOT a rule (the 2026-11-01 hold-out lesson).
+Resolution (stated now): full-set intervals about +/-5.5 dollars per trade, a subset of about 650 fires (flip vote present) about +/-9, groups of 250-350 about +/-20; effects under about 8-10 dollars per trade cannot be seen in the subsets.
+
+## Not tested
+The true DDY flips (history unavailable), absorption as a side chooser, a flip + absorption combination, Globex, stops other than the stripped geometry, any change to the live Stage 2 rule (running unchanged).
