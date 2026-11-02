@@ -1,0 +1,12 @@
+sessions usable 72
+bursts 2592 on 52 sessions; reference seconds (60 s move >= median, every 15 s) 36808
+(i) burst continuation y: mean -0.10 points, reference -0.22, excess +0.12 CI [-1.16, +1.36] (positive = bursts continue; resolution half-width 1.26 points)
+
+(ii) Spearman(feature signed toward the burst direction, continuation y) among bursts; BH over 8 tests (the excess counts as the 8th)
+  imb1         r +0.017 CI [-0.022, +0.052] p 0.372 halves +0.033 / +0.008 BH no | top-decile y +0.43, bottom-decile y -0.35 points
+  imb5         r +0.026 CI [-0.014, +0.065] p 0.163 halves +0.039 / +0.021 BH no | top-decile y +2.28, bottom-decile y -2.18 points
+  imb10        r +0.007 CI [-0.037, +0.050] p 0.762 halves +0.006 / +0.007 BH no | top-decile y -0.09, bottom-decile y -4.80 points
+  d_imb10_60   r -0.000 CI [-0.037, +0.035] p 0.994 halves +0.016 / -0.008 BH no | top-decile y +0.34, bottom-decile y +2.66 points
+  pull_diff60  r -0.027 CI [-0.067, +0.011] p 0.182 halves -0.059 / -0.010 BH no | top-decile y -0.34, bottom-decile y +0.22 points
+  trade_imb60  r -0.036 CI [-0.069, -0.001] p 0.075 halves +0.012 / -0.059 BH no | top-decile y -2.41, bottom-decile y +0.26 points
+  absorb_diff  r -0.005 CI [-0.037, +0.027] p 0.783 halves +0.003 / -0.009 BH no | top-decile y -2.24, bottom-decile y +0.01 points
