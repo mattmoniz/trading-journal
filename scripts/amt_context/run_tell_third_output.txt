@@ -1,0 +1,11 @@
+evaluated 1279 trades on 344 dates (first 100 seed the cutoff); TOP N=444 REST N=835
+C1: net(TOP) $-4.50 vs net(REST) $+8.50; difference $-12.99, day-blocked CI [-29.96, +5.26], permutation p 0.0559, halves +7.38 / -28.46 -> NOT distinguishable from noise / not stable
+
+E1 quarters (dates, N top / N rest, difference $):
+  2023-11-03..2024-03-15  top  91 / rest 161  diff $+8.77
+  2024-03-18..2024-07-25  top 103 / rest 191  diff $+5.60
+  2024-07-26..2025-01-08  top 117 / rest 194  diff $-19.01
+  2025-01-10..2025-05-16  top 133 / rest 289  diff $-35.45
+
+E2: stop-out share TOP 73% vs REST 58%; MFE30 TOP 0.213 vs REST 0.134; MAE30 TOP 0.224 vs REST 0.128
+     leave-top-10-extreme-trades-out difference $-15.21 (full -12.99)

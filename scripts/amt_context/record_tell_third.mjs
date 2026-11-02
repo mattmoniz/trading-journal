@@ -1,0 +1,7 @@
+import { recordClaim } from '../record_claim.mjs';
+await recordClaim({
+  slug: 'tell_top_third_lead_era_dependent_20261102',
+  claimText: 'Robustness check (NOT confirmation) of the explore-derived lead that tell trades with a top-third busy forecast net less (PREREG_TELL_THIRD.md committed before the run; look id 44; explore only; SIMULATED V1 net dollars; causal expanding top-third cutoff, first 100 of 1,379 trades seed it; 1,279 evaluated on 344 dates; TOP N=444, REST N=835). C1: net(TOP) -$4.50 vs net(REST) +$8.50, difference -$12.99 (day-blocked CI -29.96..+5.26), permutation p 0.056, halves +7.38 / -28.46 (opposite signs) -> NOT distinguishable from noise and NOT stable. E1 by quarter: 2023-11..2024-03 +8.77, 2024-03..2024-07 +5.60, 2024-07..2025-01 -19.01, 2025-01..2025-05 -35.45: the busy third did BETTER in the first two quarters and worse only in the last two (era-dependent, cv-033). E2: stop-out share TOP 73% vs REST 58%; MFE30 0.213 vs 0.134; MAE30 0.224 vs 0.128; leave-top-10-extremes-out difference -15.21. Per the pre-registered reading rule the lead is weakened: F2 stays a low-prior forward test and no consumer or gate is justified by this evidence. NOT SHOWN: any stable relation between a busy forecast and worse tell results.',
+  sourceFile: 'scripts/amt_context/run_tell_third_output.txt', sourceDate: '2026-11-02', sampleSize: 1279, evPerTrade: -12.99, rigorStatus: 'explore_only_simulated_not_stable_era_dependent', status: 'PROVISIONAL',
+});
+process.exit(0);
