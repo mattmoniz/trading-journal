@@ -1,0 +1,10 @@
+Sessions usable 516; V1 fires 1760 (expected 1760); hold-out NOT touched
+WITH-DRIFT 671, COUNTER-DRIFT 1087, NO-DRIFT 2 (no-drift fires keep the tell side in WITHDRIFT)
+TELL $+2.68 CI [-3.69, +9.28] | random-side placebo $-0.77 p95 $+3.63
+OPP       $-3.89 CI [-9.28, +1.83] | minus TELL -6.57 CI [-16.12, +2.16] halves -0.78/-12.36 | placebo p95 $+3.63 -> not shown
+WITHDRIFT $+2.76 CI [-5.52, +11.18] | minus TELL +0.08 CI [-7.57, +8.03] halves -0.11/+0.27 | placebo p95 $+3.63 -> not shown
+descriptive cells (tell side / opposite side):
+  WITH-DRIFT fires     N= 671: tell side $+7.28 [-4.77, +20.80] | opposite $-9.95 [-19.03, -0.60]
+  COUNTER-DRIFT fires  N=1087: tell side $-0.16 [-7.52, +7.36] | opposite $-0.03 [-7.83, +7.96]
+
+summary {'OPP': False, 'WITHDRIFT': False}
