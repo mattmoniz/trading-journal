@@ -364,7 +364,8 @@
   <a href="/setup-performance">Setup Performance →</a>
   <a href="/loss-prevention">Loss Prevention →</a>
   <a onclick="openMonitor('mon-scoreboard')">Monitor: Roster Scoreboard</a>
-  <a onclick="openMonitor('mon-ml')">Monitor: ML Scorecard &amp; Ranking Test</a>
+  <a onclick="openMonitor('mon-ml')">Monitor: ML Scorecard</a>
+  <a onclick="openMonitor('mon-forward')">Monitor: Forward Tests</a>
   <a onclick="openMonitor('mon-gates')">Monitor: Research Gates</a>
 </div>
 
@@ -3408,7 +3409,7 @@ function monErr(x) { return x && x.state === 'ERROR' ? '<div style="color:#e0a03
 function renderMonitor(d, err) {
   const el = $('monitor-body'); if (!el) return;
   if (!d) { el.innerHTML = '<div style="color:#e0a030;font-size:13px">Monitor data could not be loaded (' + monEsc(err || 'unknown') + '). Will retry.</div>'; return; }
-  const sb = d.scoreboard || {}, un = d.mlUnseen || {}, rk = d.mlRanking || {}, gt = d.gates || {};
+  const sb = d.scoreboard || {}, un = d.mlUnseen || {}, fw = d.forwardTests || {}, gt = d.gates || {};
   let h = '';
   // roster scoreboard
   let b = monErr(sb);
@@ -3438,9 +3439,17 @@ function renderMonitor(d, err) {
       + (L.bySession ? monRow('By session', monEsc(JSON.stringify(L.bySession))) : '')
       + '<div style="font-size:11.5px;color:var(--dim);margin-top:4px">Weekly (Sunday night). The ML stays log-only unless it passes two weeks in a row.</div>';
   }
-  const rkb = monErr(rk) || (rk.state === 'DONE' ? monRow('Ranking test', 'done ' + monEsc(rk.date)) + '<div style="font-size:12.5px;margin-top:4px">' + monEsc(rk.text || 'see Research Ledger') + '</div>'
-    : monRow('Ranking test (pre-registered)', rk.state === 'DUE_NOT_RUN' ? '<b style="color:#e0a030">due, not run yet</b>' : 'pending — runs from ' + monEsc(rk.runsFrom)) + '<div style="font-size:11.5px;color:var(--dim);margin-top:4px">Runs once on its own after the window closes; the result appears here and in the Research Ledger.</div>');
-  h += monBox('mon-ml', 'ML Scorecard &amp; Ranking Test', b + '<div style="border-top:1px solid var(--border);margin:6px 0"></div>' + rkb);
+  h += monBox('mon-ml', 'ML Scorecard', b);
+  // forward tests (counts only; skill is read at the pre-set looks, never here)
+  b = monErr(fw);
+  if (!b) {
+    const F = fw.forecast || {}, R = fw.regime || {}, T = fw.tell || {};
+    b = monRow('Forecast (shadow)', '<b>' + monEsc(F.days) + ' / ' + monEsc(F.daysNeeded) + '</b> forward days for the next look (' + monEsc(F.points) + ' points)')
+      + monRow('Regime gauge outlooks', '<b>' + monEsc(R.realized) + ' / ' + monEsc(R.needed) + '</b> realized (' + monEsc(R.outlooks) + ' stored, last ' + monEsc(R.last || 'none') + ')')
+      + monRow('Tell, Sim1 orders', '<b>' + monEsc(T.trades) + ' / ' + monEsc(T.floor) + '</b> trades · ' + monEsc(T.days) + ' days · ' + monMoney(T.pnl) + ' total')
+      + '<div style="font-size:11.5px;color:var(--dim);margin-top:4px">Counts only. Each is judged once at its pre-set look; no rule changes before then.</div>';
+  }
+  h += monBox('mon-forward', 'Forward Tests', b);
   // gates
   b = monErr(gt);
   if (!b) {
