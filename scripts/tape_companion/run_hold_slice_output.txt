@@ -1,0 +1,27 @@
+scale 5 min; dates 504; evaluable events 14169; THROUGH 1141 ALREADY_HELD 15115 (shares of evaluable+excluded: THROUGH 0.038 ALREADY_HELD 0.497)
+label shares among evaluable: HOLD 0.644 SLICE 0.249 NEITHER 0.108
+
+##### REAL levels: binary events 12643 on 499 dates; HOLD share 0.721
+evaluated 10133 events on 399 dates; mean log-loss: constant 0.5960  B0 0.5936  B1 0.5409  F 0.5341; AUC B0 0.557 B1 0.708 F 0.719
+C1 tape over price (B1-F)                +0.00680  CI [+0.00434, +0.00911]  halves +0.00671 / +0.00690
+B0 over constant                         +0.00242  CI [-0.00062, +0.00541]  halves +0.00142 / +0.00340
+price behaviour over structure (B0-B1)   +0.05264  CI [+0.04640, +0.05934]  halves +0.05128 / +0.05396
+
+base HOLD share by side: {-1: 0.732, 1: 0.711} | by hour: {9: 0.66, 10: 0.694, 11: 0.729, 12: 0.772, 13: 0.755, 14: 0.755, 15: 0.781}
+base HOLD share by family flag: {'OR_HL': np.float64(0.719), 'MIDS': np.float64(0.727), 'IB_HL': np.float64(0.765), 'OVN': np.float64(0.719), 'PRIOR_DAY': np.float64(0.722), 'VALUE_AREA': np.float64(0.733), 'WM_PIVOTS': np.float64(0.734), 'OPENS_VWAP': np.float64(0.723), 'PERIOD_HLP': np.float64(0.724)}
+
+== C1 permutation: observed +0.00680; null mean -0.00017 sd 0.00033 p95 +0.00035; permutation p 0.010
+== C1 VERDICT: STATISTICAL ONLY (economically dead)  (point +0.00680, CI half-width 0.00238, supported-by-rule True)
+calibration F by decile (mean predicted / observed HOLD / N): [(np.float64(0.389), np.float64(0.396), 1014), (np.float64(0.527), np.float64(0.538), 1013), (np.float64(0.612), np.float64(0.605), 1013), (np.float64(0.675), np.float64(0.678), 1013), (np.float64(0.729), np.float64(0.727), 1014), (np.float64(0.775), np.float64(0.774), 1013), (np.float64(0.816), np.float64(0.785), 1013), (np.float64(0.853), np.float64(0.857), 1013), (np.float64(0.887), np.float64(0.885), 1013), (np.float64(0.925), np.float64(0.923), 1014)]
+C1 increment 09:35-11:30: +0.00810 (N 4427)
+C1 increment 11:30-14:00: +0.00491 (N 4021)
+C1 increment 14:00-15:30: +0.00793 (N 1685)
+C1 leaving the 10 largest dates out: +0.00696
+
+== PSEUDO-levels (placebo): 2784 events
+
+##### PSEUDO levels: binary events 2413 on 278 dates; HOLD share 0.707
+evaluated 1672 events on 178 dates; mean log-loss: constant 0.6136  B0 0.6080  B1 0.5636  F 0.5549; AUC B0 0.586 B1 0.702 F 0.714
+C1 tape over price (B1-F)                +0.00871  CI [+0.00332, +0.01419]  halves +0.01189 / +0.00559
+B0 over constant                         +0.00553  CI [-0.00256, +0.01421]  halves +0.00746 / +0.00363
+price behaviour over structure (B0-B1)   +0.04443  CI [+0.02555, +0.06195]  halves +0.03937 / +0.04941

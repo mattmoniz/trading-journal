@@ -1,0 +1,33 @@
+look 103
+
+== TIMING: share of decision points with a tell in the last 30 min, by hour; activity A when tell vs not
+10h: points 10522 tell30 80.0% | A tell mean 1.60 vs no-tell 1.32
+11h: points 6999 tell30 66.5% | A tell mean 1.71 vs no-tell 1.26
+12h: points 5434 tell30 55.4% | A tell mean 1.76 vs no-tell 1.46
+13h: points 5149 tell30 47.5% | A tell mean 1.57 vs no-tell 1.34
+14h: points 2717 tell30 42.0% | A tell mean 1.63 vs no-tell 1.43
+A (baseline s/bar over recent s/bar) when tell: p10 0.84 p50 1.38 p90 2.70; all points p50 1.27
+
+== FIRES: 1760 V1 entries on 488 of 516 sessions (94.6%); per active day mean 3.6 median 3 p90 6 max 19
+consecutive fires same day: 1272, opposite direction 46.2%
+stop distance (size of the structure behind it): p10 9.5 p50 26.25 p90 80.5 pts
+
+bars: open known 568 sessions; acd_daily_log rows 556, day_type non-null 556
+
+== DAY TYPE (end-of-day label): sessions, share with a tell fire, fires per session
+BALANCE        sessions  303 | any fire  95.4% | fires/session 3.20
+TREND          sessions  148 | any fire  95.9% | fires/session 3.55
+TURBULENT      sessions   55 | any fire 100.0% | fires/session 4.78
+NO_LABEL       sessions   10 | any fire  20.0% | fires/session 0.20
+
+== OPEN: |gap| terciles cut at 42.0 / 104.8 pts (516 sessions)
+small  sessions 172 | any fire 92.4% | fires/session 3.23
+mid    sessions 172 | any fire 95.3% | fires/session 3.40
+large  sessions 172 | any fire 95.9% | fires/session 3.61
+
+== FOLLOW OR FLIP: tell direction vs the day so far (entry vs 09:30 open), 1746 fires (14 dropped, no open or roll-basis mismatch)
+with the day-so-far direction 38.6% | against it 61.4%
+tell direction same sign as the opening gap: 44.5% of 1746
+near open      (580) with day-so-far 50.7%
+mid            (583) with day-so-far 41.9%
+far from open  (583) with day-so-far 23.3%

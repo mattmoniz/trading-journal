@@ -1,0 +1,18 @@
+first-hour events: TELL 810 on 438 dates, CONTROL 8562 on 516 dates; toward share TELL 0.530 CONTROL 0.441
+evaluated 9263 events on 510 dates (first 100 seed the cutoff); far share 0.345
+
+== C1 (the one counted test): FAR and TOWARD the open
+FAR+TOWARD                         y30: TELL +0.0009 (N 145) CONTROL -0.0148 (N 1181) diff +0.0157 CI [-0.0281, +0.0602] perm p 0.360
+  half 1 (2023-04-13..2024-04-09)  y30: TELL -0.0219 (N 62) CONTROL -0.0070 (N 614) diff -0.0149
+  half 2 (2024-04-10..2025-05-16)  y30: TELL +0.0179 (N 83) CONTROL -0.0233 (N 567) diff +0.0412
+
+== reported, uncounted
+FAR+TOWARD                         y60: TELL -0.0361 (N 145) CONTROL -0.0214 (N 1181) diff -0.0146
+FAR+TOWARD touch +0.15 first       tch: TELL +0.4676 (N 139) CONTROL +0.5071 (N 1120) diff -0.0395
+  half 1                           y60: TELL -0.0254 (N 62) CONTROL -0.0204 (N 614) diff -0.0050
+  half 2                           y60: TELL -0.0440 (N 83) CONTROL -0.0225 (N 567) diff -0.0215
+FAR+TOWARD minus 10 biggest tell |y30| y30: TELL -0.0367 (N 135) CONTROL -0.0148 (N 1181) diff -0.0219
+ALL distances, TOWARD              y30: TELL +0.0113 (N 424) CONTROL -0.0073 (N 3732) diff +0.0186
+FAR, AWAY from open                y30: TELL -0.0147 (N 107) CONTROL +0.0031 (N 1766) diff -0.0178
+NEAR, TOWARD                       y30: TELL +0.0167 (N 279) CONTROL -0.0038 (N 2551) diff +0.0205
+CONTROL FAR+TOWARD mean y30 -0.0148 (N 1181, share positive 0.474) -> plain reversion absent in the control

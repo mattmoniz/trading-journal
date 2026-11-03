@@ -1,0 +1,8 @@
+scale 15 min; dates 504; evaluable events 5667; THROUGH 118 ALREADY_HELD 5007 (shares of evaluable+excluded: THROUGH 0.011 ALREADY_HELD 0.464)
+label shares among evaluable: HOLD 0.577 SLICE 0.137 NEITHER 0.286
+
+##### REAL levels: binary events 4046 on 452 dates; HOLD share 0.808
+evaluated 3340 events on 352 dates; mean log-loss: constant 0.4958  B0 0.4976  B1 0.4434  F 0.4384; AUC B0 0.575 B1 0.733 F 0.741
+C1 tape over price (B1-F)                +0.00500  CI [+0.00126, +0.00875]  halves +0.00569 / +0.00447
+B0 over constant                         -0.00179  CI [-0.01096, +0.00744]  halves -0.00233 / -0.00139
+price behaviour over structure (B0-B1)   +0.05419  CI [+0.03924, +0.06895]  halves +0.05419 / +0.05419

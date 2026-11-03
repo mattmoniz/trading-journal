@@ -1,0 +1,22 @@
+                                     RTH      GLOBEX
+evaluable events                   14169       21443
+dates                                499         496
+events per date (median)              25          40
+scale (points, 5-min range)         19.8         7.2
+HOLD share                         0.644       0.623
+SLICE share                        0.249       0.243
+NEITHER share                      0.108       0.134
+mean vol_ratio (log)               0.216       0.166
+mean tussle                        0.447       0.469
+mean dwell_frac                    0.639         0.6
+
+standardised logistic coefficients on HOLD (full-sample, DESCRIPTIVE not out-of-sample; HOLD vs SLICE only); positive = flow/price toward the bounce side goes with HOLD
+approach_speed        +0.013    +0.008
+dwell_frac            -0.198    -0.176
+penetration           +0.581    +0.596
+bounce_so_far         +0.102    +0.085
+vol_ratio             +0.008    +0.045
+delta30               +0.309    +0.245
+delta120              -0.026    +0.001
+cumdelta              +0.034    +0.026
+tussle                -0.038    -0.005

@@ -1,0 +1,49 @@
+sessions: 108 dates; trigger rows 386520; limit rows 128840
+sanity checks pass (slip >= 0, worst-in-1s >= first print, through2 <= through1)
+
+== STOP/MARKET TRIGGERS: slippage past the trigger at the FIRST print beyond it, in ticks (0.25 pt); worst1s = worst print in the 1 s after; gap_gt1s = share where >1 s passed since the previous print
+                       n  trig_share  slip_med  p75   p90   p95   p99      mx  worst1s_p95  ge4t  ge20t  gap_gt1s
+seg                                                                                                              
+RTH 09:35-10:30  64800.0        0.52      0.25  0.5  0.75  0.75  2.00   34.50        22.00  0.00    0.0      0.01
+RTH 10:30-14:00  64320.0        0.36      0.25  0.5  0.75  0.75  2.25   30.25        17.25  0.00    0.0      0.01
+RTH 14:00-15:30  63000.0        0.34      0.25  0.5  0.75  1.00  2.00   42.25        17.00  0.00    0.0      0.01
+GLX 18:30-22:00  64800.0        0.33      0.25  0.5  1.00  1.50  3.50   27.00        11.50  0.01    0.0      0.18
+GLX 22:00-02:00  64800.0        0.26      0.25  0.5  1.00  1.50  3.75   22.00        10.50  0.01    0.0      0.20
+GLX 02:00-08:30  64800.0        0.47      0.00  0.5  1.00  1.50  4.00  178.00        11.00  0.01    0.0      0.12
+
+by session and trigger distance (x session 5-min-range scale)
+                  n  trig_share  slip_med   p90  p95   p99      mx  ge4t
+sess   f                                                                
+GLOBEX 0.5  64800.0        0.62      0.25  1.25  1.5  3.75   27.00  0.01
+       1.0  64800.0        0.35      0.00  1.00  1.5  4.00   22.00  0.01
+       2.0  64800.0        0.10      0.00  1.00  1.0  4.00  178.00  0.01
+RTH    0.5  64040.0        0.67      0.25  0.75  1.0  2.25   42.25  0.00
+       1.0  64040.0        0.41      0.00  0.50  0.5  2.00   34.50  0.00
+       2.0  64040.0        0.13      0.00  0.00  0.0  2.00   27.00  0.01
+
+by session volatility tercile (session scale)
+                   n  trig_share  slip_med   p90   p95   p99      mx  ge4t
+sess   vol                                                                
+GLOBEX low   70200.0        0.35      0.00  0.75  1.00  6.00   27.00  0.02
+       mid   59400.0        0.36      0.00  0.75  1.00  2.00   13.00  0.00
+       high  64800.0        0.36      0.50  1.50  2.25  4.21  178.00  0.01
+RTH    low   66120.0        0.41      0.25  0.75  0.75  4.25   42.25  0.01
+       mid   63000.0        0.41      0.25  0.75  0.75  1.50    6.50  0.00
+       high  63000.0        0.39      0.25  0.75  1.25  2.25   11.25  0.00
+
+== RESTING BUY LIMITS below the market: touch = first print at or below; through = a print >= 1 tick (or 2) below within 5 min of the touch; vol_at = lots printed AT the limit before it traded through (queue-ahead proxy); fwd60 = drift 60 s after the touch in scale units (negative = adverse)
+                       n  touch  thru1_given_touch  thru2_given_touch  vol_at_med  vol_at_p90  t_thru_med_s  fwd60_touch_only  fwd60_through  first_below_p90
+seg                                                                                                                                                          
+RTH 09:35-10:30  21600.0   0.83               0.99               0.98         5.0        15.0          0.01              0.70          -0.01              0.0
+RTH 10:30-14:00  21440.0   0.74               0.98               0.97         5.0        16.0          0.01              0.40           0.00              0.0
+RTH 14:00-15:30  21000.0   0.69               0.98               0.97         5.0        15.0          0.01              0.38          -0.00              0.0
+GLX 18:30-22:00  21600.0   0.69               0.95               0.90         2.0         7.0          0.02              0.37          -0.01              1.0
+GLX 22:00-02:00  21600.0   0.64               0.94               0.88         3.0         8.0          0.08              0.29          -0.02              1.0
+GLX 02:00-08:30  21600.0   0.80               0.97               0.93         2.0         8.0          0.04              0.55          -0.01              1.0
+
+                   n  touch  thru1_given_touch  thru2_given_touch  vol_at_med  vol_at_p90  t_thru_med_s  fwd60_touch_only  fwd60_through  first_below_p90
+sess   f                                                                                                                                                 
+GLOBEX 0.25  32400.0   0.80               0.95               0.90         2.0         7.0          0.08              0.37          -0.01              1.0
+       0.50  32400.0   0.62               0.95               0.91         3.0         8.0          0.02              0.41          -0.01              1.0
+RTH    0.25  32020.0   0.83               0.99               0.97         5.0        14.0          0.01              0.46          -0.00              0.0
+       0.50  32020.0   0.67               0.99               0.97         6.0        16.0          0.01              0.49           0.00              0.0
