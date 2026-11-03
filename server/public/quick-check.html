@@ -535,13 +535,11 @@
 <div class="wrap section-block" id="sec-models">
   <h2>Models</h2>
   <div class="perf-head-row">
-    <div class="perf-subhead">Track B / ML tracking</div>
-    <div id="models-toggle" class="perf-toggle"></div>
+    <div class="perf-subhead">Meta-Labeler (log only)</div>
   </div>
   <div id="models-stat-row" style="font-size:12px;color:var(--dim);margin-top:8px;display:flex;gap:14px;flex-wrap:wrap;"></div>
   <canvas id="models-history-canvas" class="equity" style="margin-top:10px;"></canvas>
   <div id="models-detail" style="margin-top:10px;font-size:11px;color:var(--dim);"></div>
-  <div id="models-illustration"></div>
 </div>
 
 <div id="modal-backdrop">
@@ -764,236 +762,6 @@ function renderVolRegimeHistoryChart(canvasId, rows, band) {
 
   ctx.fillStyle = lineColor; ctx.font = 'bold 12px monospace'; ctx.textAlign = 'right';
   ctx.fillText(finalScale.toFixed(2) + 'x', w - padR - 2, padT + 12);
-}
-
-// ---- Tick-trend/efficiency-ratio fade-outcome research (2026-09-23) ----
-// PROVISIONAL research finding, NOT a live signal -- see docs/TICK_MICROSTRUCTURE_PILOT_SPEC.md.
-// Reads GET /api/setups/tick-trend-fade-history, which is the SAME performance_audit rows
-// scripts/report_tick_trend_fade_history.mjs reads -- one real row per daily recheck
-// (scripts/run_daily_calibration.sh), not a separately-derived convenience series.
-// Standalone card removed 2026-09-24 (user request: consolidate into the "Models" section,
-// loadModelsTab()) -- the modal below is now opened from there instead of its own card.
-async function openTickTrendHistoryModal() {
-  let html = '<div class="m-head"><span class="m-title">Tick Trend — Fade Outcome Model</span>' +
-    '<button class="m-close" onclick="closeTradeModal()">×</button></div>' +
-    '<div class="m-sub">PROVISIONAL research finding, not a live signal or gate. Predicts real ' +
-    'fade-setup STOP_HIT vs TARGET_HIT from tick-derived trend/efficiency features at fire time. ' +
-    'Rechecked daily against newly-accumulated real outcomes -- a single day clearing (or missing) ' +
-    'a significance bar means little; a stable AUC across many days is the real reliability signal.</div>' +
-    '<canvas id="tick-trend-history-canvas" class="equity" style="margin-top:10px;"></canvas>' +
-    '<div id="tick-trend-history-loading" style="font-size:12px;color:var(--dim);text-align:center;padding:20px 0;">Loading…</div>' +
-    '<div id="tick-trend-history-stats" style="font-size:12px;color:var(--dim);margin-top:8px;"></div>';
-  $('modal').innerHTML = html;
-  $('modal-backdrop').classList.add('open');
-
-  try {
-    const data = await fetch('/api/setups/tick-trend-fade-history', { cache: 'no-store' }).then(r => r.json());
-    const loadingEl = $('tick-trend-history-loading');
-    if (loadingEl) loadingEl.remove();
-    const history = data?.history || [];
-    renderTickTrendHistoryChart('tick-trend-history-canvas', history, history[history.length - 1]?.frozen_model_new_days);
-
-    const statsEl = $('tick-trend-history-stats');
-    if (statsEl && history.length) {
-      const aucs = history.map(h => h.test_auc).filter(v => v != null);
-      if (aucs.length >= 2) {
-        const mean = aucs.reduce((a, b) => a + b, 0) / aucs.length;
-        const variance = aucs.reduce((a, b) => a + (b - mean) ** 2, 0) / aucs.length;
-        const std = Math.sqrt(variance);
-        const nBelow = aucs.filter(a => a < 0.5).length;
-        const unstable = nBelow / aucs.length > 0.3;
-        statsEl.innerHTML =
-          mSection('Stability across ' + aucs.length + ' runs') +
-          mRow('Mean AUC', mean.toFixed(4)) +
-          mRow('Std dev', std.toFixed(4)) +
-          mRow('Runs below random (0.5)', nBelow + ' / ' + aucs.length + ' (' + (100 * nBelow / aucs.length).toFixed(0) + '%)') +
-          mRow('Read', unstable ? 'Unstable -- flips sides of random too often to trust yet' : 'Reasonably consistent so far -- still not confirmation on its own', unstable ? 'var(--red)' : 'var(--green)');
-      } else {
-        statsEl.innerHTML = '<div style="text-align:center;padding:8px 0;">Need at least 2 daily runs to judge stability -- check back tomorrow.</div>';
-      }
-    }
-  } catch (e) {
-    const loadingEl = $('tick-trend-history-loading');
-    if (loadingEl) loadingEl.textContent = 'Failed to load history';
-  }
-}
-
-// Same canvas-sizing/axis/gridline conventions as renderVolRegimeHistoryChart() above --
-// plots test_auc instead of GARCH scale, with a dashed reference line at 0.5 (random
-// chance) instead of 1.0, since 0.5 is this metric's own meaningful baseline.
-// MIN_POINTS_FOR_CHART=5 (raised from 2, 2026-09-24, user report "I see nothing useful" --
-// a 2-point line has no real trend to show, it's just noise connected by a straight line
-// that reads as more informative than it is). Below 5 real daily-recheck points, shows a
-// plain progress message instead -- referencing the frozen model's own pre-registered
-// 20-distinct-day prospective floor (score_frozen_model.py) when known, since THAT's the
-// number that actually matters for when this chart becomes real evidence, not just the
-// daily-recheck run count.
-function renderTickTrendHistoryChart(canvasId, rows, frozenNewDays) {
-  const canvas = $(canvasId);
-  if (!canvas) return;
-  const dpr = window.devicePixelRatio || 1;
-  const w = canvas.clientWidth || canvas.parentElement.clientWidth;
-  const h = 170;
-  canvas.width = w * dpr; canvas.height = h * dpr;
-  const ctx = canvas.getContext('2d');
-  ctx.scale(dpr, dpr);
-  ctx.clearRect(0, 0, w, h);
-
-  const aucRows = (rows || []).filter(r => r.test_auc != null);
-  const MIN_POINTS_FOR_CHART = 5;
-  if (aucRows.length < MIN_POINTS_FOR_CHART) {
-    ctx.fillStyle = 'rgba(148,163,184,0.75)'; ctx.font = '12px sans-serif'; ctx.textAlign = 'center';
-    ctx.fillText(`Still collecting daily evidence (${aucRows.length} run${aucRows.length === 1 ? '' : 's'} so far)`, w / 2, h / 2 - 10);
-    ctx.font = '11px sans-serif'; ctx.fillStyle = 'rgba(148,163,184,0.55)';
-    const floorMsg = frozenNewDays != null
-      ? `Frozen model: ${frozenNewDays}/20 real post-freeze days -- chart fills in as this grows`
-      : 'Chart appears once there are enough points to show a real trend, not just noise';
-    ctx.fillText(floorMsg, w / 2, h / 2 + 12);
-    return;
-  }
-
-  const aucs = aucRows.map(r => r.test_auc);
-  const min = Math.min(...aucs, 0.5);
-  const max = Math.max(...aucs, 0.5);
-  const valRange = (max - min) || 1;
-  const padL = 40, padR = 8, padT = 10, padB = 20;
-  const plotW = w - padL - padR, plotH = h - padT - padB;
-  const xAt = (i) => padL + (i / (aucRows.length - 1)) * plotW;
-  const yAt = (v) => padT + plotH - ((v - min) / valRange) * plotH;
-
-  const yTicks = [...new Set([min, 0.5, max].filter(v => v >= min && v <= max))].sort((a, b) => a - b);
-  ctx.font = '10px monospace'; ctx.textAlign = 'right';
-  for (const t of yTicks) {
-    const y = yAt(t);
-    ctx.strokeStyle = t === 0.5 ? 'rgba(148,163,184,0.35)' : 'rgba(148,163,184,0.12)';
-    ctx.lineWidth = 1;
-    if (t === 0.5) ctx.setLineDash([4, 3]);
-    ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(w - padR, y); ctx.stroke();
-    ctx.setLineDash([]);
-    ctx.fillStyle = 'rgba(148,163,184,0.75)';
-    ctx.fillText(t.toFixed(3), padL - 6, y + 3);
-  }
-
-  const xTickCount = Math.min(5, aucRows.length);
-  ctx.textAlign = 'center'; ctx.fillStyle = 'rgba(148,163,184,0.75)';
-  for (let k = 0; k < xTickCount; k++) {
-    const idx = xTickCount === 1 ? 0 : Math.round((k / (xTickCount - 1)) * (aucRows.length - 1));
-    const x = xAt(idx);
-    ctx.fillText(aucRows[idx].date.slice(5), Math.min(Math.max(x, padL + 18), w - padR - 18), h - 4);
-  }
-
-  const finalAuc = aucs[aucs.length - 1];
-  const lineColor = finalAuc >= 0.5 ? '#fbbf24' : '#94a3b8'; // amber (matches the card's PROVISIONAL accent) vs muted grey below random
-
-  ctx.beginPath();
-  aucs.forEach((v, i) => { const x = xAt(i), y = yAt(v); if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y); });
-  ctx.strokeStyle = lineColor; ctx.lineWidth = 2; ctx.stroke();
-
-  ctx.fillStyle = lineColor; ctx.font = 'bold 12px monospace'; ctx.textAlign = 'right';
-  ctx.fillText(finalAuc.toFixed(4), w - padR - 2, padT + 12);
-}
-
-// Same canvas conventions as renderTickTrendHistoryChart() above, adapted for the ordinal
-// "how far will it run" model (2026-09-24): plots Spearman correlation (range -1..1, can be
-// negative -- unlike AUC which floors at 0) with a dashed reference line at 0 (no
-// relationship) instead of 0.5.
-function renderOrdinalHistoryChart(canvasId, rows) {
-  const canvas = $(canvasId);
-  if (!canvas) return;
-  const dpr = window.devicePixelRatio || 1;
-  const w = canvas.clientWidth || canvas.parentElement.clientWidth;
-  const h = 170;
-  canvas.width = w * dpr; canvas.height = h * dpr;
-  const ctx = canvas.getContext('2d');
-  ctx.scale(dpr, dpr);
-  ctx.clearRect(0, 0, w, h);
-
-  const rhoRows = (rows || []).filter(r => r.spearman != null);
-  const MIN_POINTS_FOR_CHART = 5; // matches renderTickTrendHistoryChart's own bar -- a 1-4
-                                   // point line has no real trend to show, just noise
-  if (rhoRows.length < MIN_POINTS_FOR_CHART) {
-    ctx.fillStyle = 'rgba(148,163,184,0.75)'; ctx.font = '12px sans-serif'; ctx.textAlign = 'center';
-    ctx.fillText(`Still collecting daily evidence (${rhoRows.length} run${rhoRows.length === 1 ? '' : 's'} so far)`, w / 2, h / 2 - 10);
-    ctx.font = '11px sans-serif'; ctx.fillStyle = 'rgba(148,163,184,0.55)';
-    ctx.fillText('Chart appears once there are enough points for a real trend', w / 2, h / 2 + 12);
-    return;
-  }
-
-  const rhos = rhoRows.map(r => r.spearman);
-  const min = Math.min(...rhos, 0);
-  const max = Math.max(...rhos, 0);
-  const valRange = (max - min) || 1;
-  const padL = 40, padR = 8, padT = 10, padB = 20;
-  const plotW = w - padL - padR, plotH = h - padT - padB;
-  const xAt = (i) => padL + (i / (rhoRows.length - 1)) * plotW;
-  const yAt = (v) => padT + plotH - ((v - min) / valRange) * plotH;
-
-  const yTicks = [...new Set([min, 0, max].filter(v => v >= min && v <= max))].sort((a, b) => a - b);
-  ctx.font = '10px monospace'; ctx.textAlign = 'right';
-  for (const t of yTicks) {
-    const y = yAt(t);
-    ctx.strokeStyle = t === 0 ? 'rgba(148,163,184,0.35)' : 'rgba(148,163,184,0.12)';
-    ctx.lineWidth = 1;
-    if (t === 0) ctx.setLineDash([4, 3]);
-    ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(w - padR, y); ctx.stroke();
-    ctx.setLineDash([]);
-    ctx.fillStyle = 'rgba(148,163,184,0.75)';
-    ctx.fillText(t.toFixed(3), padL - 6, y + 3);
-  }
-
-  const xTickCount = Math.min(5, rhoRows.length);
-  ctx.textAlign = 'center'; ctx.fillStyle = 'rgba(148,163,184,0.75)';
-  for (let k = 0; k < xTickCount; k++) {
-    const idx = xTickCount === 1 ? 0 : Math.round((k / (xTickCount - 1)) * (rhoRows.length - 1));
-    const x = xAt(idx);
-    ctx.fillText(rhoRows[idx].date.slice(5), Math.min(Math.max(x, padL + 18), w - padR - 18), h - 4);
-  }
-
-  const finalRho = rhos[rhos.length - 1];
-  const lineColor = finalRho > 0 ? '#fbbf24' : '#94a3b8';
-
-  ctx.beginPath();
-  rhos.forEach((v, i) => { const x = xAt(i), y = yAt(v); if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y); });
-  ctx.strokeStyle = lineColor; ctx.lineWidth = 2; ctx.stroke();
-
-  ctx.fillStyle = lineColor; ctx.font = 'bold 12px monospace'; ctx.textAlign = 'right';
-  ctx.fillText(finalRho.toFixed(4), w - padR - 2, padT + 12);
-}
-
-// Illustrative $ backtest for the frozen binary model (2026-09-24, user request: "can we
-// apply that backtest" to a dollar chart like the Meta-Labeler's). Reads
-// GET /api/setups/frozen-model-dollar-illustration (server/routes/setups.js), which joins
-// scripts/tick_microstructure/backtest_frozen_model_dollar_illustration.py's artifact against
-// active_setups live. Reuses renderMlSiloRangeEquityChart() as-is (same {actual_pnl,
-// fired_at_str} row shape) rather than writing a second equity-curve renderer.
-// IMPORTANT, and said explicitly in the label below: this is the SAME historical held-out
-// test set already summarized as the "Test AUC" number above it -- not new/prospective
-// evidence. The frozen model's real prospective evidence is score_frozen_model.py, gated
-// behind a pre-registered 20-distinct-day floor (currently 1/20) -- this illustration does
-// not substitute for that and updates only when the script above is manually re-run.
-async function loadFrozenModelIllustration() {
-  const el = $('models-illustration');
-  if (!el) return;
-  try {
-    const data = await fetch('/api/setups/frozen-model-dollar-illustration', { cache: 'no-store' }).then(r => r.json());
-    const rows = (data?.rows || []).filter(r => r.actual_pnl != null);
-    if (rows.length < 2) { el.innerHTML = ''; return; }
-    const takeRows = rows.filter(r => r.predicted_take);
-    const fmtD = n => (n < 0 ? '-$' : '$') + Math.abs(n).toFixed(0);
-    const allSum = rows.reduce((a, r) => a + parseFloat(r.actual_pnl), 0);
-    const takeSum = takeRows.reduce((a, r) => a + parseFloat(r.actual_pnl), 0);
-    el.innerHTML =
-      '<div style="border-top:1px solid var(--border);padding-top:10px;margin-top:6px;">' +
-      '<div style="font-size:11px;color:var(--dim);margin-bottom:8px;">Illustrative: $ on the SAME historical held-out test set (' +
-      (data.n_test_days ?? '?') + ' days, never seen during training) already behind the AUC above -- NOT new or prospective evidence, just that same result in dollar terms.</div>' +
-      '<div style="font-size:12px;display:flex;gap:14px;margin-bottom:6px;">' +
-      '<span>All (test set): <b style="color:' + (allSum >= 0 ? 'var(--green)' : 'var(--red)') + '">' + fmtD(allSum) + '</b></span>' +
-      '<span>Model-approved: <b style="color:' + (takeSum >= 0 ? 'var(--green)' : 'var(--red)') + '">' + fmtD(takeSum) + '</b></span>' +
-      '</div>' +
-      '<canvas id="frozen-illustration-canvas" class="equity"></canvas>' +
-      '</div>';
-    renderMlSiloRangeEquityChart('frozen-illustration-canvas', rows, takeRows, 'all');
-  } catch (e) { el.innerHTML = ''; }
 }
 
 // ML meta-labeling silo (2026-09-21) -- reads the SAME server/routes/mlSilo.js endpoints the
@@ -3584,181 +3352,34 @@ function setClusterView(v) {
   renderPerformance();
 }
 
-// Consolidated "Models" section (2026-09-24, user request: "I would like to track charts of
-// these three models history and update going forward... I don't want to see ML silo and
-// ticks on the quick check page") -- replaces the standalone ml-silo-card and tick-trend-card
-// with one tabbed section, reusing renderToggle() and the existing chart-rendering functions
-// for each model rather than duplicating them. Per the user's explicit request, each tab
-// carries a plain-English "what this model is testing for" explanation -- apply this same
-// convention to any future model added here.
-// Default tab is Meta-Labeler, not Binary -- 2026-09-24, user report ("I see nothing useful
-// in ordinal or binary charts"): both are genuinely too early (ordinal has 1 daily-recheck
-// point, binary has 2 hugging 0.5) to show anything but a flat/near-empty chart, while
-// Meta-Labeler already has weeks of real trade-level history. Land on the tab with real
-// content; a user who's already picked a tab (localStorage) keeps their own choice.
-let modelsTab = localStorage.getItem('modelsTab') || 'metalabeler';
-const MODEL_EXPLAINERS = {
-  binary: 'What this tests: given the order-flow/trend state at the moment a real fade trade fires, will it hit its STOP or its TARGET? Frozen model (not retrained daily) -- the real test is how it scores brand-new trades it has never seen, tracked here day by day.',
-  ordinal: 'What this tests: not just win/lose, but HOW FAR a trade is likely to run -- distinguishing a small win from a real home run. Fade setups only (a broader "every setup type" version was tried and found not to work -- different setups don\'t share one pattern).',
-  metalabeler: 'What this tests: should a real setup signal actually be taken or vetoed, based on patterns learned from real prior outcomes. Fully isolated -- it never changes what fires as a real alert, it only tracks what WOULD have happened if its calls were followed.',
-  propensity: 'What this tests: which real setups actually tend to travel far before resolving. Two separate metrics -- calibrated-exit setups (median R-multiple: MFE vs. that trade\'s own risk) and level-anchored setups (target-hit rate -- their stop/target come from two independent real levels, so an R-multiple would be meaningless). Stability compares the setup\'s propensity in the 2nd half of its history vs the 1st with a day-blocked CI (never a raw trend number -- too easy to misread as "stable" when it\'s really just too thin to tell). "n/a — drifted" means the setup\'s own stop distance shifted enough between halves that any stability read would be confounded by recalibration, not a real edge change, so none is shown.',
-};
-
-function renderModelsToggle() {
-  renderToggle('models-toggle', [['binary', 'Binary'], ['ordinal', 'Ordinal'], ['metalabeler', 'Meta-Labeler'], ['propensity', 'Propensity']], modelsTab, setModelsTab);
-}
-
-function setModelsTab(v) {
-  modelsTab = v;
-  localStorage.setItem('modelsTab', v);
-  loadModelsTab();
-}
+// "Models" section (consolidated 2026-09-24, trimmed 2026-11-02). The Binary (frozen tick-trend fade), Ordinal (reach_R) and Propensity tabs were removed 2026-11-02:
+// frozen-model AUC 0.523 on 25 new days, ordinal Spearman 0.03 (permutation p 0.35), propensity a static 2026-09-24 snapshot nothing refreshed (see docs/OPEN_THREADS.md).
+// Only the Meta-Labeler remains, and it is log-only (ML_VETO_GATE.enforce=false); its pre-registered ranking test FAILED 2026-10-28.
+const MODEL_EXPLAINER = 'What this tests: should a real setup signal actually be taken or vetoed, based on patterns learned from real prior outcomes. Fully isolated -- it never changes what fires as a real alert, it only tracks what WOULD have happened if its calls were followed. Its pre-registered ranking test failed (2026-10-28), so this is a log-only monitor.';
 
 async function loadModelsTab() {
-  renderModelsToggle();
   const statRow = $('models-stat-row');
   const detail = $('models-detail');
   if (!statRow || !detail) return;
-  const illEl = $('models-illustration');
-  if (illEl) illEl.innerHTML = ''; // only the 'binary' branch below repopulates this
-  const canvasEl = $('models-history-canvas');
-  if (canvasEl) canvasEl.style.display = ''; // only the 'propensity' branch below hides this (it's a table, not a chart)
-  const explainerHtml = '<div style="margin-bottom:8px;">' + MODEL_EXPLAINERS[modelsTab] + '</div>';
-
-  if (modelsTab === 'binary') {
-    try {
-      const data = await fetch('/api/setups/tick-trend-fade-history', { cache: 'no-store' }).then(r => r.json());
-      const history = data?.history || [];
-      const latest = history[history.length - 1];
-      const auc = latest?.test_auc;
-      statRow.innerHTML = auc != null
-        ? '<span>Test AUC: <b style="color:' + (auc >= 0.5 ? 'var(--green)' : 'var(--red)') + '">' + auc.toFixed(4) + '</b></span><span>PROVISIONAL, not confirmed</span>'
-        : '<span>No data yet</span>';
-      renderTickTrendHistoryChart('models-history-canvas', history, latest?.frozen_model_new_days);
-      detail.innerHTML = explainerHtml + '<div style="cursor:pointer;color:var(--dim);" onclick="openTickTrendHistoryModal()">tap for full stability detail →</div>';
-      loadFrozenModelIllustration();
-    } catch (e) { detail.innerHTML = explainerHtml + '<div>Failed to load</div>'; }
-  } else if (modelsTab === 'ordinal') {
-    try {
-      const data = await fetch('/api/setups/ordinal-reach-r-history', { cache: 'no-store' }).then(r => r.json());
-      const history = data?.history || [];
-      const latest = history[history.length - 1];
-      const rho = latest?.spearman;
-      statRow.innerHTML = rho != null
-        ? '<span>Spearman: <b style="color:' + (rho > 0 ? 'var(--green)' : 'var(--red)') + '">' + rho.toFixed(4) + '</b></span><span>PROVISIONAL, not confirmed</span>'
-        : '<span>No data yet</span>';
-      renderOrdinalHistoryChart('models-history-canvas', history);
-      detail.innerHTML = explainerHtml + '<div style="cursor:pointer;color:var(--dim);" onclick="openOrdinalHistoryModal()">tap for full stability detail →</div>';
-    } catch (e) { detail.innerHTML = explainerHtml + '<div>Failed to load</div>'; }
-  } else if (modelsTab === 'metalabeler') {
-    try {
-      const [summary, rangeData] = await Promise.all([
-        fetch('/api/ml-silo/summary?sample=test', { cache: 'no-store' }).then(r => r.json()),
-        fetch('/api/ml-silo/range-trades?range=all&sample=test', { cache: 'no-store' }).then(r => r.json()),
-      ]);
-      const all = summary?.comparison?.allTrades;
-      const take = summary?.comparison?.byVerdict?.find(v => v.verdict === 'TAKE');
-      const allPnl = Number(all?.total_pnl || 0);
-      const takePnl = Number(take?.total_pnl || 0);
-      const fmtD = n => (n < 0 ? '-$' : '$') + Math.abs(n).toFixed(0);
-      statRow.innerHTML =
-        '<span>All: <b style="color:' + (allPnl >= 0 ? 'var(--green)' : 'var(--red)') + '">' + fmtD(allPnl) + '</b></span>' +
-        '<span>ML-approved: <b style="color:' + (takePnl >= 0 ? 'var(--green)' : 'var(--red)') + '">' + fmtD(takePnl) + '</b></span>';
-      const trades = rangeData?.trades || [];
-      const takeTrades = trades.filter(t => t.ml_verdict === 'TAKE');
-      renderMlSiloRangeEquityChart('models-history-canvas', trades, takeTrades, 'all');
-      detail.innerHTML = explainerHtml + '<div style="cursor:pointer;color:var(--dim);" onclick="switchPageTab(\'ml\')">tap for full detail (range filters, trade list) →</div>';
-    } catch (e) { detail.innerHTML = explainerHtml + '<div>Failed to load</div>'; }
-  } else if (modelsTab === 'propensity') {
-    if (canvasEl) canvasEl.style.display = 'none';
-    try {
-      const data = await fetch('/api/setups/propensity-screen', { cache: 'no-store' }).then(r => r.json());
-      const results = data?.results || [];
-      const calib = results.filter(r => r.family === 'CALIBRATED_EXIT' && !r.thin).sort((a, b) => b.medianR - a.medianR);
-      const level = results.filter(r => r.family === 'LEVEL_ANCHORED' && !r.thin).sort((a, b) => b.targetHitRate - a.targetHitRate);
-      const thinCount = results.filter(r => r.thin).length;
-      statRow.innerHTML = '<span>' + calib.length + ' calibrated-exit + ' + level.length + ' level-anchored setups scored (N≥20)</span><span>' + thinCount + ' more below N=20</span>';
-
-      // 4-state categorical stability badge ONLY -- no supplementary trend number (Spearman
-      // rejected 2026-09-24, DeepSeek critique: at N=20-40, Spearman(date,reach_R) is
-      // redundant with the period-split CI, misleading (hovers near zero regardless of real
-      // decay), monotonic-only (misses a strengthen-weaken-strengthen pattern), and endpoint-
-      // sensitive (1 outlier trade at either end can move it more than the middle 30 do).
-      // Drift OVERRIDES the stability read here, not just a side note next to it -- a first
-      // draft showed both a ⚠ icon AND the (possibly confounded) IMPROVING/DEGRADING label
-      // side by side, which invites exactly the misread this whole mechanism exists to
-      // prevent ("a user sees a number/label and thinks 'stable', when it's actually just
-      // too thin/confounded to tell"). Four fixed categories only, no color gradient tied to
-      // CI width or magnitude -- a flat accent per category is a category marker, not a scale.
-      const stabBadge = (s, drift) => {
-        if (drift) return '<span style="color:var(--amber);" title="Stop distance shifted >20% between halves -- period-split result would be confounded by recalibration, not a real edge change, so it is not shown">n/a — drifted</span>';
-        if (!s) return '<span style="color:var(--dim);">inconclusive at N</span>';
-        if (s.excludesZero && s.direction === 'DEGRADING') return '<span style="color:var(--red);">CI excludes zero, declines</span>';
-        if (s.excludesZero && s.direction === 'IMPROVING') return '<span style="color:var(--green);">CI excludes zero, improves</span>';
-        return '<span style="color:var(--dim);">inconclusive at N</span>';
-      };
-      const row = (name, cells) => '<tr><td style="padding:4px 6px;font-size:11.5px;">' + name + '</td>' + cells.map(c => '<td style="padding:4px 6px;font-size:11.5px;text-align:right;">' + c + '</td>').join('') + '</tr>';
-
-      let html = '<div style="font-size:11px;color:var(--dim);margin:8px 0 4px;">CALIBRATED-EXIT (R-multiple = MFE / risk)</div>';
-      html += '<table style="width:100%;border-collapse:collapse;"><thead><tr style="color:var(--dim);font-size:10px;text-transform:uppercase;"><th style="text-align:left;padding:4px 6px;">Setup</th><th style="text-align:right;padding:4px 6px;">N/days</th><th style="text-align:right;padding:4px 6px;">Median R</th><th style="text-align:right;padding:4px 6px;">%≥2x</th><th style="text-align:right;padding:4px 6px;">Stability</th></tr></thead><tbody>';
-      html += calib.slice(0, 15).map(r => row(r.setupType, [r.n + '/' + r.distinctDays, r.medianR.toFixed(2), r.pct2x.toFixed(0) + '%', stabBadge(r.stability, r.calibrationDrift)])).join('');
-      html += '</tbody></table>';
-
-      html += '<div style="font-size:11px;color:var(--dim);margin:12px 0 4px;">LEVEL-ANCHORED (target-hit rate -- stop/target are 2 independent real levels, R-multiple would be meaningless)</div>';
-      html += '<table style="width:100%;border-collapse:collapse;"><thead><tr style="color:var(--dim);font-size:10px;text-transform:uppercase;"><th style="text-align:left;padding:4px 6px;">Setup</th><th style="text-align:right;padding:4px 6px;">N/days</th><th style="text-align:right;padding:4px 6px;">Target-hit</th><th style="text-align:right;padding:4px 6px;">Stop-hit</th><th style="text-align:right;padding:4px 6px;">Stability</th></tr></thead><tbody>';
-      html += level.map(r => row(r.setupType, [r.n + '/' + r.distinctDays, r.targetHitRate.toFixed(0) + '%', r.stopHitRate.toFixed(0) + '%', stabBadge(r.stability, false)])).join('');
-      html += '</tbody></table>';
-
-      detail.innerHTML = explainerHtml + html;
-    } catch (e) { detail.innerHTML = explainerHtml + '<div>Failed to load</div>'; }
-  }
-}
-
-// Minimal stability-history modal for the ordinal model, mirroring openTickTrendHistoryModal()'s
-// own stats-across-runs convention exactly (same read: is the correlation's SIGN and stability
-// across many days the real signal, not any single day's number).
-async function openOrdinalHistoryModal() {
-  let html = '<div class="m-head"><span class="m-title">Ordinal Model — How Far Will It Run</span>' +
-    '<button class="m-close" onclick="closeTradeModal()">×</button></div>' +
-    '<div class="m-sub">PROVISIONAL research finding, not a live signal or gate. Predicts real fade-setup ' +
-    'MFE-in-R (how far price ran before the stop) from tick-derived features at fire time. Rechecked daily -- ' +
-    'a stable positive correlation across many days is the real reliability signal, not any single day.</div>' +
-    '<canvas id="ordinal-history-canvas" class="equity" style="margin-top:10px;"></canvas>' +
-    '<div id="ordinal-history-loading" style="font-size:12px;color:var(--dim);text-align:center;padding:20px 0;">Loading…</div>' +
-    '<div id="ordinal-history-stats" style="font-size:12px;color:var(--dim);margin-top:8px;"></div>';
-  $('modal').innerHTML = html;
-  $('modal-backdrop').classList.add('open');
-
+  const explainerHtml = '<div style="margin-bottom:8px;">' + MODEL_EXPLAINER + '</div>';
   try {
-    const data = await fetch('/api/setups/ordinal-reach-r-history', { cache: 'no-store' }).then(r => r.json());
-    const loadingEl = $('ordinal-history-loading');
-    if (loadingEl) loadingEl.remove();
-    const history = data?.history || [];
-    renderOrdinalHistoryChart('ordinal-history-canvas', history);
-
-    const statsEl = $('ordinal-history-stats');
-    if (statsEl && history.length) {
-      const rhos = history.map(h => h.spearman).filter(v => v != null);
-      if (rhos.length >= 2) {
-        const mean = rhos.reduce((a, b) => a + b, 0) / rhos.length;
-        const variance = rhos.reduce((a, b) => a + (b - mean) ** 2, 0) / rhos.length;
-        const std = Math.sqrt(variance);
-        const nBelowZero = rhos.filter(r => r < 0).length;
-        const unstable = nBelowZero / rhos.length > 0.3;
-        statsEl.innerHTML =
-          mSection('Stability across ' + rhos.length + ' runs') +
-          mRow('Mean Spearman', mean.toFixed(4)) +
-          mRow('Std dev', std.toFixed(4)) +
-          mRow('Runs at/below zero', nBelowZero + ' / ' + rhos.length + ' (' + (100 * nBelowZero / rhos.length).toFixed(0) + '%)') +
-          mRow('Read', unstable ? 'Unstable -- flips sign too often to trust yet' : 'Reasonably consistent so far -- still not confirmation on its own', unstable ? 'var(--red)' : 'var(--green)');
-      } else {
-        statsEl.innerHTML = '<div style="text-align:center;padding:8px 0;">Need at least 2 daily runs to judge stability -- check back tomorrow.</div>';
-      }
-    }
-  } catch (e) {
-    const loadingEl = $('ordinal-history-loading');
-    if (loadingEl) loadingEl.textContent = 'Failed to load history';
-  }
+    const [summary, rangeData] = await Promise.all([
+      fetch('/api/ml-silo/summary?sample=test', { cache: 'no-store' }).then(r => r.json()),
+      fetch('/api/ml-silo/range-trades?range=all&sample=test', { cache: 'no-store' }).then(r => r.json()),
+    ]);
+    const all = summary?.comparison?.allTrades;
+    const take = summary?.comparison?.byVerdict?.find(v => v.verdict === 'TAKE');
+    const allPnl = Number(all?.total_pnl || 0);
+    const takePnl = Number(take?.total_pnl || 0);
+    const fmtD = n => (n < 0 ? '-$' : '$') + Math.abs(n).toFixed(0);
+    statRow.innerHTML =
+      '<span>All: <b style="color:' + (allPnl >= 0 ? 'var(--green)' : 'var(--red)') + '">' + fmtD(allPnl) + '</b></span>' +
+      '<span>ML-approved: <b style="color:' + (takePnl >= 0 ? 'var(--green)' : 'var(--red)') + '">' + fmtD(takePnl) + '</b></span>';
+    const trades = rangeData?.trades || [];
+    const takeTrades = trades.filter(t => t.ml_verdict === 'TAKE');
+    renderMlSiloRangeEquityChart('models-history-canvas', trades, takeTrades, 'all');
+    detail.innerHTML = explainerHtml + '<div style="cursor:pointer;color:var(--dim);" onclick="switchPageTab(\'ml\')">tap for full detail (range filters, trade list) →</div>';
+  } catch (e) { detail.innerHTML = explainerHtml + '<div>Failed to load</div>'; }
 }
 
 // Re-renders from already-fetched cached data -- no network call, so the Live/All toggle

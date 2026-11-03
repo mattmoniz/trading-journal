@@ -77,6 +77,7 @@ timed_step daily /usr/bin/node scripts/backfill_ml_intraday_features.mjs --apply
 # rescores the whole roster against the CHECKPOINT, not the newly-trained model, so its
 # own real "learning mechanism" is that it re-runs (and produces new-but-stable verdicts)
 # once a week, not once a night. recalibrate_ml_walkforward.mjs then re-runs
+# 2026-11-02 ML cleanup: removed the daily rechecks of answered ML side-questions (step-trail coupling, probability sizing, Globex split, ranking test, frozen binary tick-trend model, ordinal reach_R); see docs/OPEN_THREADS.md.
 # the expanding-window walk-forward and updates the RESEARCH_CLAIM's day-blocked bootstrap CI
 # with that day's real fold count -- status flips PROVISIONAL->CONFIRMED automatically once
 # the CI excludes zero. See RESEARCH_CLAIM
@@ -85,28 +86,6 @@ timed_step daily /usr/bin/node scripts/backfill_ml_intraday_features.mjs --apply
 timed_step daily ./venv/bin/python3 scripts/ml_meta_labeling/train.py
 timed_step daily ./venv/bin/python3 scripts/ml_meta_labeling/run_silo_scoring.py
 timed_step daily /usr/bin/node scripts/recalibrate_ml_walkforward.mjs
-
-# "ML gates entry, a validated trail mechanism decides how far to let it run" -- the
-# coupling step, 2026-09-21 (user's explicit "next step" request). Composes this model's
-# TAKE verdicts with the already-running step_trail_shadow hypothetical (both individually
-# still PROVISIONAL, never live-wired) purely as a research comparison. See
-# recalibrate_ml_step_trail_comparison.mjs's own header for the full account.
-timed_step daily /usr/bin/node scripts/recalibrate_ml_step_trail_comparison.mjs
-
-# Phase 0 pretest: should ML probability scale POSITION SIZE among already-approved trades,
-# not just gate entry (2026-09-21, user question: "can ml test increase sizing too, for more
-# appropriate setups it likes"). Came back a real, non-thin negative on first run (Spearman
-# ~0.04-0.05, non-monotonic, HIGH-confidence trades currently the WORST of the 3 buckets) --
-# self-recalibrates daily so this either firms up or reverses as real N grows, per this
-# codebase's own "no dead ends" rule.
-timed_step daily /usr/bin/node scripts/recalibrate_ml_probability_sizing_pretest.mjs
-
-# Does the ML gate genuinely discriminate WITHIN Globex, not just RTH (2026-09-21, user:
-# "Globex is killing me every which way... which trades to fire"). Adding an explicit
-# is_rth feature flipped the Globex TAKE bucket's sign in one retrain at N<20 either side --
-# too thin to trust yet either direction. Tracks daily with a real day-blocked bootstrap CI
-# so the next read is trustworthy instead of another single noisy snapshot.
-timed_step daily /usr/bin/node scripts/recalibrate_ml_globex_split.mjs
 
 # OVERNIGHT_ORDERFLOW_LONG/SHORT entry calibration (2026-09-21, RESEARCH_CLAIM
 # overnight_9pm_orderflow_predicts_rth_direction_20260921) -- re-derives the stop distance x
@@ -159,8 +138,6 @@ timed_step daily /usr/bin/node scripts/backtest_setup_status.mjs
 timed_step daily /usr/bin/node scripts/calibrate_live_roster.mjs
 # Roster scoreboard (2026-10-25): live roster gate vs trading everything, pre-registered (docs/ROSTER_SCOREBOARD_PREREG_20261025.md). Must run AFTER calibrate_live_roster.mjs (it reads the roster history).
 timed_step daily /usr/bin/node scripts/roster_scoreboard.mjs
-# Pre-registered ML ranking test (docs/ML_RANKING_TEST_ADDENDUM_20261025.md): does nothing before 2026-10-28, runs once, records the verdict and resolves its decision. Read-only on live behavior.
-timed_step daily /usr/bin/node scripts/run_ml_ranking_test_20261027.mjs
 timed_step daily /usr/bin/node scripts/derive_day_types.js
 
 # Day-type-conditioned IB_BEARISH/IB_BULLISH stop/target (2026-08-03,
@@ -267,27 +244,6 @@ timed_step daily /usr/bin/node scripts/verify_prior_day_trend_gate_live.mjs
 # recheck condition is met, then auto-update the RESEARCH_CLAIM with fresh real numbers.
 timed_step daily /usr/bin/node scripts/verify_va_overlap_streak_real_coverage.mjs
 timed_step daily /usr/bin/node scripts/verify_wide_ib_turbulent_exit_timing_recheck.mjs
-
-# Tick-microstructure trend/efficiency-ratio fade-outcome finding (2026-09-23) --
-# PROVISIONAL, not yet confirmed. Moved from weekly to DAILY same day per user request
-# (matching the precedent already set for the live trade meta-labeler's own walk-forward
-# recheck: cheap to run, and daily catches newly-resolved real fade fires as they happen
-# instead of waiting up to a week). Re-runs the real active_setups join + LightGBM
-# classifier against a genuinely sliding 183-day window and updates
-# RESEARCH_CLAIM tick_trend_efficiency_fade_outcome_provisional_20260923 either way --
-# each run appends a new performance_audit row (this table's own append-only
-# convention), so the FULL day-by-day history of the AUC/p-value is preserved, not just
-# the latest snapshot -- see scripts/report_tick_trend_fade_history.mjs to view the trend
-# and judge whether the finding is stable/reliable over time, not just whether any single
-# day's number clears a bar. Never auto-promotes to CONFIRMED even if the numbers
-# improve -- that's a human call. See docs/TICK_MICROSTRUCTURE_PILOT_SPEC.md.
-timed_step daily /usr/bin/node scripts/recheck_tick_trend_fade_finding.mjs
-
-# Same daily self-recalibration discipline, applied to the ordinal "how far will it run"
-# (reach_R) fade-outcome model (RESEARCH_CLAIM ordinal_reach_r_track_b_harness_20260924,
-# 2026-09-24). Fade-only, tick-based -- the all-setups/bar-only variant tested the same day
-# was negative (Spearman -0.1997, fails its own permutation null) and is NOT rechecked here.
-timed_step daily /usr/bin/node scripts/recheck_ordinal_reach_r_finding.mjs
 
 # Same daily self-recalibration discipline, applied to the MAE/MFE quantile path-distribution
 # gating finding (RESEARCH_CLAIM mae_mfe_quantile_pathdist_gate_20260924, 2026-09-24 --
