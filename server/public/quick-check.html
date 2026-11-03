@@ -363,7 +363,6 @@
   <a onclick="switchPageTab('performance')">Performance</a>
   <a href="/setup-performance">Setup Performance →</a>
   <a href="/loss-prevention">Loss Prevention →</a>
-  <a onclick="jumpTo('sec-models')">Models</a>
   <a onclick="openMonitor('mon-scoreboard')">Monitor: Roster Scoreboard</a>
   <a onclick="openMonitor('mon-ml')">Monitor: ML Scorecard &amp; Ranking Test</a>
   <a onclick="openMonitor('mon-gates')">Monitor: Research Gates</a>
@@ -530,16 +529,6 @@
     <div id="ml-tab-step-trail" style="margin-top:14px;"></div>
     <div id="ml-tab-trades" style="margin-top:10px;"></div>
   </div>
-</div>
-
-<div class="wrap section-block" id="sec-models">
-  <h2>Models</h2>
-  <div class="perf-head-row">
-    <div class="perf-subhead">Meta-Labeler (log only)</div>
-  </div>
-  <div id="models-stat-row" style="font-size:12px;color:var(--dim);margin-top:8px;display:flex;gap:14px;flex-wrap:wrap;"></div>
-  <canvas id="models-history-canvas" class="equity" style="margin-top:10px;"></canvas>
-  <div id="models-detail" style="margin-top:10px;font-size:11px;color:var(--dim);"></div>
 </div>
 
 <div id="modal-backdrop">
@@ -769,7 +758,7 @@ function renderVolRegimeHistoryChart(canvasId, rows, band) {
 // comparison aggregation here -- per the DeepSeek critique's explicit warning against
 // reimplementing this kind of aggregation twice across two frontend surfaces. Standalone
 // card removed 2026-09-24 (user request: consolidate into the "Models" section,
-// loadModelsTab()) -- a "tap for full detail" link there used to open this as a modal;
+// (the Models section, removed 2026-11-02) -- a "tap for full detail" link there used to open this as a modal;
 // promoted to its own permanent page tab (#sec-ml, "ML") 2026-10-04 (user request: "add ML
 // performance right before shadow so i can access it there") -- the modal's own HTML-string
 // construction was deleted outright (not left dead) since this is now its only consumer.
@@ -3352,35 +3341,7 @@ function setClusterView(v) {
   renderPerformance();
 }
 
-// "Models" section (consolidated 2026-09-24, trimmed 2026-11-02). The Binary (frozen tick-trend fade), Ordinal (reach_R) and Propensity tabs were removed 2026-11-02:
-// frozen-model AUC 0.523 on 25 new days, ordinal Spearman 0.03 (permutation p 0.35), propensity a static 2026-09-24 snapshot nothing refreshed (see docs/OPEN_THREADS.md).
-// Only the Meta-Labeler remains, and it is log-only (ML_VETO_GATE.enforce=false); its pre-registered ranking test FAILED 2026-10-28.
-const MODEL_EXPLAINER = 'What this tests: should a real setup signal actually be taken or vetoed, based on patterns learned from real prior outcomes. Fully isolated -- it never changes what fires as a real alert, it only tracks what WOULD have happened if its calls were followed. Its pre-registered ranking test failed (2026-10-28), so this is a log-only monitor.';
-
-async function loadModelsTab() {
-  const statRow = $('models-stat-row');
-  const detail = $('models-detail');
-  if (!statRow || !detail) return;
-  const explainerHtml = '<div style="margin-bottom:8px;">' + MODEL_EXPLAINER + '</div>';
-  try {
-    const [summary, rangeData] = await Promise.all([
-      fetch('/api/ml-silo/summary?sample=test', { cache: 'no-store' }).then(r => r.json()),
-      fetch('/api/ml-silo/range-trades?range=all&sample=test', { cache: 'no-store' }).then(r => r.json()),
-    ]);
-    const all = summary?.comparison?.allTrades;
-    const take = summary?.comparison?.byVerdict?.find(v => v.verdict === 'TAKE');
-    const allPnl = Number(all?.total_pnl || 0);
-    const takePnl = Number(take?.total_pnl || 0);
-    const fmtD = n => (n < 0 ? '-$' : '$') + Math.abs(n).toFixed(0);
-    statRow.innerHTML =
-      '<span>All: <b style="color:' + (allPnl >= 0 ? 'var(--green)' : 'var(--red)') + '">' + fmtD(allPnl) + '</b></span>' +
-      '<span>ML-approved: <b style="color:' + (takePnl >= 0 ? 'var(--green)' : 'var(--red)') + '">' + fmtD(takePnl) + '</b></span>';
-    const trades = rangeData?.trades || [];
-    const takeTrades = trades.filter(t => t.ml_verdict === 'TAKE');
-    renderMlSiloRangeEquityChart('models-history-canvas', trades, takeTrades, 'all');
-    detail.innerHTML = explainerHtml + '<div style="cursor:pointer;color:var(--dim);" onclick="switchPageTab(\'ml\')">tap for full detail (range filters, trade list) →</div>';
-  } catch (e) { detail.innerHTML = explainerHtml + '<div>Failed to load</div>'; }
-}
+// The standalone "Models" section was removed 2026-11-02: the log-only Meta-Labeler is already covered by the ML tab and the Monitor ML scorecard (docs/ML_CLEANUP_20261102.md).
 
 // Re-renders from already-fetched cached data -- no network call, so the Live/All toggle
 // switches instantly.
@@ -3706,7 +3667,7 @@ renderSharedFilters();
 
 // SUPPRESS_ALL_DISABLED / ALL_LEVELS_LIVE banner (2026-09-26) -- see the #flags-banner div's
 // own comment above. Slow-changing (a manual code flip, not live data) but polled at the same
-// 5min cadence as loadVolRegime/loadModelsTab so a flip mid-session is still caught without
+// 5min cadence as loadVolRegime so a flip mid-session is still caught without
 // needing a page reload.
 // Status dot next to the NQ price (2026-10-05). Replaces the full-width banner, which blocked
 // the hamburger. Red = Sierra Chart DISARMED (no real orders); yellow = a status check failed
@@ -3930,15 +3891,13 @@ loadBreakevenStopShadowSummary(); // slow-changing (live query over real trades)
 loadEntryFlowShadowSummary(); // slow-changing (live query over real trades) -- fetch once, no poll
 loadDayType();
 loadVolRegime(); // slow-changing (nightly cron writes it) -- poll every 5min below, not every 15s like the live pulse
-loadModelsTab(); // consolidated Models section (2026-09-24) -- slow-changing (daily recheck/manual retrain), poll every 5min below
 loadPulseReading(); // live, but bar-level (5-min) not tick-level -- 60s poll is plenty, no need for loadPulse's 15s cadence
 setInterval(loadPulse, 15000);
 setInterval(loadTimeline, 20000);
 setInterval(() => loadRange(currentRange), 60000);
 setInterval(loadVolRegime, 300000);
-setInterval(loadModelsTab, 300000);
-// Same 5-minute cadence as loadModelsTab/loadVolRegime (this data isn't second-to-second --
-// scored candidates, not live price) -- matches loadModelsTab's own "poll regardless of
+// Same 5-minute cadence as loadVolRegime (this data isn't second-to-second --
+// scored candidates, not live price) -- matches the "poll regardless of
 // which tab is visible" convention rather than gating on pageTab==='ml'.
 setInterval(() => loadMlTabRange(mlTabRange), 300000);
 setInterval(loadPulseReading, 60000);
@@ -3962,7 +3921,6 @@ document.addEventListener('visibilitychange', () => {
   loadTimeline();
   loadRange(currentRange);
   loadVolRegime();
-  loadModelsTab();
   loadPulseReading();
   // Found live 2026-10-13: this was the ONE poll function missing from this list -- the
   // Sierra Chart armed/disarmed dot could sit stuck on stale data (including showing
