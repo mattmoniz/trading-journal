@@ -3403,6 +3403,33 @@ const monMoney = (v) => v == null ? 'n/a' : (v < 0 ? '-$' : '+$') + Math.abs(v).
 function monBox(id, title, inner) { return '<div id="' + id + '" style="border:1px solid var(--border);border-radius:8px;padding:10px 12px;margin-bottom:12px"><div style="font-weight:700;margin-bottom:6px">' + title + '</div>' + inner + '</div>'; }
 function monRow(k, v) { return '<div style="display:flex;justify-content:space-between;gap:10px;font-size:13px;padding:2px 0"><span style="color:var(--dim)">' + k + '</span><span style="text-align:right">' + v + '</span></div>'; }
 function monErr(x) { return x && x.state === 'ERROR' ? '<div style="color:#e0a030;font-size:13px">could not load: ' + monEsc(x.error) + '</div>' : null; }
+// ---- at-a-glance + collapsible details (2026-11-03, user: "everything looks data heavy and unorganized, hard to look at") ----
+// Status cards first (colour = how to read it, never advice), charts next, the dense number tables collapsed at the bottom.
+function monChip(label, value, sub, color) {
+  const c = { green: '#22c55e', red: '#ef4444', amber: '#f59e0b', gray: '#64748b' }[color || 'gray'];
+  return '<div style="border:1px solid var(--border);border-left:4px solid ' + c + ';border-radius:8px;padding:8px 10px;min-width:0"><div style="font-size:11px;color:var(--dim);text-transform:uppercase;letter-spacing:.04em">' + monEsc(label) + '</div><div style="font-size:18px;font-weight:700;line-height:1.25;overflow-wrap:anywhere">' + value + '</div>' + (sub ? '<div style="font-size:11.5px;color:var(--dim);line-height:1.35">' + sub + '</div>' : '') + '</div>';
+}
+function monDetails(id, title, inner) {
+  return '<details id="' + id + '" style="border:1px solid var(--border);border-radius:8px;padding:8px 12px;margin-bottom:10px"><summary style="cursor:pointer;font-weight:700;font-size:14px">' + title + '</summary><div style="margin-top:8px">' + inner + '</div></details>';
+}
+function glanceChips(d, lm) {
+  const sb = d.scoreboard || {}, un = (d.mlUnseen && d.mlUnseen.latest) || null, fw = d.forwardTests || {}, A = sb.arms || {}, hc = lm && lm.state === 'OK' && learningHc, money0 = v => v == null ? 'n/a' : (v < 0 ? '-$' : '+$') + Math.abs(v).toFixed(2);
+  const pn = v => v == null ? 'gray' : v < 0 ? 'red' : 'green'; let c = '';
+  if (sb.state === 'OK') c += monChip('Scoreboard', monEsc(sb.daysSoFar) + ' / ' + monEsc(sb.firstLookDays) + ' days', 'first look at ' + monEsc(sb.firstLookDays) + ' days · ' + monEsc(String(sb.verdict || '').toLowerCase().replace(/_/g, ' ')), 'gray');
+  if (A.ROSTER_LIVE && A.TAKE_ALL_EX_ROSTER) c += monChip('Roster vs the rest', money0(A.ROSTER_LIVE.perTrade) + ' vs ' + money0(A.TAKE_ALL_EX_ROSTER.perTrade), 'per trade, model P&L · live roster vs skipped (' + A.ROSTER_LIVE.n + ' vs ' + A.TAKE_ALL_EX_ROSTER.n + ' trades)', pn(A.ROSTER_LIVE.perTrade));
+  if (lm && lm.state === 'OK' && lm.firedVsSkipped && lm.firedVsSkipped.mlTake && lm.firedVsSkipped.mlVeto) {
+    const g = (x) => hc ? x.perTradeHaircut : x.perTrade, tk = g(lm.firedVsSkipped.mlTake), vt = g(lm.firedVsSkipped.mlVeto);
+    c += monChip('Meta-labeler (log only)', 'TAKE ' + money0(tk) + ' · VETO ' + money0(vt), 'per trade' + (tk < vt ? ' · TAKE is below VETO (inverted so far)' : ''), tk < vt ? 'red' : 'green');
+  } else if (un) c += monChip('Meta-labeler unseen days', monEsc(un.unseenDays) + ' / ' + monEsc(d.mlUnseen.daysNeeded), 'passes gate rule: ' + (un.pass ? 'yes' : 'no'), un.pass ? 'green' : 'gray');
+  if (lm && lm.state === 'OK') {
+    const be = lm.brokerEvidence; c += monChip('Real broker evidence', be.n + ' trades', be.days + ' days · simulator account · ' + money0(be.pnl), 'amber');
+    const dl = (lm.delay || []).slice(-1)[0]; if (dl) c += monChip('Signal-to-order delay', dl.median + ' s', 'latest day, median · p90 ' + dl.p90 + ' s · target 15 s', dl.median <= 15 ? 'green' : dl.median <= 90 ? 'amber' : 'red');
+    c += monChip('Learning bot', lm.bot ? lm.bot.take.n + ' taken' : 'not running', lm.bot ? 'version ' + monEsc(lm.bot.latestVersion) : 'appears here once a shadow bot logs decisions', lm.bot ? 'green' : 'gray');
+  }
+  if (fw.tell) c += monChip('AMT tell (sim orders)', fw.tell.trades + ' trades', money0(fw.tell.pnl) + ' · review at ' + fw.tell.floor + ' trades', pn(fw.tell.pnl));
+  if (fw.forecast) c += monChip('Forecast service', monEsc(fw.forecast.days) + ' / ' + monEsc(fw.forecast.daysNeeded) + ' days', 'forward test collecting data', 'gray');
+  return '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px">' + c + '</div>';
+}
 function renderMonitor(d, err) {
   const el = $('monitor-body'); if (!el) return;
   if (!d) { el.innerHTML = '<div style="color:#e0a030;font-size:13px">Monitor data could not be loaded (' + monEsc(err || 'unknown') + '). Will retry.</div>'; return; }
@@ -3421,7 +3448,7 @@ function renderMonitor(d, err) {
         + '<div style="font-size:11.5px;color:var(--dim);margin-top:4px">Pre-registered; nothing is concluded before the first look. Saved ' + monEsc(sb.savedOn) + '.</div>';
     }
   }
-  box.sb = monBox('mon-scoreboard', 'Roster Scoreboard (pre-registered)', b);
+  box.sb = monDetails('mon-scoreboard', 'Details: roster scoreboard (pre-registered)', b);
   // ML
   b = monErr(un);
   if (!b) {
@@ -3436,7 +3463,7 @@ function renderMonitor(d, err) {
       + (L.bySession ? monRow('By session', monEsc(JSON.stringify(L.bySession))) : '')
       + '<div style="font-size:11.5px;color:var(--dim);margin-top:4px">Weekly (Sunday night). The ML stays log-only unless it passes two weeks in a row.</div>';
   }
-  box.ml = monBox('mon-ml', 'ML Scorecard', b);
+  box.ml = monDetails('mon-ml', 'Details: meta-labeler scorecard', b);
   // forward tests (counts only; skill is read at the pre-set looks, never here)
   b = monErr(fw);
   if (!b) {
@@ -3446,7 +3473,7 @@ function renderMonitor(d, err) {
       + monRow('Tell, Sim1 orders', '<b>' + monEsc(T.trades) + ' / ' + monEsc(T.floor) + '</b> trades · ' + monEsc(T.days) + ' days · ' + monMoney(T.pnl) + ' total')
       + '<div style="font-size:11.5px;color:var(--dim);margin-top:4px">Counts only. Each is judged once at its pre-set look; no rule changes before then.</div>';
   }
-  box.fw = monBox('mon-forward', 'Forward Tests', b);
+  box.fw = monDetails('mon-forward', 'Details: forward tests', b);
   // gates
   b = monErr(gt);
   if (!b) {
@@ -3457,11 +3484,11 @@ function renderMonitor(d, err) {
       + monRow('Breakeven stop (live)', on(gt.breakevenStopLive)) + monRow('T1-floor runner shadow', on(gt.t1FloorShadow))
       + monRow('09:31 overnight-levels refresh', c ? monEsc(c.status) + ' · ' + monEsc(c.t) : 'no run recorded yet');
   }
-  box.gt = monBox('mon-gates', 'Research Gates', b);
+  box.gt = monDetails('mon-gates', 'Details: research gates', b);
   const P = learningParts(d), foot = '<div style="font-size:11.5px;color:var(--dim)">Updated ' + monEsc(d.generatedAt) + '. Read-only; nothing here changes live trading.</div>';
-  // one page, in reading order: where it stands, P&L by arm, fires vs skips, the pre-registered scoreboard, the meta-labeler (chart then scorecard), bots then forward tests, delay, pass race, research gates
-  el.innerHTML = P.notice ? P.notice + box.sb + box.ml + box.fw + box.gt + foot
-    : P.head + P.top + P.cum + P.fire + box.sb + P.ml + box.ml + P.bots + box.fw + P.delay + P.race + box.gt + P.notes + foot;
+  // order: at-a-glance cards, charts (P&L by arm, fires vs skips, meta-labeler, bots, delay, pass race), then the collapsed number tables
+  el.innerHTML = P.notice ? glanceChips(d, null) + P.notice + box.sb + box.ml + box.fw + box.gt + foot
+    : P.head + P.top + P.cum + P.fire + P.ml + P.bots + P.delay + P.race + box.sb + box.ml + box.fw + box.gt + P.notes + foot;
   bindLearning();
 }
 async function loadMonitor(force) {
@@ -3522,10 +3549,8 @@ function learningParts(d) {
   const hasBot = !!S.BOT_SELECTED, arms = (hasBot ? ['BOT_SELECTED'] : []).concat(['ROSTER_LIVE', 'ROSTER_WOULD_BE', 'TAKE_ALL_EX_ROSTER', 'TAKE_ALL']), P = {};
   P.head = '<div style="font-size:12px;color:var(--dim);margin-bottom:8px">Learning data built ' + (age < 1 ? 'less than an hour' : age + ' h') + ' ago (nightly). MODEL P&L from bars unless labelled broker. Window starts ' + monEsc(String(lm.scoreboardStart).slice(0, 10)) + '. '
     + '<label style="white-space:nowrap"><input type="checkbox" id="lm-hc" ' + (hc ? 'checked' : '') + '> after $' + lm.haircutUsd + '/trade slippage (commission already in P&L)</label> <button id="lm-refresh" style="font-size:12px">Refresh</button></div>';
-  P.top = monBox('lm-top', 'Where it stands', monRow('Scoreboard days', '<b>' + monEsc(sb.days) + ' / ' + monEsc(sb.firstLookDays) + '</b> (first look at ' + monEsc(sb.firstLookDays) + '); verdict so far ' + monEsc(sb.verdict))
-    + monRow('Real broker evidence', '<b style="color:#f59e0b">' + lm.brokerEvidence.n + ' trades</b> on ' + lm.brokerEvidence.days + ' days, ' + monMoney(lm.brokerEvidence.pnl) + ' (simulator account)')
-    + monRow('Roster now', monEsc((sb.rosterNow || []).join(', ') || 'none')) + monRow('Meta-labeler unseen days', un ? un.unseenDays + ' / ' + d.mlUnseen.daysNeeded + ' (policy minus random ' + monEsc(un.policyMinusRandom) + ', pass ' + monEsc(un.pass) + ')' : 'no scorecard'));
-  P.cum = monBox('lm-cum', 'Cumulative P&L by arm', '<div style="font-size:12px;color:var(--dim);margin-bottom:4px">Each line is a set of rules replayed on the same candidate fires. Take-everything is multi-position, not what one MNQ could do.</div>' + lmLines(lmMerge(S, arms, key), arms.map(a => ({ k: a, color: LM_COL[a], label: LM_LABEL[a], w: a === 'ROSTER_LIVE' ? 3 : 2 }))));
+  P.top = glanceChips(d, lm);
+  P.cum = monBox('lm-cum', 'Cumulative P&L by arm', '<div style="font-size:12px;color:var(--dim);margin-bottom:4px">Each line replays one set of rules on the same fires. Take-everything is multi-position, not one MNQ.</div>' + lmLines(lmMerge(S, arms, key), arms.map(a => ({ k: a, color: LM_COL[a], label: LM_LABEL[a], w: a === 'ROSTER_LIVE' ? 3 : 2 }))));
   const rows = [['firedLive', 'Fired live (roster)'], ['onRosterNotFiredLive', 'On roster, not fired live'], ['skippedByRoster', 'Skipped by roster'], ['mlTake', 'ML TAKE (log only)'], ['mlVeto', 'ML VETO (log only)']];
   P.fire = monBox('lm-fire', 'What it fires and what it skips', lmBars(lm.perDay || [], 'firedLive', 'skipped', LM.blue, LM.amber, 'Fired live', 'Skipped by roster') + '<div style="margin-top:6px">' + rows.map(r => monRow(r[1], (fv[r[0]] ? fv[r[0]].n : 0) + ' trades · <span style="' + col(pt(fv[r[0]])) + '">' + monMoney(pt(fv[r[0]])) + '</span>/trade')).join('') + '</div>');
   P.ml = monBox('lm-ml', 'Meta-labeler: TAKE vs VETO (log only, nothing is gated)', lmLines(lmMerge(S, ['ML_TAKE', 'ML_VETO', 'TAKE_ALL'], key), ['ML_TAKE', 'ML_VETO', 'TAKE_ALL'].map(a => ({ k: a, color: LM_COL[a], label: LM_LABEL[a] }))));
