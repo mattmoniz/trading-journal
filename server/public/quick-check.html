@@ -363,10 +363,7 @@
   <a onclick="switchPageTab('performance')">Performance</a>
   <a href="/setup-performance">Setup Performance →</a>
   <a href="/loss-prevention">Loss Prevention →</a>
-  <a onclick="openMonitor('mon-scoreboard')">Monitor: Roster Scoreboard</a>
-  <a onclick="openMonitor('mon-ml')">Monitor: ML Scorecard</a>
-  <a onclick="openMonitor('mon-forward')">Monitor: Forward Tests</a>
-  <a onclick="openMonitor('mon-gates')">Monitor: Research Gates</a>
+  <a onclick="switchPageTab('monitor')">Monitor &amp; Learning</a>
 </div>
 
 <div id="pulse-bar"><div id="pulse-col-1" class="pulse-col"></div><div id="pulse-col-2" class="pulse-col"></div></div>
@@ -454,7 +451,7 @@
   <!-- Monitor tab (2026-10-25, user request: extra monitor sections in the hamburger menu). Read-only view of the scheduled research gates, fed by
        GET /api/setups/monitor-summary (server/services/monitorSummary.js). Not clusterView/liveAllFilter-scoped: it shows account-level research state, not trades. -->
   <div id="tab-panel-monitor" style="display:none">
-    <div class="tab-head"><h2>Monitor</h2></div>
+    <div class="tab-head"><h2>Monitor &amp; Learning</h2></div>
     <div id="monitor-body"><div class="loading">loading…</div></div>
   </div>
 
@@ -3410,7 +3407,7 @@ function renderMonitor(d, err) {
   const el = $('monitor-body'); if (!el) return;
   if (!d) { el.innerHTML = '<div style="color:#e0a030;font-size:13px">Monitor data could not be loaded (' + monEsc(err || 'unknown') + '). Will retry.</div>'; return; }
   const sb = d.scoreboard || {}, un = d.mlUnseen || {}, fw = d.forwardTests || {}, gt = d.gates || {};
-  let h = '';
+  const box = {};
   // roster scoreboard
   let b = monErr(sb);
   if (!b) {
@@ -3424,7 +3421,7 @@ function renderMonitor(d, err) {
         + '<div style="font-size:11.5px;color:var(--dim);margin-top:4px">Pre-registered; nothing is concluded before the first look. Saved ' + monEsc(sb.savedOn) + '.</div>';
     }
   }
-  h += monBox('mon-scoreboard', 'Roster Scoreboard', b);
+  box.sb = monBox('mon-scoreboard', 'Roster Scoreboard (pre-registered)', b);
   // ML
   b = monErr(un);
   if (!b) {
@@ -3439,7 +3436,7 @@ function renderMonitor(d, err) {
       + (L.bySession ? monRow('By session', monEsc(JSON.stringify(L.bySession))) : '')
       + '<div style="font-size:11.5px;color:var(--dim);margin-top:4px">Weekly (Sunday night). The ML stays log-only unless it passes two weeks in a row.</div>';
   }
-  h += monBox('mon-ml', 'ML Scorecard', b);
+  box.ml = monBox('mon-ml', 'ML Scorecard', b);
   // forward tests (counts only; skill is read at the pre-set looks, never here)
   b = monErr(fw);
   if (!b) {
@@ -3449,7 +3446,7 @@ function renderMonitor(d, err) {
       + monRow('Tell, Sim1 orders', '<b>' + monEsc(T.trades) + ' / ' + monEsc(T.floor) + '</b> trades · ' + monEsc(T.days) + ' days · ' + monMoney(T.pnl) + ' total')
       + '<div style="font-size:11.5px;color:var(--dim);margin-top:4px">Counts only. Each is judged once at its pre-set look; no rule changes before then.</div>';
   }
-  h += monBox('mon-forward', 'Forward Tests', b);
+  box.fw = monBox('mon-forward', 'Forward Tests', b);
   // gates
   b = monErr(gt);
   if (!b) {
@@ -3460,9 +3457,12 @@ function renderMonitor(d, err) {
       + monRow('Breakeven stop (live)', on(gt.breakevenStopLive)) + monRow('T1-floor runner shadow', on(gt.t1FloorShadow))
       + monRow('09:31 overnight-levels refresh', c ? monEsc(c.status) + ' · ' + monEsc(c.t) : 'no run recorded yet');
   }
-  h += monBox('mon-gates', 'Research Gates', b);
-  h += '<div style="font-size:11.5px;color:var(--dim)">Updated ' + monEsc(d.generatedAt) + '. Read-only; nothing here changes live trading.</div>';
-  el.innerHTML = h;
+  box.gt = monBox('mon-gates', 'Research Gates', b);
+  const P = learningParts(d), foot = '<div style="font-size:11.5px;color:var(--dim)">Updated ' + monEsc(d.generatedAt) + '. Read-only; nothing here changes live trading.</div>';
+  // one page, in reading order: where it stands, P&L by arm, fires vs skips, the pre-registered scoreboard, the meta-labeler (chart then scorecard), bots then forward tests, delay, pass race, research gates
+  el.innerHTML = P.notice ? P.notice + box.sb + box.ml + box.fw + box.gt + foot
+    : P.head + P.top + P.cum + P.fire + box.sb + P.ml + box.ml + P.bots + box.fw + P.delay + P.race + box.gt + P.notes + foot;
+  bindLearning();
 }
 async function loadMonitor(force) {
   if (!force && Date.now() - monitorFetchedAt < 300000 && monitorLast) { renderMonitor(monitorLast); return; }
@@ -3470,11 +3470,78 @@ async function loadMonitor(force) {
   try { const r = await fetch('/api/setups/monitor-summary', { cache: 'no-store' }); if (!r.ok) throw new Error('HTTP ' + r.status); monitorLast = await r.json(); renderMonitor(monitorLast); }
   catch (e) { monitorLast = null; monitorFetchedAt = Date.now() - 270000; renderMonitor(null, e.message || 'error'); }
 }
-function openMonitor(id) {
+function openMonitor(id) {   // kept for old bookmarks; the sections now live in the single Monitor & Learning tab
   switchPageTab('monitor');
   setTimeout(() => { const el = $(id); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 400);
 }
 setInterval(() => { if (pageTab === 'monitor' && !document.hidden) loadMonitor(); }, 60000);
+
+
+// ---- Learning sections of the Monitor & Learning tab (2026-11-03; merged into the Monitor tab the same day, user: "there is a lot everywhere") ----
+// Same content as the app's Learning view (src/views/LearningMonitorView.jsx): cumulative P&L by arm, what it fires vs skips, meta-labeler TAKE vs VETO (log only), the bots, signal-to-order delay, virtual prop-account
+// pass race. Fed by the `learning` key of GET /api/setups/monitor-summary (one fetch for the whole tab, cache:'no-store'); a missing or failed feed renders an explicit amber notice. The slippage toggle is in-session display state (never persisted).
+let learningHc = true;
+const LM = { blue: '#3b82f6', purple: '#8b5cf6', green: '#22c55e', red: '#ef4444', amber: '#f59e0b', teal: '#14b8a6', muted: '#94a3b8' };
+const LM_COL = { BOT_SELECTED: LM.green, AMT_TELL_STAGE2: LM.green, ROSTER_LIVE: LM.blue, ROSTER_WOULD_BE: LM.teal, TAKE_ALL: LM.muted, TAKE_ALL_EX_ROSTER: LM.amber, ML_TAKE: LM.purple, ML_VETO: LM.red };
+const LM_LABEL = { BOT_SELECTED: 'Bot-selected (shadow)', AMT_TELL_STAGE2: 'AMT tell Stage 2', ROSTER_LIVE: 'Fired live (roster)', ROSTER_WOULD_BE: 'On roster (would fire)', TAKE_ALL: 'Take everything', TAKE_ALL_EX_ROSTER: 'Skipped by roster', ML_TAKE: 'ML says TAKE (log only)', ML_VETO: 'ML says VETO (log only)' };
+function lmMerge(series, arms, key) {
+  const dates = [...new Set(arms.flatMap(a => (series[a] || []).map(d => d.date)))].sort(), last = {};
+  return dates.map(date => { const row = { date }; arms.forEach(a => { const hit = (series[a] || []).find(d => d.date === date); if (hit) last[a] = hit[key]; row[a] = last[a] == null ? 0 : last[a]; }); return row; });
+}
+// lines: [{k, color, label, dash?}], refs: [{y, color, label}]. Plain SVG, responsive via viewBox.
+function lmLines(rows, lines, refs, opts) {
+  opts = opts || {}; const W = 340, H = opts.h || 170, L = 46, R = 8, T = 8, B = 22;
+  if (!rows.length) return '<div class="loading">no data yet</div>';
+  let vals = []; rows.forEach(r => lines.forEach(l => { if (r[l.k] != null) vals.push(r[l.k]); })); (refs || []).forEach(r => vals.push(r.y)); if (opts.zero !== false) vals.push(0);
+  let lo = Math.min(...vals), hi = Math.max(...vals); if (lo === hi) { lo -= 1; hi += 1; } const pad = (hi - lo) * 0.06; lo -= pad; hi += pad; if (opts.floor0 && lo < 0) lo = 0;
+  const X = i => L + (rows.length === 1 ? (W - L - R) / 2 : i * (W - L - R) / (rows.length - 1)), Y = v => T + (H - T - B) * (1 - (v - lo) / (hi - lo));
+  let s = '<svg viewBox="0 0 ' + W + ' ' + H + '" width="100%" style="display:block;max-width:560px">';
+  for (let k = 0; k <= 4; k++) { const v = lo + (hi - lo) * k / 4, y = Y(v); s += '<line x1="' + L + '" x2="' + (W - R) + '" y1="' + y + '" y2="' + y + '" stroke="#334155" stroke-width="0.5" stroke-dasharray="2 3"/><text x="' + (L - 4) + '" y="' + (y + 3) + '" fill="#94a3b8" font-size="10" text-anchor="end">' + Math.round(v) + '</text>'; }
+  (refs || []).forEach(r => { const y = Y(r.y); s += '<line x1="' + L + '" x2="' + (W - R) + '" y1="' + y + '" y2="' + y + '" stroke="' + r.color + '" stroke-width="1" stroke-dasharray="4 3"/><text x="' + (W - R) + '" y="' + (y - 2) + '" fill="' + r.color + '" font-size="9" text-anchor="end">' + monEsc(r.label || '') + '</text>'; });
+  if (opts.zero !== false) s += '<line x1="' + L + '" x2="' + (W - R) + '" y1="' + Y(0) + '" y2="' + Y(0) + '" stroke="#94a3b8" stroke-width="0.8"/>';
+  lines.forEach(l => { const pts = rows.map((r, i) => r[l.k] == null ? null : X(i).toFixed(1) + ',' + Y(r[l.k]).toFixed(1)).filter(Boolean).join(' '); s += '<polyline points="' + pts + '" fill="none" stroke="' + l.color + '" stroke-width="' + (l.w || 2) + '"' + (l.dash ? ' stroke-dasharray="' + l.dash + '"' : '') + '/>'; if (rows.length === 1) s += '<circle cx="' + X(0) + '" cy="' + Y(rows[0][l.k]) + '" r="3" fill="' + l.color + '"/>'; });
+  const lab = d => String(d).slice(5); s += '<text x="' + L + '" y="' + (H - 6) + '" fill="#94a3b8" font-size="10">' + monEsc(lab(rows[0].date)) + '</text><text x="' + (W - R) + '" y="' + (H - 6) + '" fill="#94a3b8" font-size="10" text-anchor="end">' + monEsc(lab(rows[rows.length - 1].date)) + '</text></svg>';
+  return s + '<div style="display:flex;flex-wrap:wrap;gap:4px 12px;font-size:12px;margin-top:2px">' + lines.map(l => '<span style="color:' + l.color + '">&#9644; ' + monEsc(l.label) + '</span>').join('') + '</div>';
+}
+function lmBars(days, a, b, ca, cb, la, lb) {
+  if (!days.length) return '<div class="loading">no data yet</div>';
+  const W = 340, H = 130, L = 30, R = 6, T = 6, B = 20, n = days.length, bw = (W - L - R) / n, mx = Math.max(1, ...days.map(d => (d[a] || 0) + (d[b] || 0))), Y = v => T + (H - T - B) * (1 - v / mx);
+  let s = '<svg viewBox="0 0 ' + W + ' ' + H + '" width="100%" style="display:block;max-width:560px"><text x="' + (L - 4) + '" y="' + (T + 8) + '" fill="#94a3b8" font-size="10" text-anchor="end">' + mx + '</text><text x="' + (L - 4) + '" y="' + (H - B) + '" fill="#94a3b8" font-size="10" text-anchor="end">0</text>';
+  days.forEach((d, i) => { const x = L + i * bw + 2, w = Math.max(2, bw - 4), ya = Y(d[a] || 0), yb = Y((d[a] || 0) + (d[b] || 0)); s += '<rect x="' + x + '" y="' + ya + '" width="' + w + '" height="' + (Y(0) - ya) + '" fill="' + ca + '"/><rect x="' + x + '" y="' + yb + '" width="' + w + '" height="' + (ya - yb) + '" fill="' + cb + '"/>'; });
+  s += '<text x="' + L + '" y="' + (H - 5) + '" fill="#94a3b8" font-size="10">' + monEsc(String(days[0].date).slice(5)) + '</text><text x="' + (W - R) + '" y="' + (H - 5) + '" fill="#94a3b8" font-size="10" text-anchor="end">' + monEsc(String(days[n - 1].date).slice(5)) + '</text></svg>';
+  return s + '<div style="display:flex;gap:12px;font-size:12px"><span style="color:' + ca + '">&#9632; ' + monEsc(la) + '</span><span style="color:' + cb + '">&#9632; ' + monEsc(lb) + '</span></div>';
+}
+function learningParts(d) {
+  const lm = d && d.learning;
+  if (!lm || lm.state !== 'OK') {
+    const why = !lm ? 'the summary has no learning data yet (the server needs a restart to serve it)' : lm.state === 'NO_DATA' ? 'no data file yet (node scripts/learning_monitor_build.mjs, nightly)' : 'the data file could not be read (' + monEsc(lm.error) + ')';
+    return { notice: '<div style="color:#e0a030;font-size:13px;margin-bottom:10px">Learning charts unavailable: ' + why + '. The monitor sections below still work.</div>' };
+  }
+  const hc = learningHc, key = hc ? 'cumHaircut' : 'cum', S = lm.series || {}, fv = lm.firedVsSkipped || {}, sb = lm.scoreboard || {}, un = (d.mlUnseen && d.mlUnseen.latest) || null, fw = d.forwardTests || {};
+  const age = Math.round((Date.now() - new Date(lm.generatedAt).getTime()) / 3600000), pt = g => g ? (hc ? g.perTradeHaircut : g.perTrade) : null, col = v => (v == null ? '' : v < 0 ? 'color:#ef4444' : 'color:#22c55e');
+  const hasBot = !!S.BOT_SELECTED, arms = (hasBot ? ['BOT_SELECTED'] : []).concat(['ROSTER_LIVE', 'ROSTER_WOULD_BE', 'TAKE_ALL_EX_ROSTER', 'TAKE_ALL']), P = {};
+  P.head = '<div style="font-size:12px;color:var(--dim);margin-bottom:8px">Learning data built ' + (age < 1 ? 'less than an hour' : age + ' h') + ' ago (nightly). MODEL P&L from bars unless labelled broker. Window starts ' + monEsc(String(lm.scoreboardStart).slice(0, 10)) + '. '
+    + '<label style="white-space:nowrap"><input type="checkbox" id="lm-hc" ' + (hc ? 'checked' : '') + '> after $' + lm.haircutUsd + '/trade slippage (commission already in P&L)</label> <button id="lm-refresh" style="font-size:12px">Refresh</button></div>';
+  P.top = monBox('lm-top', 'Where it stands', monRow('Scoreboard days', '<b>' + monEsc(sb.days) + ' / ' + monEsc(sb.firstLookDays) + '</b> (first look at ' + monEsc(sb.firstLookDays) + '); verdict so far ' + monEsc(sb.verdict))
+    + monRow('Real broker evidence', '<b style="color:#f59e0b">' + lm.brokerEvidence.n + ' trades</b> on ' + lm.brokerEvidence.days + ' days, ' + monMoney(lm.brokerEvidence.pnl) + ' (simulator account)')
+    + monRow('Roster now', monEsc((sb.rosterNow || []).join(', ') || 'none')) + monRow('Meta-labeler unseen days', un ? un.unseenDays + ' / ' + d.mlUnseen.daysNeeded + ' (policy minus random ' + monEsc(un.policyMinusRandom) + ', pass ' + monEsc(un.pass) + ')' : 'no scorecard'));
+  P.cum = monBox('lm-cum', 'Cumulative P&L by arm', '<div style="font-size:12px;color:var(--dim);margin-bottom:4px">Each line is a set of rules replayed on the same candidate fires. Take-everything is multi-position, not what one MNQ could do.</div>' + lmLines(lmMerge(S, arms, key), arms.map(a => ({ k: a, color: LM_COL[a], label: LM_LABEL[a], w: a === 'ROSTER_LIVE' ? 3 : 2 }))));
+  const rows = [['firedLive', 'Fired live (roster)'], ['onRosterNotFiredLive', 'On roster, not fired live'], ['skippedByRoster', 'Skipped by roster'], ['mlTake', 'ML TAKE (log only)'], ['mlVeto', 'ML VETO (log only)']];
+  P.fire = monBox('lm-fire', 'What it fires and what it skips', lmBars(lm.perDay || [], 'firedLive', 'skipped', LM.blue, LM.amber, 'Fired live', 'Skipped by roster') + '<div style="margin-top:6px">' + rows.map(r => monRow(r[1], (fv[r[0]] ? fv[r[0]].n : 0) + ' trades · <span style="' + col(pt(fv[r[0]])) + '">' + monMoney(pt(fv[r[0]])) + '</span>/trade')).join('') + '</div>');
+  P.ml = monBox('lm-ml', 'Meta-labeler: TAKE vs VETO (log only, nothing is gated)', lmLines(lmMerge(S, ['ML_TAKE', 'ML_VETO', 'TAKE_ALL'], key), ['ML_TAKE', 'ML_VETO', 'TAKE_ALL'].map(a => ({ k: a, color: LM_COL[a], label: LM_LABEL[a] }))));
+  const tell = fw.tell, bot = lm.bot;
+  P.bots = monBox('lm-bots', 'Bots', '<div style="font-weight:600;color:#22c55e;font-size:13px">Learning bot (shadow)</div>' + (bot ? monRow('Version / decisions', monEsc(bot.latestVersion) + ' · ' + bot.decisions + ' on ' + bot.daysLogged + ' days') + monRow('TAKE', bot.take.n + ' trades · <span style="' + col(pt(bot.take)) + '">' + monMoney(pt(bot.take)) + '</span>/trade') + monRow('SKIP (avoided / left on the table)', bot.skip.n + ' trades · <span style="' + col(pt(bot.skip)) + '">' + monMoney(pt(bot.skip)) + '</span>/trade') : '<div style="font-size:12.5px;color:var(--dim)">Not running yet. Once a frozen shadow bot writes its decisions (performance_audit BOT_DECISION rows) its arm, skipped set, calibration and pass race appear here automatically.</div>')
+    + '<div style="font-weight:600;color:#22c55e;font-size:13px;margin-top:8px">AMT tell Stage 2 (sim account, running)</div>' + (tell ? monRow('Trades / P&L', tell.trades + ' on ' + tell.days + ' days · ' + monMoney(tell.pnl) + ' model P&L') + monRow('Review at', tell.floor + ' trades (rules frozen until then)') : '') + lmLines(lmMerge(S, ['AMT_TELL_STAGE2'], key), [{ k: 'AMT_TELL_STAGE2', color: LM.green, label: 'Tell cumulative' }], null, { h: 120 }));
+  P.delay = monBox('lm-delay', 'Signal-to-order delay (market entries)', '<div style="font-size:12px;color:var(--dim);margin-bottom:4px">Seconds from signal to order. Realistic 15 s, stress 90 s. A 15 s delay is about 2.9 points of drift in regular hours.</div>' + lmLines((lm.delay || []).map(x => ({ date: x.date, median: x.median, p90: x.p90 })), [{ k: 'median', color: LM.blue, label: 'Median s' }, { k: 'p90', color: LM.amber, label: 'p90 s' }], [{ y: 15, color: LM.green, label: '15 s' }, { y: 90, color: LM.red, label: '90 s' }], { zero: false, floor0: true }));
+  P.race = monBox('lm-race', 'Pass race (virtual prop account)', '<div style="font-size:12px;color:var(--dim);margin-bottom:4px">Reach +$' + lm.passTarget + ' before the $' + lm.trailLoss + ' end-of-day trailing loss. A virtual bust is logged and the account resets, so the learning keeps going.</div>'
+    + Object.keys(lm.passRace || {}).map(k => { const v = lm.passRace[k], pass = v.attempts.filter(a => a.result === 'PASS').length; return '<div style="font-weight:600;font-size:13px;color:' + LM_COL[k] + ';margin-top:6px">' + monEsc(LM_LABEL[k]) + ': attempts ' + v.attempts.length + ' (pass ' + pass + ', bust ' + (v.attempts.length - pass) + '); now ' + monMoney(v.open.equity) + ', floor ' + monMoney(v.open.floor) + '</div>' + lmLines(v.path, [{ k: 'equity', color: LM_COL[k], label: 'Equity' }, { k: 'floor', color: LM.red, label: 'Floor', dash: '4 3', w: 1 }], [{ y: lm.passTarget, color: LM.green, label: 'target' }], { h: 130 }); }).join(''));
+  P.notes = '<div style="font-size:11.5px;color:var(--dim);margin-bottom:8px">' + (lm.notes || []).map(monEsc).join('<br>') + '</div>';
+  return P;
+}
+function bindLearning() {
+  const cb = $('lm-hc'); if (cb) cb.onchange = () => { learningHc = cb.checked; renderMonitor(monitorLast); };
+  const rf = $('lm-refresh'); if (rf) rf.onclick = () => loadMonitor(true);
+}
 
 // ---- Tell tab (2026-10-28) ----
 // Watch-only view of the live node-ladder tell detector. Every fetch is cache:'no-store'; a failed fetch renders an explicit "can't load" state. The bar-reading toggle and the date are in-session display state:

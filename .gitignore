@@ -88,3 +88,4 @@ scripts/ml_meta_labeling/artifacts/
 
 
 .env.bak.*
+public/learning_monitor.json

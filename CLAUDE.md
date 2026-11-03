@@ -201,6 +201,7 @@ Full text of each entry: `docs/CLAUDE_MD_ARCHIVE/conventions.md`, anchor = the i
 - A 'grep every call site' sweep must be repo-wide (`grep -rn ... .`); directory-scoped sweeps missed `server/routes/sierraChart.js` twice. (cv-107)
 - A prop-firm evaluation account does not carry retail CME margin; never judge its margin figures against generic CME numbers, ask the user what they actually see. (cv-108)
 - The Claude Code sandbox classifier also blocks ARMING the kill switch; if denied, stop, don't retry another way, report what's verified and hand the arm step to the user. (cv-109)
+- New monitors, scoreboards, learning arms, bots and forward tests go in the one Monitor & Learning page (phone Monitor tab, app Learning view) as a new section, not a new tab or menu entry. (cv-110) (cv-110)
 
 ## Collaboration
 
@@ -230,30 +231,18 @@ Full text of each entry: `docs/CLAUDE_MD_ARCHIVE/collaboration.md`, anchor = the
 
 ## Where to look
 
-Index of 125 research threads and system notes (one line each, linked): [docs/CLAUDE_MD_ARCHIVE/where_to_look.md](docs/CLAUDE_MD_ARCHIVE/where_to_look.md). The pointers below are the structural entry points; everything else is a grep away in that index. Check `docs/OPEN_THREADS.md` and `node scripts/flag_decision.mjs --list` first.
+Index of 125 research threads and system notes (one line each): [docs/CLAUDE_MD_ARCHIVE/where_to_look.md](docs/CLAUDE_MD_ARCHIVE/where_to_look.md); grep it before building or exploring (it also holds the Alpha Engine overview, Opus audit prompts, data-sanity audit, OPTIMAL_STOP rows, Setup Reference, Research Ledger and pipeline freshness report). Check `docs/OPEN_THREADS.md` and `node scripts/flag_decision.mjs --list` first. Structural entry points:
 
 - Sierra Chart DTC order placement: `server/services/sierraChart/` (dtcClient, orderSweep, reconciliation, connectionManager, orderEligibility kill switch); account via `config/dtc-accounts/*.env`. (wl-015)
-- Quick-check page for phone/Home Assistant: `server/public/quick-check.html` at `GET /quick-check`, via the Cloudflare tunnel with an exact-path allowlist; reads `active_setups`, not `trades`. (wl-023)
+- Quick-check page for phone/Home Assistant: `server/public/quick-check.html` at `GET /quick-check`, via the Cloudflare tunnel with an exact-path allowlist; reads `active_setups`, not `trades`. Its Monitor tab is the single Monitor & Learning page (cv-110). (wl-023)
 - Level fade alpha engine (suppression, `keepLevels`, sizing): `server/routes/acd.js` ~5205-7300; sizing now `computeSizeMultiplier()` in `server/services/touchQuality.js`. (wl-024)
-- Alpha Engine overview: Edge > Alpha Engine tab (`AlphaEngineOverview.jsx`), plain-English summary of system components, size factors, suppressed setups and road map. (wl-065)
-- Opus audit prompts: `docs/OPUS_AUDIT_PROMPT.md` through `_5.md`, five strategic-review audits run manually with Opus, not automated. (wl-066)
-- DB migration protocol: [docs/DB_MIGRATION_PROTOCOL.md](docs/DB_MIGRATION_PROTOCOL.md); read before any `ALTER TABLE`, bulk `UPDATE` or backfill script (no tracked migration files exist). (wl-067)
-- DB backup table catalog: [docs/DB_BACKUP_CATALOG.md](docs/DB_BACKUP_CATALOG.md); any script that creates a `*_backup_*` table must add its entry in the same commit. (wl-068)
-- Standing data-sanity audit: `node scripts/data_sanity_audit.mjs` (weekly); flags impossible MAE/MFE, `$/pt` constants, odd symbols, bad bounds, NQ roll health. Exit 1 is currently expected. (wl-069)
-- Optimal stops/targets: weekly `OPTIMAL_STOP` rows in `performance_audit` (`update_optimal_stops.mjs`); read the latest row per `signal_name` via `DISTINCT ON`. (wl-087)
-- Setup Reference page (Edge > Setup Reference): what each setup_type is, from `server/config/setupDefinitions.js` via `GET /api/setups/reference`; 16 types still undocumented. (wl-090)
-- Research Ledger page (Edge > Research Ledger): every `RESEARCH_CLAIM`/`OPEN_DECISION` in one table via `GET /api/research/ledger`, with a Wired Live column. (wl-091)
-- Pipeline freshness report: `node scripts/audit_pipeline_freshness.mjs` (weekly); static-grep check of each `performance_audit` signal_type's writer and reader, a flag is only 'worth a look'. (wl-103)
+- DB protocols: [docs/DB_MIGRATION_PROTOCOL.md](docs/DB_MIGRATION_PROTOCOL.md) before any `ALTER TABLE`, bulk `UPDATE` or backfill (no tracked migration files exist); any script creating a `*_backup_*` table adds its entry to [docs/DB_BACKUP_CATALOG.md](docs/DB_BACKUP_CATALOG.md) in the same commit. (wl-067, wl-068)
 
 ## Documentation maintenance
 
-CLAUDE.md and [ARCHITECTURE.md](ARCHITECTURE.md) are the next session's handoff; letting them go stale is a real cost. The `Stop` hook reminds you when structural files changed without a doc update; act on it before ending the turn. Update in the SAME session, not later (verbatim original: `docs/CLAUDE_MD_ARCHIVE/doc_maintenance.md`):
-- Route/service file or DB table added/removed -> update ARCHITECTURE.md's tables; table added/dropped/altered -> regenerate `server/schema.sql` (command in ARCHITECTURE.md). Dashboard component added/removed -> update its frontend table.
-- New hard rule or convention -> ONE line (<=200 chars) via `python3 scripts/claude_md_add_rule.py <hard_rules|conventions|collaboration> "<line>" --full <file>`; full text goes to `docs/CLAUDE_MD_ARCHIVE/`. Pre-commit blocks >40 KB / 300 lines (override `ALLOW_CLAUDE_MD_GROWTH=1` with a stated reason).
-- Research results, incidents and numbers are not CLAUDE.md entries: use `scripts/record_claim.mjs`, `scripts/flag_decision.mjs` or `docs/OPEN_THREADS.md`; add a pointer here only if a future session must know where to look.
-- Fixed a [docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md) item -> remove it; found a new one -> add it.
-- A confirmed-but-unfinished fix/decision, an unconfirmed follow-up, or a stale/disconnected stat -> add it to [docs/OPEN_THREADS.md](docs/OPEN_THREADS.md) BEFORE the session ends; the user has delegated this.
-- Point-in-time specs (`MONTE_CARLO_SPEC*.md`, `BACKTESTING_PLAYBOOK.md`, `*_parked.md`) are proposals, not live state; don't confuse them with ARCHITECTURE.md.
-- **A change that supersedes code, data or docs must clean up what it replaces in the same session**: stale duplicate descriptions in other docs (grep for the old methodology), dead constants/params, orphaned scratch files, superseded DB rows; a reverted live change also deletes its temp files; resolved OPEN_THREADS items are struck through with "Resolved <date>", not left looking open.
-
-There is exactly one architecture doc: `/ARCHITECTURE.md`. Never write a second (a `docs/` copy went stale before); update it.
+CLAUDE.md and [ARCHITECTURE.md](ARCHITECTURE.md) are the next session's handoff. The `Stop` hook flags structural changes without a doc update; act on it before ending the turn and update in the SAME session (verbatim original: `docs/CLAUDE_MD_ARCHIVE/doc_maintenance.md`):
+- Route/service/DB-table or dashboard-component change -> ARCHITECTURE.md's tables; table change -> regenerate `server/schema.sql` (command in ARCHITECTURE.md). One architecture doc only, `/ARCHITECTURE.md`; never a `docs/` copy.
+- New rule -> ONE line (<=200 chars): `python3 scripts/claude_md_add_rule.py <hard_rules|conventions|collaboration> "<line>" --full <file>`; full text in `docs/CLAUDE_MD_ARCHIVE/`. Pre-commit blocks >40 KB / 300 lines (`ALLOW_CLAUDE_MD_GROWTH=1` with a stated reason).
+- Results, incidents and numbers are not CLAUDE.md entries: `scripts/record_claim.mjs`, `scripts/flag_decision.mjs`, `docs/OPEN_THREADS.md` (add any unfinished fix, unconfirmed follow-up or stale stat BEFORE the session ends; the user delegated this). [docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md): remove fixed items, add new ones.
+- Point-in-time specs (`MONTE_CARLO_SPEC*.md`, `BACKTESTING_PLAYBOOK.md`, `*_parked.md`) are proposals, not live state.
+- **A change that supersedes code, data or docs cleans up what it replaces in the same session**: stale duplicate descriptions (grep the old methodology), dead constants, orphaned scratch files, superseded DB rows, temp files of a reverted live change; strike resolved OPEN_THREADS items with "Resolved <date>".

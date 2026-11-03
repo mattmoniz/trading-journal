@@ -18,13 +18,13 @@ export const SCOREBOARD_START = '2026-10-25 18:00:00'; // first clean before/aft
 const CLAIM_SLUG = 'roster_scoreboard_20261025';
 const SRC = 'docs/ROSTER_SCOREBOARD_PREREG_20261025.md';
 // Mandatory filters from the prereg. MARK_TO_MARKET closes are KEPT: this is an account-level scoreboard, and a mark-to-market close is real realized P&L.
-const ROW_FILTER = `origin_status IN ('ACTIVE','SHADOW') AND actual_pnl IS NOT NULL AND resolution IS DISTINCT FROM 'NOT_FILLED'
+export const ROW_FILTER = `origin_status IN ('ACTIVE','SHADOW') AND actual_pnl IS NOT NULL AND resolution IS DISTINCT FROM 'NOT_FILLED'
   AND ib_window_stale_basis IS NOT TRUE AND stale_entry_price_basis IS NOT TRUE AND late_fill_past_expiry_basis IS NOT TRUE AND bad_bars_basis IS NOT TRUE
   AND NOT (fired_at::time >= '16:00' AND fired_at::time < '18:00')`;
 
-const toRow = (r) => ({ id: r.id, date: r.d, firedMs: etNaiveTimestampToMs(r.fired), resolvedMs: r.resolved ? etNaiveTimestampToMs(r.resolved) : etNaiveTimestampToMs(r.fired),
+export const toRow = (r) => ({ id: r.id, date: r.d, firedMs: etNaiveTimestampToMs(r.fired), resolvedMs: r.resolved ? etNaiveTimestampToMs(r.resolved) : etNaiveTimestampToMs(r.fired),
   setupType: r.setup_type, origin: r.origin_status, pnl: Number(r.actual_pnl), isRth: r.is_rth === true, clusterId: r.cluster_touch_id, isPrimary: r.is_cluster_primary !== false });
-const SELECT = `SELECT id, trade_date::text d, fired_at::text fired, resolved_at::text resolved, setup_type, origin_status, actual_pnl, is_rth, cluster_touch_id, is_cluster_primary FROM active_setups`;
+export const SELECT = `SELECT id, trade_date::text d, fired_at::text fired, resolved_at::text resolved, setup_type, origin_status, actual_pnl, is_rth, cluster_touch_id, is_cluster_primary FROM active_setups`;
 
 export async function loadRosterHistory() {
   const { rows } = await query(`SELECT created_at::text c, notes FROM performance_audit WHERE signal_type='LIVE_ROSTER' AND signal_name='CURRENT' ORDER BY id`);

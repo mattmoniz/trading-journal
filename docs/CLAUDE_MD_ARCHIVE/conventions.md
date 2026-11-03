@@ -113,6 +113,7 @@ Full text of every entry that CLAUDE.md now summarises in one line. Nothing was 
 - [cv-107](#cv-107) A "grep every call site before fixing X" sweep must be genuinely repo-wide (`grep …
 - [cv-108](#cv-108) A prop-firm evaluation account (the "Trading Evaluator" / "Simulated Futures …
 - [cv-109](#cv-109) The Claude Code sandbox's auto-mode classifier blocks arming/enabling a live …
+- [cv-110](#cv-110) New monitors, scoreboards, learning arms, bots and forward tests go in the one Monitor & Learning page (phone Monitor tab, app Learning view) as a new section, not a new tab or menu entry. (cv-110)
 
 ---
 
@@ -690,3 +691,17 @@ Full text of every entry that CLAUDE.md now summarises in one line. Nothing was 
 <a id="cv-109"></a>
 
 - **The Claude Code sandbox's auto-mode classifier blocks arming/enabling a live order-placement kill switch, not just disabling one.** The existing entry below (SUPPRESS_ALL_DISABLED) documents the classifier blocking a change that reads as "disable a live safety/suppression mechanism" — found 2026-10-07 that the same classifier blocks the opposite-looking action too: a `POST /api/sierra-chart/start` call to ARM the kill switch was denied as `[Production Deploy]`, with the same "don't pursue this outcome through another tool/host/encoding" language. Same handling as the existing entry: stop, don't retry via a different method, explain what's done/verified and hand the actual arm action to the user.
+
+<a id="cv-110"></a>
+
+- **New monitors, scoreboards, learning arms, bots and forward tests go in the one Monitor & Learning page (phone Monitor tab, app Learning view) as a new section, not a new tab or menu entry. (cv-110)**
+
+One home for monitoring and learning displays (user directive 2026-11-03: "anything we do like this going forward goes in this section"; said after seeing five separate hamburger entries and two tabs for one idea, "there is a lot everywhere").
+
+RULE: any new monitor, scoreboard, learning arm, bot, forward test, research gate or similar read-only status view goes into the ONE Monitor and Learning page as a new section or card. Do not add a new tab, hamburger-menu entry or standalone page for it.
+- Phone / Home Assistant: the single `Monitor` tab of `server/public/quick-check.html` (page heading "Monitor & Learning"). New sections are added in `renderMonitor()` / `learningParts()` in reading order, using `monBox()` / `monRow()` and the `lmLines()` / `lmBars()` SVG helpers. One fetch for the whole tab: `GET /api/setups/monitor-summary` (cache:'no-store'; a missing or failed feed shows an explicit amber notice, never an empty panel).
+- App: `src/views/LearningMonitorView.jsx` (nav item "Learning"), a new Card in the same view, same section order.
+- Data: add the series or fields to `scripts/learning_monitor_build.mjs` (rebuilt nightly in `run_daily_calibration.sh`, served through the `learning` key of `server/services/monitorSummary.js`). A shadow bot appears automatically if it writes `performance_audit` rows signal_type='BOT_DECISION' (contract in the JSON `botContract`); a new arm is one entry in the builder's `arms` map.
+- Both surfaces must stay equivalent; update ARCHITECTURE.md's monitorSummary row and the frontend views list in the same session.
+Exceptions: trade-level views (Timeline, Performance, ML trade lists, Shadow, Tell detail) are not monitors and keep their own tabs. Pages that must be reachable by their own URL (setup-performance, loss-prevention) are unchanged. Everything on the page is read-only: nothing there may place orders, arm, or change live gates.
+Honesty conventions already on that page and to be kept: label MODEL P&L versus broker P&L, show the amount of real broker evidence (336 trades on 16 days as of 2026-11-03), the commission is already inside model P&L (slippage allowance only, 1 dollar per trade), and no display filter that can hide rows is persisted (cv-049).

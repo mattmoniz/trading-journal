@@ -138,6 +138,8 @@ timed_step daily /usr/bin/node scripts/backtest_setup_status.mjs
 timed_step daily /usr/bin/node scripts/calibrate_live_roster.mjs
 # Roster scoreboard (2026-10-25): live roster gate vs trading everything, pre-registered (docs/ROSTER_SCOREBOARD_PREREG_20261025.md). Must run AFTER calibrate_live_roster.mjs (it reads the roster history).
 timed_step daily /usr/bin/node scripts/roster_scoreboard.mjs
+# Learning Monitor data (2026-11-03): read-only series for src/views/LearningMonitorView.jsx -> public/learning_monitor.json (arms, fired vs skipped, ML verdicts, delay, pass race)
+timed_step daily /usr/bin/node scripts/learning_monitor_build.mjs
 timed_step daily /usr/bin/node scripts/derive_day_types.js
 
 # Day-type-conditioned IB_BEARISH/IB_BULLISH stop/target (2026-08-03,

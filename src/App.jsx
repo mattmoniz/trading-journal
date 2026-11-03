@@ -10,6 +10,7 @@ const LongTermStructurePage = lazy(() => import('./views/LongTermStructureView.j
 const BacktestView = lazy(() => import('./views/BacktestView.jsx'));
 const ACDView = lazy(() => import('./views/ACDView.jsx'));
 const MLSiloView = lazy(() => import('./views/MLSiloView.jsx'));
+const LearningMonitorView = lazy(() => import('./views/LearningMonitorView.jsx'));
 // Was an eager import (1564-line module always in the main bundle even when this tab
 // was never opened) — converted to lazy 2026-07-15 alongside the other Morning Prep
 // perf work. The named exports here were unused in App.jsx itself (LevelConfluenceReference/
@@ -622,6 +623,15 @@ function App() {
             <ErrorBoundary name="ML Silo">
               <Suspense fallback={<div style={{ padding: 40, color: 'var(--text-muted)' }}>Loading…</div>}>
                 <MLSiloView />
+              </Suspense>
+            </ErrorBoundary>
+          </div>
+        )}
+        {visitedViews.has('learning') && (
+          <div style={{ display: currentView === 'learning' ? 'contents' : 'none' }}>
+            <ErrorBoundary name="Learning Monitor">
+              <Suspense fallback={<div style={{ padding: 40, color: 'var(--text-muted)' }}>Loading…</div>}>
+                <LearningMonitorView />
               </Suspense>
             </ErrorBoundary>
           </div>
@@ -2041,6 +2051,14 @@ function Sidebar({ currentView, setCurrentView, processAlertCount = 0, onOpenQui
         >
           <span className="nav-icon">🧪</span>
           <span>ML Silo</span>
+        </button>
+
+        <button
+          className={`nav-item ${currentView === 'learning' ? 'active' : ''}`}
+          onClick={() => setCurrentView('learning')}
+        >
+          <span className="nav-icon">📈</span>
+          <span>Learning</span>
         </button>
 
         <button
