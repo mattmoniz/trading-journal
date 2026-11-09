@@ -36,7 +36,6 @@ import { tagRotation65ptGateShadow } from './rotation65ptGateShadow.js';
 import { query } from '../db.js';
 import { detectRotationLegs, getOvernightSessionBars } from './rotationDetector.js';
 import { minutesSinceOvernightOpen } from './globexRotationBadge.js';
-import { getGlobalCalib } from './acdShared.js';
 import { getCanonicalLiveStatus } from './setupEligibility.js';
 import {
   dropToTimeline, computeFireTags, FIRE_TAG_COLS, fireTagValues,
@@ -48,7 +47,7 @@ const SETUP_TYPE_LONG = 'OVERNIGHT_ORDERFLOW_LONG';
 const SETUP_TYPE_SHORT = 'OVERNIGHT_ORDERFLOW_SHORT';
 const ENTRY_WINDOW_START_MIN = 360; // 12:00am ET (minutes since 6pm Globex open)
 const ENTRY_WINDOW_END_MIN = 420; // 1:00am ET -- an hour of poller-restart grace, never drifts toward the weaker 2am/5am checkpoints
-const STAGE2_LEGS_FALLBACK = 6; // only used if the badge's own live calibration is unavailable
+export const OVN_ORDERFLOW_MIN_LEGS = 6; // the validated research/calibration gate (calibrate_overnight_orderflow_entry.mjs imports this), not the badge's rolling threshold
 const STOP_FALLBACK_PTS = 700; // last resort only, if the calibration row is missing entirely (the calibration now persists chosenCell.protectiveStopPts, derived from data, for the "no stop" case)
 // A stop wider than the daily loss limit lets ONE stop-out breach it alone (2026-10-26: this setup carried 700 points = 1,400 dollars against a 1,000 dollar limit). Pure, exported for the test.
 export function capStopToDailyLimit(stopPts, limitUsd, dollarsPerPoint) { return Number.isFinite(limitUsd) && limitUsd > 0 && dollarsPerPoint > 0 ? Math.min(stopPts, Math.floor(limitUsd / dollarsPerPoint)) : stopPts; }
@@ -56,17 +55,6 @@ const EXIT_TIME_FALLBACK = '16:00'; // RTH close, used if calibration is unavail
 const T1_PLACEHOLDER_DIST = 1500; // informational-only, unreachable -- never checked, see resolveSetups.js's custom branch
 
 let _cache = { tradeDate: null, firedToday: false };
-
-async function getBadgeStage2Threshold() {
-  return getGlobalCalib('globexRotationBadgeCalib', async () => {
-    const r = await query(`
-      SELECT notes FROM performance_audit
-      WHERE signal_type='GLOBEX_ROTATION_BADGE_CALIB' AND signal_name='ALL_SESSIONS'
-      ORDER BY run_date DESC LIMIT 1
-    `);
-    try { return r.rows[0] ? JSON.parse(r.rows[0].notes) : null; } catch (_) { return null; }
-  }).then((calib) => calib?.stage2?.thresholdLegs ?? STAGE2_LEGS_FALLBACK);
-}
 
 async function getEntryCalibration() {
   const r = await query(`
@@ -123,12 +111,14 @@ export async function detectOvernightOrderflowEntry() {
 
     const bars = barsRows.map((b) => {
       const d = new Date(b.ts.replace(' ', 'T') + 'Z');
-      return { ts: b.ts, close: b.close, high: b.close, low: b.close, bid_volume: b.bid_volume, ask_volume: b.ask_volume, min: minutesSinceOvernightOpen(d) };
+      return { ts: b.ts, close: b.close, high: b.high, low: b.low, bid_volume: b.bid_volume, ask_volume: b.ask_volume, min: minutesSinceOvernightOpen(d) };
     });
 
     const bars12am = bars.filter((b) => b.min <= 360);
-    const stage2Threshold = await getBadgeStage2Threshold();
-    if (detectRotationLegs(bars12am).length < stage2Threshold) return; // today doesn't qualify
+    // Aligned 2026-11-09 with the validated research + calibration population (decision ovn_orderflow_detector_alignment_20261104):
+    // legs from REAL highs/lows (detectRotationLegs' contract) and >= OVN_ORDERFLOW_MIN_LEGS, NOT the old close-only count + badge threshold 7
+    // (live rule: 24 nights, +$366 but only above 93% of a random-direction placebo; research rule: 88 nights, +$239, beats both placebos).
+    if (detectRotationLegs(bars12am).length < OVN_ORDERFLOW_MIN_LEGS) return; // today doesn't qualify
 
     const bars9pm = bars.filter((b) => b.min <= 180);
     if (bars9pm.length < 5) return;

@@ -4,6 +4,8 @@
 // learning view keeps going. Every P&L here is MODEL P&L (from bars) unless it says broker; the "after haircut" series subtract the standing slippage allowance per trade (commission is already in model P&L) (docs/FILL_MODEL_SCOPE_20261103.md).
 //   node scripts/learning_monitor_build.mjs            write public/learning_monitor.json
 //   node scripts/learning_monitor_build.mjs --print    print a summary, write nothing
+import { argonShadowSummary } from './lib/argonShadowSummary.mjs';
+import { vacuumLiveSummary } from './lib/vacuumLiveSummary.mjs';
 import fs from 'fs';
 import { query } from '../server/db.js';
 import { buildRosterLookup } from '../server/services/rosterScoreboard.js';
@@ -29,6 +31,28 @@ export function passRace(days, target = PASS_TARGET, trail = TRAIL_LOSS) {
     else { peak = Math.max(peak, eq); if (start == null) start = d.date; }
   }
   return { path, attempts, open: { episode: ep, equity: Math.round(eq * 100) / 100, floor: peak - trail, peak, days: daysIn } };
+}
+
+// Bootstrap pass probability (Opus review 2026-11-08: judge the system on P(pass), not mean dollars alone). Resamples the arm's own daily P&L in blocks of `block` consecutive days (keeps short-run clustering),
+// runs the same virtual account as passRace() (floor trails the end-of-day high-water mark by `trail`, PASS at +target, BUST at the floor) from a fresh start, up to `maxDays` days. END-OF-DAY breach only: an intraday dip below the floor
+// also counts on the real rule, so this is OPTIMISTIC about busts. Few source days (see `sourceDays`) make it indicative only. Deterministic seed.
+export function passProbability(pnls, { target = PASS_TARGET, trail = TRAIL_LOSS, B = 3000, maxDays = 250, block = 3, seed = 20261108 } = {}) {
+  if (!pnls || pnls.length < 10) return { sourceDays: pnls ? pnls.length : 0, state: 'TOO_FEW_DAYS' };
+  let sd = seed >>> 0; const rnd = () => { sd = (Math.imul(sd, 1664525) + 1013904223) >>> 0; return sd / 4294967296; };
+  let pass = 0, bust = 0; const doneAt = [];
+  for (let b = 0; b < B; b++) {
+    let eq = 0, peak = 0, day = 0, res = null;
+    while (day < maxDays && !res) {
+      const i0 = Math.floor(rnd() * pnls.length);
+      for (let k = 0; k < block && day < maxDays && !res; k++) {
+        eq += pnls[(i0 + k) % pnls.length]; day++;
+        if (eq >= target) { res = 'PASS'; } else if (eq <= peak - trail) { res = 'BUST'; } else peak = Math.max(peak, eq);
+      }
+    }
+    if (res === 'PASS') { pass++; doneAt.push(day); } else if (res === 'BUST') { bust++; doneAt.push(day); }
+  }
+  doneAt.sort((x, y) => x - y);
+  return { sourceDays: pnls.length, state: 'OK', pPass: pass / B, pBust: bust / B, pUndecided: 1 - (pass + bust) / B, medianDaysToFinish: doneAt.length ? doneAt[Math.floor(doneAt.length / 2)] : null, B, maxDays, block, breach: 'end-of-day only (optimistic)' };
 }
 
 // Bot decisions are written by a (future) shadow bot as performance_audit rows signal_type='BOT_DECISION', signal_name=<active_setups.id>,
@@ -78,6 +102,7 @@ async function main() {
   const fs_ = (a) => ({ n: a.length, perTrade: a.length ? sum(a.map((r) => r.pnl)) / a.length : null, perTradeHaircut: a.length ? sum(a.map((r) => r.pnl - STANDING_HAIRCUT_USD)) / a.length : null });
   const firedVsSkipped = { firedLive: fs_(arms.ROSTER_LIVE), onRosterNotFiredLive: fs_(arms.ROSTER_WOULD_BE.filter((r) => r.origin !== 'ACTIVE')), skippedByRoster: fs_(arms.TAKE_ALL_EX_ROSTER), mlTake: fs_(arms.ML_TAKE), mlVeto: fs_(arms.ML_VETO), mlUnscored: fs_(base.filter((r) => !ml.has(r.id))) };
   const race = Object.fromEntries(['ROSTER_LIVE', 'ROSTER_WOULD_BE'].map((k) => [k, passRace(series[k].map((d) => ({ date: d.date, pnl: d.pnlHaircut })))]));
+  const passProb = Object.fromEntries(['ROSTER_LIVE', 'ROSTER_WOULD_BE'].map((k) => [k, passProbability(series[k].map((d) => d.pnlHaircut))]));
   const dl = (await query(`SELECT o.submitted_at::date::text d, count(*)::int n, percentile_cont(0.5) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM (o.submitted_at - s.fired_at)))::float med, percentile_cont(0.9) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM (o.submitted_at - s.fired_at)))::float p90
     FROM order_placements o JOIN active_setups s ON s.id = o.setup_id WHERE o.purpose='ENTRY' AND o.order_type='MARKET' AND o.submitted_at >= '2026-10-05' AND EXTRACT(EPOCH FROM (o.submitted_at - s.fired_at)) BETWEEN 0 AND 3600 GROUP BY 1 ORDER BY 1`)).rows;
   const bk = (await query(`SELECT count(*)::int n, count(DISTINCT fired_at::date)::int days, min(fired_at::date)::text first, max(fired_at::date)::text last, COALESCE(sum(broker_pnl),0)::float pnl FROM active_setups WHERE origin_status='ACTIVE' AND broker_pnl IS NOT NULL`)).rows[0];
@@ -86,9 +111,12 @@ async function main() {
   const botOut = bot ? { ...bot, takeIds: undefined, skipIds: undefined } : null;
   const out = { generatedAt: new Date().toISOString(), scoreboardStart: SCOREBOARD_START, haircutUsd: STANDING_HAIRCUT_USD, passTarget: PASS_TARGET, trailLoss: TRAIL_LOSS,
     scoreboard: sb ? { verdict: sb.comparison?.verdict, days: sb.window?.days ?? null, firstLookDays: sb.first_look_days, rosterNow: sb.roster_now } : null,
-    series, bot: botOut, perDay, firedVsSkipped, passRace: race, delay: dl.map((r) => ({ date: r.d, n: r.n, median: Math.round(r.med * 10) / 10, p90: Math.round(r.p90 * 10) / 10 })), brokerEvidence: bk,
+    series, bot: botOut, perDay, firedVsSkipped, passRace: race, passProb, delay: dl.map((r) => ({ date: r.d, n: r.n, median: Math.round(r.med * 10) / 10, p90: Math.round(r.p90 * 10) / 10 })), brokerEvidence: bk,
     botContract: "A shadow bot writes one performance_audit row per candidate: signal_type='BOT_DECISION', signal_name=<active_setups.id>, notes={version, decision:'TAKE'|'SKIP', p?, reason?, frozenAt}. It then appears here automatically as the Bot-selected arm.",
     notes: ['All P&L is MODEL P&L (resolved from bars) except brokerEvidence, which is broker truth on the DTC-Live-Simulator (fills are generous there).', 'Haircut series subtract the standing slippage allowance (1 tick per fill = 1 dollar per round trip; commission is already inside model P&L); the 15 s and 90 s delay lines are the REALISTIC and STRESS delays from docs/FILL_MODEL_SCOPE_20261103.md.', 'The pass-race ledger is daily (end-of-day) and uses the slippage-adjusted P&L of the rows exactly as recorded; the TAKE_ALL arm is multi-position and is NOT used for it.'] };
+  out.argonShadow = await argonShadowSummary();
+  out.vacuumLive = await vacuumLiveSummary();
+  try { out.structureModel = JSON.parse(fs.readFileSync(new URL('../public/structure_model.json', import.meta.url).pathname, 'utf8')); } catch (e) { out.structureModel = { state: e.code === 'ENOENT' ? 'NO_DATA' : 'ERROR', error: e.message }; }     // the shadow next-hour range model's history (scripts/structure_model/build_payload.py): a separate file so this build never recomputes it
   if (print) { console.log(JSON.stringify({ days: allDays.length, arms: Object.fromEntries(Object.entries(arms).map(([k, v]) => [k, v.length])), firedVsSkipped, race: Object.fromEntries(Object.entries(race).map(([k, v]) => [k, { attempts: v.attempts.length, open: v.open }])), delay: out.delay.slice(-5), brokerEvidence: bk }, null, 1)); return; }
   fs.mkdirSync(new URL('../public/', import.meta.url), { recursive: true }); fs.writeFileSync(OUT.pathname + '.tmp', JSON.stringify(out)); fs.renameSync(OUT.pathname + '.tmp', OUT.pathname);
   console.log('wrote public/learning_monitor.json', fs.statSync(OUT.pathname).size, 'bytes;', allDays.length, 'days');

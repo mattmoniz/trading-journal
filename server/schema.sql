@@ -4670,6 +4670,108 @@ ALTER SEQUENCE public.amt_tell_trades_id_seq OWNED BY public.amt_tell_trades.id;
 
 
 --
+-- Name: argon_vacuum_shadow; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.argon_vacuum_shadow (
+    id bigint NOT NULL,
+    arm character varying(4) NOT NULL,
+    trade_date date NOT NULL,
+    bar_idx integer NOT NULL,
+    direction smallint NOT NULL,
+    fired_at timestamp without time zone NOT NULL,
+    bar_start_sec numeric(10,3),
+    bar_end_sec numeric(10,3),
+    entry_ref numeric(10,2) NOT NULL,
+    init_risk_pts numeric(8,2),
+    max_pb_bars integer,
+    priors jsonb NOT NULL,
+    feat jsonb,
+    decision_hash character varying(16) NOT NULL,
+    code_version jsonb NOT NULL,
+    detected_at timestamp without time zone NOT NULL,
+    late_min numeric(8,1),
+    fwd_10 numeric(8,2),
+    fwd_30 numeric(8,2),
+    fwd_60 numeric(8,2),
+    mfe_30 numeric(8,2),
+    mae_30 numeric(8,2),
+    outcome_at timestamp without time zone
+);
+
+
+--
+-- Name: argon_vacuum_shadow_alarms; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.argon_vacuum_shadow_alarms (
+    id bigint NOT NULL,
+    at timestamp without time zone DEFAULT now() NOT NULL,
+    kind character varying(30) NOT NULL,
+    detail jsonb
+);
+
+
+--
+-- Name: argon_vacuum_shadow_alarms_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.argon_vacuum_shadow_alarms_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: argon_vacuum_shadow_alarms_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.argon_vacuum_shadow_alarms_id_seq OWNED BY public.argon_vacuum_shadow_alarms.id;
+
+
+--
+-- Name: argon_vacuum_shadow_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.argon_vacuum_shadow_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: argon_vacuum_shadow_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.argon_vacuum_shadow_id_seq OWNED BY public.argon_vacuum_shadow.id;
+
+
+--
+-- Name: argon_vacuum_shadow_sessions; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.argon_vacuum_shadow_sessions (
+    trade_date date NOT NULL,
+    contract character varying(8),
+    tick_file text,
+    state character varying(10),
+    n_bars integer,
+    n_rth_bars integer,
+    n_cand integer,
+    n_ffc integer,
+    priors_n integer,
+    last_tick_at timestamp without time zone,
+    heartbeat_at timestamp without time zone,
+    bars_sha256 character varying(64),
+    notes jsonb
+);
+
+
+--
 -- Name: auction_history; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -5290,6 +5392,45 @@ CREATE TABLE public.daily_rth_stats (
 
 
 --
+-- Name: day_state_log; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.day_state_log (
+    id bigint NOT NULL,
+    logged_at timestamp with time zone DEFAULT now() NOT NULL,
+    kind character varying(8) NOT NULL,
+    session_key date NOT NULL,
+    bar_time timestamp without time zone NOT NULL,
+    state character varying(20) NOT NULL,
+    prev_state character varying(20),
+    z1d numeric,
+    z1u numeric,
+    s2d numeric,
+    s2u numeric,
+    close numeric
+);
+
+
+--
+-- Name: day_state_log_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.day_state_log_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: day_state_log_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.day_state_log_id_seq OWNED BY public.day_state_log.id;
+
+
+--
 -- Name: daytype_accuracy_log; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -5544,6 +5685,20 @@ CREATE TABLE public.es_front_calendar (
     rth_volume_leader bigint,
     leader_contract text,
     rth_minutes integer
+);
+
+
+--
+-- Name: event_calendar; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.event_calendar (
+    event_date date NOT NULL,
+    event_type character varying(16) NOT NULL,
+    event_time_et character varying(5),
+    ref text,
+    source text NOT NULL,
+    loaded_at timestamp without time zone DEFAULT LOCALTIMESTAMP NOT NULL
 );
 
 
@@ -9713,6 +9868,27 @@ ALTER SEQUENCE public.sierra_chart_reconciliation_log_id_seq OWNED BY public.sie
 
 
 --
+-- Name: structure_model_rows; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.structure_model_rows (
+    trade_date date NOT NULL,
+    decision_min smallint NOT NULL,
+    model_version character varying(60) NOT NULL,
+    code_hash character varying(16) NOT NULL,
+    predicted_at timestamp without time zone DEFAULT LOCALTIMESTAMP NOT NULL,
+    adr double precision NOT NULL,
+    features jsonb NOT NULL,
+    pred_ln double precision NOT NULL,
+    base_ln double precision NOT NULL,
+    y double precision,
+    realized_pts double precision,
+    labelled_at timestamp without time zone,
+    base2_ln double precision
+);
+
+
+--
 -- Name: table_growth; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -9746,6 +9922,91 @@ CREATE SEQUENCE public.table_growth_id_seq
 --
 
 ALTER SEQUENCE public.table_growth_id_seq OWNED BY public.table_growth.id;
+
+
+--
+-- Name: tell_context_fires; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.tell_context_fires (
+    tell_trade_id bigint NOT NULL,
+    trade_date date NOT NULL,
+    book character varying(4) NOT NULL,
+    direction smallint NOT NULL,
+    fired_at timestamp without time zone NOT NULL,
+    entry_price numeric(10,2) NOT NULL,
+    sig_idx integer NOT NULL,
+    label character varying(8) NOT NULL,
+    reason text,
+    rth_minutes integer,
+    val numeric(10,2),
+    poc numeric(10,2),
+    vah numeric(10,2),
+    location numeric(7,3),
+    tail character varying(10),
+    near_edge character varying(6),
+    shape_letter character varying(1),
+    multi_hump boolean,
+    humps integer,
+    va_mid numeric(5,2),
+    poc_pos numeric(5,2),
+    bimodality numeric(5,2),
+    up_broken boolean,
+    down_broken boolean,
+    opposite_broken boolean,
+    nearest_lvn jsonb,
+    lvns_within_near jsonb,
+    context jsonb NOT NULL,
+    code_version character varying(16) NOT NULL,
+    computed_at timestamp without time zone NOT NULL,
+    late_min numeric(8,1)
+);
+
+
+--
+-- Name: tell_shadow_trades; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.tell_shadow_trades (
+    tell_trade_id bigint NOT NULL,
+    book character varying(1) NOT NULL,
+    trade_date date NOT NULL,
+    direction smallint NOT NULL,
+    label character varying(8),
+    watcher_state character varying(20),
+    followed_a boolean NOT NULL,
+    guard text,
+    entry_idx integer,
+    exit_idx integer,
+    entry_price numeric(10,2),
+    stop_price numeric(10,2),
+    status character varying(6) NOT NULL,
+    exit_reason character varying(12),
+    exit_points numeric(8,2),
+    net_dollars numeric(9,2),
+    broke boolean,
+    mfe_points numeric(8,2),
+    parity_ok boolean,
+    code_version character varying(16) NOT NULL,
+    computed_at timestamp without time zone DEFAULT LOCALTIMESTAMP NOT NULL,
+    updated_at timestamp without time zone DEFAULT LOCALTIMESTAMP NOT NULL
+);
+
+
+--
+-- Name: tell_watcher_states; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.tell_watcher_states (
+    trade_date date NOT NULL,
+    bar_idx integer NOT NULL,
+    bar_end_et timestamp without time zone NOT NULL,
+    state character varying(20) NOT NULL,
+    prev_state character varying(20) NOT NULL,
+    evidence jsonb NOT NULL,
+    code_version character varying(16) NOT NULL,
+    computed_at timestamp without time zone DEFAULT LOCALTIMESTAMP NOT NULL
+);
 
 
 --
@@ -10245,6 +10506,61 @@ CREATE SEQUENCE public.tripwire_events_id_seq
 --
 
 ALTER SEQUENCE public.tripwire_events_id_seq OWNED BY public.tripwire_events.id;
+
+
+--
+-- Name: vacuum_live_events; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.vacuum_live_events (
+    id bigint NOT NULL,
+    trade_date date NOT NULL,
+    track character varying(4) NOT NULL,
+    bar_idx integer NOT NULL,
+    direction smallint NOT NULL,
+    fired_at timestamp without time zone NOT NULL,
+    bar_end_sec numeric(10,3),
+    signal_close numeric(10,2) NOT NULL,
+    entry_open numeric(10,2),
+    zroc numeric(7,3),
+    roc10 numeric(9,2),
+    etr numeric(8,2),
+    dur numeric(9,2),
+    zr_proxy numeric(7,3),
+    taken boolean NOT NULL,
+    decision_hash character varying(16) NOT NULL,
+    detected_at timestamp without time zone NOT NULL,
+    late_min numeric(8,1),
+    fwd30 numeric(9,2),
+    net_nostop numeric(9,2),
+    net_stop25 numeric(9,2),
+    mfe30 numeric(9,2),
+    mae30 numeric(9,2),
+    outcome_at timestamp without time zone,
+    ctx jsonb,
+    exit_note character varying(24),
+    active_setup_id integer,
+    order_state character varying(24)
+);
+
+
+--
+-- Name: vacuum_live_events_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.vacuum_live_events_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: vacuum_live_events_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.vacuum_live_events_id_seq OWNED BY public.vacuum_live_events.id;
 
 
 --
@@ -10977,6 +11293,20 @@ ALTER TABLE ONLY public.amt_tell_trades ALTER COLUMN id SET DEFAULT nextval('pub
 
 
 --
+-- Name: argon_vacuum_shadow id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.argon_vacuum_shadow ALTER COLUMN id SET DEFAULT nextval('public.argon_vacuum_shadow_id_seq'::regclass);
+
+
+--
+-- Name: argon_vacuum_shadow_alarms id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.argon_vacuum_shadow_alarms ALTER COLUMN id SET DEFAULT nextval('public.argon_vacuum_shadow_alarms_id_seq'::regclass);
+
+
+--
 -- Name: auction_history id; Type: DEFAULT; Schema: public; Owner: -
 --
 
@@ -11030,6 +11360,13 @@ ALTER TABLE ONLY public.daily_logs ALTER COLUMN id SET DEFAULT nextval('public.d
 --
 
 ALTER TABLE ONLY public.daily_performance_log ALTER COLUMN id SET DEFAULT nextval('public.daily_performance_log_id_seq'::regclass);
+
+
+--
+-- Name: day_state_log id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.day_state_log ALTER COLUMN id SET DEFAULT nextval('public.day_state_log_id_seq'::regclass);
 
 
 --
@@ -11390,6 +11727,13 @@ ALTER TABLE ONLY public.tripwire_events ALTER COLUMN id SET DEFAULT nextval('pub
 
 
 --
+-- Name: vacuum_live_events id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.vacuum_live_events ALTER COLUMN id SET DEFAULT nextval('public.vacuum_live_events_id_seq'::regclass);
+
+
+--
 -- Name: value_area_regime_snapshots id; Type: DEFAULT; Schema: public; Owner: -
 --
 
@@ -11610,6 +11954,38 @@ ALTER TABLE ONLY public.amt_tell_trades
 
 
 --
+-- Name: argon_vacuum_shadow_alarms argon_vacuum_shadow_alarms_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.argon_vacuum_shadow_alarms
+    ADD CONSTRAINT argon_vacuum_shadow_alarms_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: argon_vacuum_shadow argon_vacuum_shadow_arm_trade_date_bar_idx_direction_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.argon_vacuum_shadow
+    ADD CONSTRAINT argon_vacuum_shadow_arm_trade_date_bar_idx_direction_key UNIQUE (arm, trade_date, bar_idx, direction);
+
+
+--
+-- Name: argon_vacuum_shadow argon_vacuum_shadow_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.argon_vacuum_shadow
+    ADD CONSTRAINT argon_vacuum_shadow_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: argon_vacuum_shadow_sessions argon_vacuum_shadow_sessions_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.argon_vacuum_shadow_sessions
+    ADD CONSTRAINT argon_vacuum_shadow_sessions_pkey PRIMARY KEY (trade_date);
+
+
+--
 -- Name: auction_history auction_history_date_key; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -11762,6 +12138,22 @@ ALTER TABLE ONLY public.daily_rth_stats
 
 
 --
+-- Name: day_state_log day_state_log_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.day_state_log
+    ADD CONSTRAINT day_state_log_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: day_state_log day_state_log_uq; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.day_state_log
+    ADD CONSTRAINT day_state_log_uq UNIQUE (kind, session_key, bar_time, state);
+
+
+--
 -- Name: daytype_accuracy_log daytype_accuracy_log_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -11831,6 +12223,14 @@ ALTER TABLE ONLY public.engine_reads
 
 ALTER TABLE ONLY public.es_front_calendar
     ADD CONSTRAINT es_front_calendar_pkey PRIMARY KEY (trade_date);
+
+
+--
+-- Name: event_calendar event_calendar_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.event_calendar
+    ADD CONSTRAINT event_calendar_pkey PRIMARY KEY (event_date, event_type);
 
 
 --
@@ -12882,11 +13282,43 @@ ALTER TABLE ONLY public.sierra_chart_reconciliation_log
 
 
 --
+-- Name: structure_model_rows structure_model_rows_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.structure_model_rows
+    ADD CONSTRAINT structure_model_rows_pkey PRIMARY KEY (trade_date, decision_min);
+
+
+--
 -- Name: table_growth table_growth_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.table_growth
     ADD CONSTRAINT table_growth_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: tell_context_fires tell_context_fires_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.tell_context_fires
+    ADD CONSTRAINT tell_context_fires_pkey PRIMARY KEY (tell_trade_id);
+
+
+--
+-- Name: tell_shadow_trades tell_shadow_trades_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.tell_shadow_trades
+    ADD CONSTRAINT tell_shadow_trades_pkey PRIMARY KEY (tell_trade_id, book);
+
+
+--
+-- Name: tell_watcher_states tell_watcher_states_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.tell_watcher_states
+    ADD CONSTRAINT tell_watcher_states_pkey PRIMARY KEY (trade_date, bar_idx);
 
 
 --
@@ -12967,6 +13399,22 @@ ALTER TABLE ONLY public.tripwire_events
 
 ALTER TABLE ONLY public.dynamic_edges_mining
     ADD CONSTRAINT uniq_edge_run UNIQUE (setup_type, dimension, segment, run_date);
+
+
+--
+-- Name: vacuum_live_events vacuum_live_events_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.vacuum_live_events
+    ADD CONSTRAINT vacuum_live_events_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: vacuum_live_events vacuum_live_events_trade_date_track_bar_idx_direction_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.vacuum_live_events
+    ADD CONSTRAINT vacuum_live_events_trade_date_track_bar_idx_direction_key UNIQUE (trade_date, track, bar_idx, direction);
 
 
 --
@@ -13270,6 +13718,13 @@ CREATE UNIQUE INDEX idx_as_unique_touch_instant ON public.active_setups USING bt
 
 
 --
+-- Name: idx_avs_date; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_avs_date ON public.argon_vacuum_shadow USING btree (trade_date, arm);
+
+
+--
 -- Name: idx_cm_last_seen; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -13295,6 +13750,13 @@ CREATE INDEX idx_cm_sufficient_data ON public.condition_memory USING btree (suff
 --
 
 CREATE INDEX idx_daily_logs_date ON public.daily_logs USING btree (log_date);
+
+
+--
+-- Name: idx_day_state_log_session; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_day_state_log_session ON public.day_state_log USING btree (kind, session_key, bar_time);
 
 
 --
@@ -13704,6 +14166,20 @@ CREATE INDEX idx_table_growth_rel ON public.table_growth USING btree (relname, c
 
 
 --
+-- Name: idx_tcf_label; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_tcf_label ON public.tell_context_fires USING btree (label);
+
+
+--
+-- Name: idx_tcf_trade_date; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_tcf_trade_date ON public.tell_context_fires USING btree (trade_date);
+
+
+--
 -- Name: idx_trade_feedback_date; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -13767,6 +14243,13 @@ CREATE INDEX idx_trades_symbol ON public.trades USING btree (symbol);
 
 
 --
+-- Name: idx_tst_trade_date; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_tst_trade_date ON public.tell_shadow_trades USING btree (trade_date);
+
+
+--
 -- Name: idx_tte_event_time; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -13785,6 +14268,13 @@ CREATE INDEX idx_tte_trade_date ON public.trade_timeline_events USING btree (tra
 --
 
 CREATE INDEX idx_vars_date ON public.value_area_regime_snapshots USING btree (snapshot_date);
+
+
+--
+-- Name: idx_vle_date; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_vle_date ON public.vacuum_live_events USING btree (trade_date, track);
 
 
 --

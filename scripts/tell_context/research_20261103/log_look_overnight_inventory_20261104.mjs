@@ -1,0 +1,4 @@
+// Logs the ledger look for docs/OVERNIGHT_INVENTORY_PREREG_20261104.md BEFORE overnight_inventory.py reads any outcome (hr-023). 2 counted tests.
+import { logLook } from '../../lib/look_ledger.mjs';
+const id = await logLook({ family: 'overnight_inventory_20261104', dataWindow: 'explore_522_sessions', kind: 'EXPLORE', tests: 2, label: 'Overnight inventory (net up/down-tick volume, side s) and its cost basis (overnight VWAP) vs the RTH open: stress S; first-hour rotation against the inventory, S>0 minus S<0 (all sessions, and extreme inventory only); week-block CI, sign-permutation placebo', script: 'scripts/tell_context/research_20261103/overnight_inventory.py', prereg: 'docs/OVERNIGHT_INVENTORY_PREREG_20261104.md', ref: 'overnight_inventory_20261104_look1' });
+console.log('look id', id); process.exit(0);

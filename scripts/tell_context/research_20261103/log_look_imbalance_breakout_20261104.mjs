@@ -1,0 +1,4 @@
+// Logs the ledger look for docs/IMBALANCE_BREAKOUT_PREREG_20261104.md BEFORE imbalance_breakout.py reads any outcome (hr-023). 3 counted tests.
+import { logLook } from '../../lib/look_ledger.mjs';
+const id = await logLook({ family: 'imbalance_breakout_20261104', dataWindow: 'explore_522_sessions', kind: 'EXPLORE', tests: 3, label: 'Diagonal footprint imbalances (3:1 and 4:1, stacked, 20-bar windows, volume clock) at breakouts of IB / overnight / prior-day levels: net aligned stacks and the initiative-vs-absorption contrast vs the next 60 minutes continuation minus reversal; day-block CI, other-date placebo', script: 'scripts/tell_context/research_20261103/imbalance_breakout.py', prereg: 'docs/IMBALANCE_BREAKOUT_PREREG_20261104.md', ref: 'imbalance_breakout_20261104_look1' });
+console.log('look id', id); process.exit(0);

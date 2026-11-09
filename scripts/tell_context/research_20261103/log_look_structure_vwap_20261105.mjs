@@ -1,0 +1,4 @@
+// Logs the ledger look for docs/STRUCTURE_MODEL_VWAP_PREREG_20261105.md BEFORE structure_model_stepA.py --dir --vwap computes any VWAP feature-outcome relation (hr-023). 2 counted tests.
+import { logLook } from '../../lib/look_ledger.mjs';
+const id = await logLook({ family: 'structure_model_vwap_20261105', dataWindow: 'explore_476_days_4_decision_times', kind: 'EXPLORE', tests: 2, label: 'Globex VWAP and RTH VWAP distances as inputs: M2 -> M2 + V for the next-hour range (T4) and FULL -> FULL + V for the next-hour direction (T5); week-block CI, circular-shift placebo; the VWAP-side filter view reported', script: 'scripts/tell_context/research_20261103/structure_model_stepA.py', prereg: 'docs/STRUCTURE_MODEL_VWAP_PREREG_20261105.md', ref: 'structure_model_vwap_20261105_look1' });
+console.log('look id', id); process.exit(0);

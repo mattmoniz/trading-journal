@@ -3,6 +3,8 @@
 // text, never parsed with JS Date (CLAUDE.md naive-timestamp rule). Per-trade means are sum/N, not day-weighted.
 import { query } from '../db.js';
 import { cacheGet, cacheSet } from '../lib/cache.js';
+import { getTellContextForDate } from './tellContextSummary.js';
+import { getTellContextStatus } from './tellContextServiceManager.js';
 
 const BOOKS = ['V1', 'V3', 'V1P'];
 
@@ -47,5 +49,7 @@ export async function getAmtTellSummary(date) {
   const alarms = (await query(`SELECT at::text AS at, kind, detail FROM amt_tell_alarms WHERE at > NOW() - interval '48 hours' ORDER BY at DESC LIMIT 12`)).rows;
   const byRule = {};
   for (const rule of ['split', 'whole']) byRule[rule] = summarize(trades.filter((r) => r.bar_rule === rule));
-  return { generatedAt: new Date().toISOString(), date: useDate, dates, sessions, summary: byRule, trades, alarms, bars: await sessionBars(useDate) };
+  const ctx = await getTellContextForDate(useDate);          // context of each fire (tell_context_fires); null where the reader has not written one yet
+  for (const t of trades) t.context = ctx[String(t.id)] || null;
+  return { generatedAt: new Date().toISOString(), date: useDate, dates, sessions, summary: byRule, trades, alarms, bars: await sessionBars(useDate), contextProblem: getTellContextStatus().problem };
 }

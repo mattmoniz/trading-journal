@@ -1,0 +1,4 @@
+// Logs the ledger look for docs/TELL_STALL_DELTA_PREREG_20261104.md BEFORE tell_stall_delta.py reads any outcome (hr-023). 3 counted tests.
+import { logLook } from '../../lib/look_ledger.mjs';
+const id = await logLook({ family: 'tell_stall_delta_20261104', dataWindow: 'explore_1760_entries', kind: 'EXPLORE', tests: 3, label: 'Up/down-tick delta (Sierra rule, reset 18:00) at the stall minute (L=11) of the 1,760 explore tell entries: flow share now vs lately, flow since the extreme, divergence at the extreme, vs the next 60 minutes continuation minus reversal; Spearman, day-block CI, other-date placebo', script: 'scripts/tell_context/research_20261103/tell_stall_delta.py', prereg: 'docs/TELL_STALL_DELTA_PREREG_20261104.md', ref: 'tell_stall_delta_20261104_look1' });
+console.log('look id', id); process.exit(0);

@@ -1,0 +1,4 @@
+// Logs the ledger look for docs/TELL_HOLDOUT_BY_QUARTER_PREREG_20261104.md BEFORE tell_holdout_by_quarter.py reads any outcome (hr-023). Descriptive, 0 counted tests; the hold-out look itself was spent in look 143.
+import { logLook } from '../../lib/look_ledger.mjs';
+const id = await logLook({ family: 'tell_holdout_by_quarter_20261104', dataWindow: 'explore_1760_plus_holdout_1486_replay_rows_already_spent', kind: 'EXPLORE', tests: 0, label: 'Static tell V1 replay net per entry by calendar quarter, explore + hold-out, day-block CI per quarter: is the hold-out weakness recent or spread out? Descriptive; the hold-out look was already spent (look 143)', script: 'scripts/tell_context/research_20261103/tell_holdout_by_quarter.py', prereg: 'docs/TELL_HOLDOUT_BY_QUARTER_PREREG_20261104.md', ref: 'tell_holdout_by_quarter_20261104_look1' });
+console.log('look id', id); process.exit(0);

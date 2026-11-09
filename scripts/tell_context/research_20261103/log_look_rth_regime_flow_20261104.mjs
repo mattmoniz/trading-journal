@@ -1,0 +1,4 @@
+// Logs the ledger look for docs/RTH_REGIME_FLOW_PREREG_20261104.md BEFORE rth_regime_flow.py computes any outcome (hr-023). 3 counted tests.
+import { logLook } from '../../lib/look_ledger.mjs';
+const id = await logLook({ family: 'rth_regime_flow_20261104', dataWindow: 'explore_tick_dates_67_qualifying_days', kind: 'EXPLORE', tests: 3, label: 'RTH high-rotation mornings (scaled legs by 11:00 at or above the expanding 90th percentile): enter at 11:00 in the sign of the 09:30-11:00 up/down-tick flow, stop 1 x ADR, exit 15:55; flow-sign minus random direction, minus price momentum, and the qualifying-minus-other-days contrast; week-block CI, circular-shift placebo', script: 'scripts/tell_context/research_20261103/rth_regime_flow.py', prereg: 'docs/RTH_REGIME_FLOW_PREREG_20261104.md', ref: 'rth_regime_flow_20261104_look1' });
+console.log('look id', id); process.exit(0);

@@ -31,6 +31,7 @@ import { query } from '../server/db.js';
 import { detectRotationLegs } from '../server/services/rotationDetector.js';
 import { dayBlockedBootstrapCI } from '../server/services/rigorDiagnostics.js';
 import { recordClaim } from './record_claim.mjs';
+import { OVN_ORDERFLOW_MIN_LEGS } from '../server/services/overnightOrderflowEntryDetector.js';
 
 const CLEAN_DATA_START = '2025-11-20'; // last confirmed clean, continuous-density NQ window
 const DOLLAR_PER_PT = 2, COMMISSION = 2; // MNQ, per CLAUDE.md's own ground-truth constants
@@ -111,7 +112,7 @@ export async function fetchTrades() {
     validOv.sort((a, b) => minSince6pm(a.isoDate, a.timeStr, tDay) - minSince6pm(b.isoDate, b.timeStr, tDay));
 
     const bars12am = validOv.filter((b) => minSince6pm(b.isoDate, b.timeStr, tDay) <= 360);
-    if (detectRotationLegs(bars12am).length < 6) continue; // badge's own real stage2 threshold
+    if (detectRotationLegs(bars12am).length < OVN_ORDERFLOW_MIN_LEGS) continue; // same gate as the live detector (single constant)
 
     const bars9pm = validOv.filter((b) => minSince6pm(b.isoDate, b.timeStr, tDay) <= 180);
     if (bars9pm.length < 5) continue;

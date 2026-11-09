@@ -1,6 +1,13 @@
 import React, { useEffect, useMemo, useState, useCallback } from 'react';
 import { ResponsiveContainer, LineChart, Line, BarChart, Bar, XAxis, YAxis, Tooltip, Legend, CartesianGrid, ReferenceLine } from 'recharts';
 import { API_URL } from '../constants/api.js';
+import DayContextSection from '../components/dashboard/DayContextSection.jsx';
+import NextSteps from '../components/dashboard/NextSteps.jsx';
+import ArgonShadowSection from '../components/dashboard/ArgonShadowSection.jsx';
+import VacuumLiveSection from '../components/dashboard/VacuumLiveSection.jsx';
+import OvnArmsSection from '../components/dashboard/OvnArmsSection.jsx';
+import TellContextSection from '../components/dashboard/TellContextSection.jsx';
+import TellShadowSection from '../components/dashboard/TellShadowSection.jsx';
 
 // Learning Monitor (2026-11-03). Read-only. Shows what the system fires and what it skips, how each arm of the pre-registered roster scoreboard and the
 // (log-only) meta-labeler are doing, how much REAL broker evidence exists, the signal-to-order delay, and a virtual prop-account pass race that resets
@@ -13,11 +20,14 @@ const money = (v, d = 0) => (v == null ? '--' : `${v < 0 ? '-' : '+'}$${Math.abs
 const card = { background: 'var(--card-bg)', border: '1px solid var(--border-color, #334155)', borderRadius: 8, padding: 16 };
 const small = { fontSize: 12, color: C.muted, lineHeight: 1.5 };
 
-function Card({ title, children, note }) {
+// `next` = [[label, entry]] from the summary's `nextSteps` (server/services/monitorNextSteps.js): when it is judged, and what follows if it holds or fails (CLAUDE.md co-022).
+function Card({ title, children, note, next }) {
+  const steps = (next || []).filter(([, n]) => n);
   return (<div style={{ ...card, marginBottom: 16 }}>
     <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 4 }}>{title}</div>
     {note && <div style={{ ...small, marginBottom: 10 }}>{note}</div>}
     {children}
+    {steps.map(([label, n]) => <NextSteps key={label} n={n} label={steps.length > 1 ? label : null} />)}
   </div>);
 }
 function Stat({ label, value, sub, color }) {
@@ -76,7 +86,7 @@ export default function LearningMonitorView() {
         <Stat label="Meta-labeler unseen days" value={ml?.latest ? `${ml.latest.unseenDays} of ${ml.daysNeeded}` : '--'} sub={ml?.latest ? `policy minus random ${ml.latest.policyMinusRandom} (CI ${ml.latest.ci?.join(' to ')}), pass: ${String(ml.latest.pass)}` : (msErr ? 'summary unavailable' : (ms ? 'no scorecard' : 'loading…'))} />
       </div>
 
-      <Card title="Cumulative P&L by arm" note={`Each line is a set of rules replayed on the same candidate fires. ${hc ? `After a $${data.haircutUsd} per trade slippage allowance (1 tick per fill).` : 'Raw model P&L (commission already subtracted).'} Multi-position: take-everything adds up every row, so it is not what one MNQ could do.`}>
+      <Card next={[['Roster scoreboard', ms?.nextSteps?.scoreboard]]} title="Cumulative P&L by arm" note={`Each line is a set of rules replayed on the same candidate fires. ${hc ? `After a $${data.haircutUsd} per trade slippage allowance (1 tick per fill).` : 'Raw model P&L (commission already subtracted).'} Multi-position: take-everything adds up every row, so it is not what one MNQ could do.`}>
         <ResponsiveContainer width="100%" height={280}><LineChart data={cumRows}><CartesianGrid stroke={C.grid} strokeDasharray="3 3" /><XAxis dataKey="date" {...axis} /><YAxis {...axis} /><Tooltip {...tip} formatter={(v) => money(v)} /><Legend />
           <ReferenceLine y={0} stroke={C.muted} />{cumArms.map((a) => <Line key={a} type="linear" dataKey={a} name={ARM_LABEL[a]} stroke={ARM_COLOR[a]} dot={false} strokeWidth={a === 'ROSTER_LIVE' ? 3 : 2} />)}</LineChart></ResponsiveContainer>
       </Card>
@@ -88,12 +98,12 @@ export default function LearningMonitorView() {
           {rows.map(([k, label, col]) => <tr key={k}><td style={{ padding: '4px 0', color: col }}>{label}</td><td>{fvs[k].n}</td><td style={{ color: (pt(fvs[k]) ?? 0) < 0 ? C.red : C.green }}>{money(pt(fvs[k]), 2)}</td></tr>)}</tbody></table>
       </Card>
 
-      <Card title="Meta-labeler: TAKE vs VETO (log only, nothing is gated)" note="Same candidate fires split by what the meta-labeler said. If it ranked well, TAKE would sit above VETO. Kept only until the unseen scorecard has 20 days or the end-of-December sunset. Full detail in the ML Silo tab.">
+      <Card next={[['Meta-labeler', ms?.nextSteps?.mlUnseen]]} title="Meta-labeler: TAKE vs VETO (log only, nothing is gated)" note="Same candidate fires split by what the meta-labeler said. If it ranked well, TAKE would sit above VETO. Kept only until the unseen scorecard has 20 days or the end-of-December sunset. Full detail in the ML Silo tab.">
         <ResponsiveContainer width="100%" height={240}><LineChart data={mlRows}><CartesianGrid stroke={C.grid} strokeDasharray="3 3" /><XAxis dataKey="date" {...axis} /><YAxis {...axis} /><Tooltip {...tip} formatter={(v) => money(v)} /><Legend /><ReferenceLine y={0} stroke={C.muted} />
           {['ML_TAKE', 'ML_VETO', 'TAKE_ALL'].map((a) => <Line key={a} type="linear" dataKey={a} name={ARM_LABEL[a]} stroke={ARM_COLOR[a]} dot={false} strokeWidth={2} />)}</LineChart></ResponsiveContainer>
       </Card>
 
-      <Card title="Bots" note="Everything that acts or learns on its own, in one place. The learning bot is not running yet; the AMT tell Stage 2 is trading the simulated account now.">
+      <Card next={[['Learning bot', ms?.nextSteps?.bot], ['AMT tell Stage 2', ms?.nextSteps?.tell], ['Forecast service', ms?.nextSteps?.forecast], ['Regime gauge', ms?.nextSteps?.regime]]} title="Bots" note="Everything that acts or learns on its own, in one place. The learning bot is not running yet; the AMT tell Stage 2 is trading the simulated account now.">
         <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
           <div style={{ flex: 1, minWidth: 300 }}>
             <div style={{ fontSize: 13, fontWeight: 700, color: C.green }}>Learning bot (shadow)</div>
@@ -114,13 +124,19 @@ export default function LearningMonitorView() {
         </div>
       </Card>
 
-      <Card title="Signal-to-order delay (market entries)" note="Median and 90th percentile seconds from the signal to the order. Realistic assumption 15 s, stress 90 s (docs/FILL_MODEL_SCOPE_20261103.md). Delay costs more than exchange slippage: about 2.9 points of drift at 15 s in regular hours, 5.8 at 60 s.">
+      <DayContextSection board={ms?.dayContext} next={ms?.nextSteps?.dayContext} />
+      <OvnArmsSection board={ms?.ovnArms} />
+      <VacuumLiveSection board={data.vacuumLive} />
+      <ArgonShadowSection board={data.argonShadow} />
+      <TellContextSection board={ms?.tellContext} next={ms?.nextSteps?.tellContext} />
+      <TellShadowSection board={ms?.tellContext} next={ms?.nextSteps?.tellShadow} />
+      <Card next={[['Delay', ms?.nextSteps?.delay]]} title="Signal-to-order delay (market entries)" note="Median and 90th percentile seconds from the signal to the order. Realistic assumption 15 s, stress 90 s (docs/FILL_MODEL_SCOPE_20261103.md). Delay costs more than exchange slippage: about 2.9 points of drift at 15 s in regular hours, 5.8 at 60 s.">
         <ResponsiveContainer width="100%" height={220}><LineChart data={data.delay}><CartesianGrid stroke={C.grid} strokeDasharray="3 3" /><XAxis dataKey="date" {...axis} /><YAxis {...axis} /><Tooltip {...tip} /><Legend />
           <ReferenceLine y={15} stroke={C.green} strokeDasharray="4 4" label={{ value: '15 s', fill: C.green, fontSize: 11 }} /><ReferenceLine y={90} stroke={C.red} strokeDasharray="4 4" label={{ value: '90 s', fill: C.red, fontSize: 11 }} />
           <Line type="linear" dataKey="median" name="Median s" stroke={C.blue} strokeWidth={2} /><Line type="linear" dataKey="p90" name="p90 s" stroke={C.amber} strokeWidth={2} /></LineChart></ResponsiveContainer>
       </Card>
 
-      <Card title="Pass race (virtual prop account)" note={`Reach +$${data.passTarget} before the $${data.trailLoss} end-of-day trailing loss. A virtual bust is logged as a failed attempt and the account resets, so the learning keeps going. Uses the slippage-adjusted P&L, one arm at a time; daily resolution.`}>
+      <Card next={[['Pass race', ms?.nextSteps?.passRace]]} title="Pass race (virtual prop account)" note={`Reach +$${data.passTarget} before the $${data.trailLoss} end-of-day trailing loss. A virtual bust is logged as a failed attempt and the account resets, so the learning keeps going. Uses the slippage-adjusted P&L, one arm at a time; daily resolution.`}>
         <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
           {Object.entries(data.passRace).map(([k, v]) => {
             const passes = v.attempts.filter((a) => a.result === 'PASS').length, busts = v.attempts.length - passes;
@@ -133,7 +149,7 @@ export default function LearningMonitorView() {
         </div>
       </Card>
 
-      <Card title="Research gates" note="Which live research gates are on right now (read-only; nothing here changes trading).">
+      <Card next={[['Gates', ms?.nextSteps?.gates]]} title="Research gates" note="Which live research gates are on right now (read-only; nothing here changes trading).">
         {ms?.gates ? (<div style={{ fontSize: 13, lineHeight: 1.8 }}>
           <div>Live roster gate: {ms.gates.liveRoster?.state} {ms.gates.liveRoster?.enabled ? '' : '(disabled) '}· {(ms.gates.liveRoster?.types || []).join(', ') || 'none'}{ms.gates.liveRoster?.ageDays != null ? ` · ${ms.gates.liveRoster.ageDays}d old` : ''}</div>
           <div>ML veto gate: {ms.gates.mlVeto ? (ms.gates.mlVeto.enabled ? (ms.gates.mlVeto.enforce ? 'ENFORCING' : 'log-only') : 'disabled') : 'unknown'}</div>

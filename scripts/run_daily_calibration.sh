@@ -139,6 +139,9 @@ timed_step daily /usr/bin/node scripts/calibrate_live_roster.mjs
 # Roster scoreboard (2026-10-25): live roster gate vs trading everything, pre-registered (docs/ROSTER_SCOREBOARD_PREREG_20261025.md). Must run AFTER calibrate_live_roster.mjs (it reads the roster history).
 timed_step daily /usr/bin/node scripts/roster_scoreboard.mjs
 # Learning Monitor data (2026-11-03): read-only series for src/views/LearningMonitorView.jsx -> public/learning_monitor.json (arms, fired vs skipped, ML verdicts, delay, pass race)
+# Next-hour RANGE shadow model (docs/STRUCTURE_SHADOW_MODEL_DESIGN_20261105.md, user 2026-11-05 'get this model built'): predicts today's four rows with the model frozen BEFORE the session, labels finished rows, refits and freezes tomorrow's model, rebuilds public/structure_model.json.
+# Shadow only; counts only; a failed day is logged and retried next night; never fails this job. Runs BEFORE the learning monitor build so that build merges the fresh payload.
+timed_step daily ./venv/bin/python3 scripts/structure_model/run_nightly.py
 timed_step daily /usr/bin/node scripts/learning_monitor_build.mjs
 timed_step daily /usr/bin/node scripts/derive_day_types.js
 
@@ -286,5 +289,10 @@ timed_step daily ./venv/bin/python3 scripts/regime/regime_calibration.py
 # checks that every real ENTRY fill of today has a matching exit fill and nothing is left open after the close, and measures the model-vs-broker P&L gap. Writes live_attestations; a DIVERGENCE or ERROR also logs a line to
 # scratch/server_errors.jsonl. Read-only against live data, checks today and the previous weekday (catch-up), mutation-tested 2026-11-01, never fails this job. Feeds the Stage 2 review (docs/AMT_TELL_STAGE2_REVIEW_RULE_20261101.md).
 timed_step daily ./venv/bin/python3 scripts/attest_live_day.py --days 1
+
+# Nightly per-second order-book summary, FORWARD-ONLY from 2026-11-04 (docs/DEPTH_LOGGING_FORWARD_20261104.md, user 2026-11-04 'Yes to both'): keeps the RTH per-second book summary of each completed session; outcome-blind, idempotent, never fails this job.
+timed_step daily /bin/bash scripts/depth_persec_nightly.sh
+# Stage 2 end rule (docs/TELL_STAGE2_END_RULE_20261104.md): counts the live linked tell trades and dates against the shared floors; at BOTH floors applies the written rule ONCE and flags a HIGH decision. Changes nothing itself.
+timed_step daily /usr/bin/node scripts/tell_stage2_floor_check.mjs
 
 echo "=== Daily calibration complete: $(date) ==="

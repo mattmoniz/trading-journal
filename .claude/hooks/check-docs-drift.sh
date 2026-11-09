@@ -205,6 +205,14 @@ if [ -n "${hot_changed// /}" ]; then
   warnings+=("PERFORMANCE GUARD — hot-path file(s) changed: ${hot_changed}. After the restart the app watches this change itself until RTH and Globex have each been seen for an hour (perf_snapshots, compared with the previous sha's numbers). If the change is meant to make something faster, register that BEFORE restarting: node scripts/perf_expect.mjs <metric> down \"why\". Afterwards run 'node scripts/perf_report.mjs' (per-git-sha medians for DB busy %, detection pass ms, loop stalls, poll outages, row-to-order delay). Any new query on this path should be checked with 'node scripts/explain_check.mjs \"<sql>\"' (flags full scans of big tables and cast-wrapped filters), and a per-pass lookup that is stable for the day belongs in getCached(DAY_CACHE_TTL). The in-server watch raises the 'SLOWER SINCE LAST CHANGE' banner on its own if a metric leaves its pre-change range for 2+ snapshots, and writes a VERDICT when the watch ends.")
 fi
 
+# ── 5. Research organization (user, 2026-11-04: everything stays organized as tests are added) ──
+# Fails when a new prereg/scope/design doc is missing from docs/RESEARCH_INDEX.md, a Monitor & Learning card has no next-step entry,
+# a register row lacks a next test or retire rule, or a recent look has no claim. Fix: node scripts/build_research_index.mjs, then the item named.
+org_out="$(timeout 30 node scripts/check_research_organized.mjs 2>&1 | grep -E '^(- |[0-9]+ PROBLEM)' | head -12)"
+if [ -n "$org_out" ]; then
+  warnings+=("RESEARCH ORGANIZATION CHECK (scripts/check_research_organized.mjs): ${org_out}")
+fi
+
 # ── Output ─────────────────────────────────────────────────────────────────────
 [ ${#warnings[@]} -eq 0 ] && exit 0
 

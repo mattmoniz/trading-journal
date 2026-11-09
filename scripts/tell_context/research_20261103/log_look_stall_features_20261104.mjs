@@ -1,0 +1,4 @@
+// Run twice: look 162 (stall = p75) and look 163 (amendment A1, p90; edited label and ref). Logs the ledger look for docs/TELL_STALL_FEATURES_KILL_TEST_PREREG_20261104.md BEFORE tell_stall_features.py reads any outcome (hr-023). 5 counted tests.
+import { logLook } from '../../lib/look_ledger.mjs';
+const id = await logLook({ family: 'tell_stall_features_20261104', dataWindow: 'explore_1760_entries', kind: 'EXPLORE', tests: 5, label: 'AMENDMENT A1 (stall rule p90): Kill test: NOW-versus-LATELY tape readings (volume, adverse share, range per contract, effort per point, pullback) at the first stall minute of the 1,760 explore tell entries vs the next 60 minutes continuation minus reversal; Spearman, day-block CI, other-date placebo', script: 'scripts/tell_context/research_20261103/tell_stall_features.py', prereg: 'docs/TELL_STALL_FEATURES_KILL_TEST_PREREG_20261104.md', ref: 'tell_stall_features_20261104_look2' });
+console.log('look id', id); process.exit(0);

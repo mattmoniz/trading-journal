@@ -114,6 +114,8 @@ Full text of every entry that CLAUDE.md now summarises in one line. Nothing was 
 - [cv-108](#cv-108) A prop-firm evaluation account (the "Trading Evaluator" / "Simulated Futures …
 - [cv-109](#cv-109) The Claude Code sandbox's auto-mode classifier blocks arming/enabling a live …
 - [cv-110](#cv-110) New monitors, scoreboards, learning arms, bots and forward tests go in the one Monitor & Learning page (phone Monitor tab, app Learning view) as a new section, not a new tab or menu entry. (cv-110)
+- [cv-111](#cv-111) Sealed-look wrapper: after any script edit run phase 2 end-to-end on explore rows as a separate passing command BEFORE the spend; never chain the check and the sealed run. (2026-11-03)
+- [cv-112](#cv-112) A page/dev-server edit goes live instantly but the API only after a restart: every new summary field a page reads must tolerate being absent; test against the RUNNING server. (cv-112)
 
 ---
 
@@ -705,3 +707,16 @@ RULE: any new monitor, scoreboard, learning arm, bot, forward test, research gat
 - Both surfaces must stay equivalent; update ARCHITECTURE.md's monitorSummary row and the frontend views list in the same session.
 Exceptions: trade-level views (Timeline, Performance, ML trade lists, Shadow, Tell detail) are not monitors and keep their own tabs. Pages that must be reachable by their own URL (setup-performance, loss-prevention) are unchanged. Everything on the page is read-only: nothing there may place orders, arm, or change live gates.
 Honesty conventions already on that page and to be kept: label MODEL P&L versus broker P&L, show the amount of real broker evidence (336 trades on 16 days as of 2026-11-03), the commission is already inside model P&L (slippage allowance only, 1 dollar per trade), and no display filter that can hide rows is persisted (cv-049).
+
+<a id="cv-111"></a>
+
+- **Sealed-look wrapper: after any script edit run phase 2 end-to-end on explore rows as a separate passing command BEFORE the spend; never chain the check and the sealed run. (2026-11-03)**
+
+Incident 2026-11-03: the flip time-of-day wrapper (`flip_time_sealed.mjs`) spends the sealed look between phase 1 and phase 2. After a code amendment I ran the explore regression check and the sealed run in ONE chained command; a bug I had just introduced (a comment swallowed the `rng` setup on the same line) crashed phase 2 in the regression check, yet the sealed run still went ahead, spent the one-time look (ledger 131) and then crashed too. No outcome was read before the crash, so the look was completed on the saved rows without changing any rule, but the sealed look was exposed to a trivial bug. How to apply: after ANY edit to a sealed-look script, run its phase 2 end-to-end on the explore window (or synthetic rows) and read the full output BEFORE the spend, as a separate command that must have passed; never chain the check and the sealed run; never put a comment in the middle of a line when replacing text with a script; prefer making the wrapper itself run the explore-check first and abort the spend if it fails.
+
+<a id="cv-112"></a>
+
+- **A page/dev-server edit goes live instantly but the API only after a restart: every new summary field a page reads must tolerate being absent; test against the RUNNING server. (cv-112)**
+
+quick-check.html and the React src/ go live the moment the file is saved (static file / dev server), but the API fields they read only change after a server restart. Found 2026-11-04: new shadow-book rows (`sh.books.D`) read before the API sent them threw 'Cannot read properties of undefined (reading changed)' and blanked the whole phone Monitor tab until fixed.
+Rule: every new summary field a page reads must tolerate being ABSENT (skip the row or show 'not served yet'), never assume the key exists; verify with a Playwright route-intercept against the RUNNING server (not only with injected data) before calling a UI change done; and note in OPEN_THREADS which UI pieces only light up after the restart.

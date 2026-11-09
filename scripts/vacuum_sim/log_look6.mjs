@@ -1,0 +1,5 @@
+// Ledger look for the corrected real-depth run (amendment A4: 5 counted tests), BEFORE any outcome of it is read. Supersedes the off-spec parts of looks 192/193; the family test count becomes 51.
+import { logLook } from '../lib/look_ledger.mjs';
+const r = await logLook({ family: 'vacuum_original_idea', dataWindow: 'depth_era_explore_2026-06-15..2026-10-09', kind: 'EXPLORE', tests: 5, label: 'Q4-5 corrected real-depth run A4: burst(moved) thin vs thick, full rule with V0 exits, Globex+reopen real Ratio, near-book skew, bounded-stop fade vs matched random-bar fade',
+  script: 'scripts/vacuum_sim/depth_tell2.py', prereg: 'docs/VACUUM_COMMON_SIM_PREREG_20261108.md', claimSlug: 'vacuum_real_depth_corrected_20261109', outcome: 'RUN_PENDING', notes: { amendment: 'A4', audited_by: 'Argon High round 9 pre-run audit, all real findings fixed', unit_tests: 'scripts/vacuum_sim/test_exits.py ALL PASS', confirm: 'sessions >= 2026-10-12 except 2026-11-06 unread', earlier_looks: [189, 190, 191, 192, 193] } });
+console.log('LOOK_ID', r); process.exit(0);

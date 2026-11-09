@@ -7,10 +7,13 @@ import { query } from '../db.js';
 import { getLiveRoster, LIVE_ROSTER_GATE } from './setupEligibility.js';
 import { ML_VETO_GATE } from './mlLiveVetoGate.js';
 import { BREAKEVEN_STOP_LIVE, T1_FLOOR_SHADOW } from './resolveSetups.js';
+import { getTellContextBoard } from './tellContextSummary.js';
+import { getDayContextBoard } from './dayContextSummary.js';
+import { getOvnArmsBoard } from './ovnArmsSummary.js';
+import { buildNextSteps } from './monitorNextSteps.js';
+import { FORWARD_FLOORS } from '../config/forwardFloors.js';
 
 const UNSEEN_DAYS_NEEDED = 20;
-// Pre-registered evidence floors (docs/FORECAST_SERVICE_20261102.md: a look needs 20 x (looks done + 2) complete forward days; docs/REGIME_GAUGE_20261102.md: 30 realized outlooks; docs/AMT_TELL_LIVE_PROJECT_SPEC_20261028.md: about 150 tell trades).
-const FORWARD_FLOORS = { forecastSpanDays: 20, regimeOutlooks: 30, tellTrades: 150 };
 // Learning Monitor series (2026-11-03): written nightly by scripts/learning_monitor_build.mjs (read-only research data: arms, fired vs skipped, ML verdicts, delay, pass race, bot decisions).
 // Served here so quick-check.html's Learning tab (phone / Home Assistant) needs no new route and no new tunnel path.
 const LEARNING_FILE = fileURLToPath(new URL('../../public/learning_monitor.json', import.meta.url));
@@ -49,7 +52,7 @@ async function forwardTests() {
   const done = looks.rows[0].n;
   return { forecast: { champion: champ.rows[0]?.version || null, points: fp.rows[0].points, days: fp.rows[0].days, looksDone: done, daysNeeded: FORWARD_FLOORS.forecastSpanDays * (done + 2) },
     regime: { outlooks: ro.rows[0].n, realized: ro.rows[0].realized, needed: FORWARD_FLOORS.regimeOutlooks, last: ro.rows[0].last },
-    tell: { trades: tell.rows[0].n, days: tell.rows[0].days, pnl: tell.rows[0].pnl, floor: FORWARD_FLOORS.tellTrades } };
+    tell: { trades: tell.rows[0].n, days: tell.rows[0].days, pnl: tell.rows[0].pnl, floor: FORWARD_FLOORS.tellTrades, floorDates: FORWARD_FLOORS.tellDates } };
 }
 
 async function gates() {
@@ -60,11 +63,11 @@ async function gates() {
 }
 
 export async function getMonitorSummary() {
-  const [sb, un, fw, gt, lm] = await Promise.all([safe('scoreboard', scoreboard), safe('mlUnseen', mlUnseen), safe('forwardTests', forwardTests), safe('gates', gates), learning()]);
+  const [sb, un, fw, gt, lm, tc, dc, oa] = await Promise.all([safe('scoreboard', scoreboard), safe('mlUnseen', mlUnseen), safe('forwardTests', forwardTests), safe('gates', gates), learning(), safe('tellContext', getTellContextBoard), safe('dayContext', getDayContextBoard), safe('ovnArms', getOvnArmsBoard)]);
   const L = [];
   L.push(sb.state === 'OK' ? `Roster scoreboard: ${sb.daysSoFar}/${sb.firstLookDays} days to first look; roster ${money(sb.arms?.ROSTER_LIVE?.perTrade)}/trade vs take-all ${money(sb.arms?.TAKE_ALL?.perTrade)}/trade (${sb.verdict})` : `Roster scoreboard: ${sb.state}`);
   L.push(un.state === 'OK' ? `ML unseen scorecard: ${un.latest.unseenDays}/${un.daysNeeded} unseen days, policy-minus-random ${money(un.latest.policyMinusRandom)}, pass=${un.latest.pass}` : `ML unseen scorecard: ${un.state}`);
   L.push(fw.state === 'ERROR' ? 'Forward tests: ERROR' : `Forward tests: forecast ${fw.forecast.days}/${fw.forecast.daysNeeded} days, regime ${fw.regime.realized}/${fw.regime.needed} realized outlooks, tell ${fw.tell.trades}/${fw.tell.floor} trades (${money(fw.tell.pnl)})`);
   if (gt.liveRoster) L.push(`Live roster ${gt.liveRoster.state}: ${gt.liveRoster.types.join(', ') || 'none'}; ML veto ${gt.mlVeto.enforce ? 'ENFORCING' : 'log-only'}; breakeven stop ${gt.breakevenStopLive ? 'ON' : 'off'}`);
-  return { generatedAt: new Date().toISOString(), scoreboard: sb, mlUnseen: un, forwardTests: fw, gates: gt, learning: lm, summary_text: L.join('\n') };
+  return { generatedAt: new Date().toISOString(), scoreboard: sb, mlUnseen: un, forwardTests: fw, gates: gt, learning: lm, tellContext: tc, dayContext: dc, ovnArms: oa, nextSteps: buildNextSteps({ sb, un, fw, lm }), summary_text: L.join('\n') };
 }

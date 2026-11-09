@@ -1,0 +1,38 @@
+# Pre-registration: a profit target placed only BEYOND the tell's normal move (written 2026-11-04 night BEFORE any floor-target outcome was computed)
+
+STATUS: FROZEN. Origin: user, 2026-11-04 night ('There should be a target no? Will there ever be' ... 'Sure try it'). The one target idea not yet tried (`docs/OPEN_THREADS.md`: 'same arms with a distance floor from the winners' own run'). Every earlier target (fixed R-multiples, the nearest node, the nearest overnight thin zone, the ladder) lowered or did not help the mean; the nearest structure is only about 38 points away and banks early, and the profit sits in the 88 trades with stops over 100 points (+$49.95 each; `scripts/amt_vbars/descriptive_targets_output.txt`). Research only: nothing live, no order. Ledger family `tell_floor_target_20261105`, 3 counted tests. Hold-out unspent (extraction of 2025-05-16 onward not done).
+
+## 1. Trades and management
+The same 1,760 explore tell entries (`scripts/amt_vbars/trades_V1_explore.csv`) replayed by the live shadow-book code (`tell_replay_lib.replay_rows`, `watcher_stop_lib.run_dyn`, hr-022). The arms differ from V1 ONLY by adding a limit target (fill at the target after a touch beyond it by one tick; the stop is checked first on a bar touching both): same entry, same stop, same other exits (cv-026, hr-042). V1 parity with the file's net dollars is checked and printed.
+
+## 2. The floor F (causal, no static number, hr-003 / hr-020)
+For a trade on date d: F = the median `v1_mfe` (maximum favourable excursion, points) of V1 WINNERS (net > 0) on strictly EARLIER dates (expanding; at least 100 earlier winners, else the trade is a SEED: it stays V1 and is dropped from scoring, count printed). This is 'the winners' own normal run', from earlier trades only, so the target is not a statistic of its own population's outcome (cv-022).
+
+## 3. Arms
+- **STRUCT (primary):** target = the NEAREST structure level AHEAD of the entry in the trade direction at distance >= F. Structure = the approach-side edge of the overnight thin zones (`structure_lib.day_structure`) plus the market levels in force at the entry minute (`levels_at`), the same sets the earlier structure arms used. No structure at or beyond F -> the entry follows V1 (not 'acted').
+- **DIST (the control for placement):** on the SAME entries where STRUCT acts, a target at exactly F points from the entry. Isolates 'a far target' from 'a target at a structural level'.
+- Reported sensitivity, not counted: STRUCT with the floor x 0.75 and x 1.5.
+
+## 4. Counted tests (3): paired net dollars per entry (arm minus V1; entries where the arm does not act contribute 0), over the scored (non-seed) entries; day-block bootstrap (resample dates, 4,000 draws, seed 20261105), 98.33 percent CI (Bonferroni 3); detectable effect (2.8 x SE) printed first
+- **T1:** STRUCT minus V1, all scored entries. LEAD needs: CI above zero, the point estimate positive in both chronological halves of the scored dates.
+- **T2:** STRUCT minus DIST (paired, same entries). Is the structural placement better than a plain far target?
+- **T3:** STRUCT minus V1 on entries with node-stop distance <= 100 points (the population where V1's mean is about -0.6 and a target could help without cutting a runner).
+- A KEEPS-MORE reading (capture up, dollars not lower) is reported as in `tell_structure_exit.py` but is NOT a lead for a target: dollars decide (user's goal is a better exit, and a target that keeps more but earns less is the earlier failure).
+
+## 5. Reported, not counted
+Funnel first: share of scored entries where STRUCT acts, median distance to the target, median F. On acted entries: V1 vs arm mean net, win rate, average winner / loser, share reaching the target, exit mix. The >100-point-stop group SEPARATELY (T1 split; the runner population, expected to lose most: cv-033 pooled verdicts hide opposite-signed groups). By entry hour (10:00-10:59 vs later), by half, capture ratio. Worst loss is unchanged by construction (same stop).
+
+## 6. Limits
+Explore only, many earlier looks on these 1,760 entries; structure exists only from the overnight profile and the market levels at entry (no developing RTH structure beyond the prior levels); 120-minute timeouts and the 15:55 flatten still apply; fills are the shadow model's, not the broker's. A far target is reached rarely (about 7 percent at 2R in the earlier test), so power is low: the detectable effect is printed first and a null is 'not shown at this power'. No sealed era, so the best possible result is a LEAD for a forward shadow arm (a fixed-rule STRUCT target logged beside V1 on the live tell), not a live change.
+
+## 7. Next-step tree and retire rule (co-022)
+LEAD: log STRUCT as a forward shadow book beside the live tell (no order), judged at the tell's own floor (150 trades). NOT SHOWN with the funnel adequate: close the target idea for the tell (the open-ended hold IS the exit; the edge lives in the runners). NOT SHOWN because the arm rarely acts (< 150 acted): UNDERPOWERED, say so, and the remaining untested form is a partial exit (take part at the structure, keep a runner) which needs its own pre-registration with the floor-preserving variant (cv-035).
+
+## 8. RESULT (2026-11-04 night; script `scripts/tell_context/research_20261103/tell_floor_target.py`; output `scratch/tell_floor_target_20261105_output.txt`, rows `scratch/tell_context_20261103/tell_floor_target_rows.csv`; look 179; claim `tell_floor_target_not_shown_20261105`)
+V1 parity exact (max diff 0.0000, 0 trades differ). 309 entries dropped (seed period before 100 earlier winners existed, or no structure data); 1,451 scored on 399 dates. F ranged 52.8-72.9 points (median 57.0). Funnel: a structure at or beyond F existed for 1,270 entries (87.5 percent); the target was reached on 259 (17.8 percent); median target distance 74.8 points; the DIST control reached on 339. Detectable (2.8 x SE): T1 $6.23, T2 $3.78, T3 $6.03 per entry.
+- **T1** STRUCT minus V1: **-4.44 per entry [-10.20, +0.51]**, halves -1.24 / -6.74.
+- **T2** STRUCT minus DIST: -1.06 [-4.26, +2.27], halves -1.56 / -0.70.
+- **T3** STRUCT minus V1 on stops <= 100 points: -2.98 [-8.62, +1.99], halves -1.33 / -4.17.
+- **Verdict: NOT SHOWN** (no lead; every point estimate and both halves are negative). 259 acted entries, so the arm acted often enough to be powered by count.
+Reported, not counted: on the 1,270 entries with a far structure, V1 +3.89 per entry, STRUCT -1.19, the plain distance-F target DIST +0.03 (win rate 30 vs 27 percent, average win +122 vs +166, average loss unchanged -54.5): a far target wins slightly more often and cuts the winners. Floor x0.75 -2.54, x1.5 -3.53 (the same sign at every floor). The runner group (stops over 100 points, 85 entries): STRUCT minus V1 **-24.89** per entry (V1 +52.74), reached on 27; the small-stop group -3.17. By entry hour: 10:00-10:59 -5.86, later -3.26.
+READING: even a target placed beyond the winners' normal run costs money on the tell: it gives up the long runs that carry the result (the same finding as the fixed R-multiple targets and the nearest-node target, now with the near-structure objection removed), and structure placement is no better than a plain far target (T2). The negative point estimate in every cut makes this more than a null for THIS form of target, though T1's interval touches zero. NOT tested: a partial exit (take part at the structure, keep a runner), a target that moves with a trailing stop, entries before the structure existed, the hold-out era, Globex. Per section 7: the open-ended hold stays the exit; the only untested form is the partial exit, which would need its own pre-registration with a floor-preserving variant (cv-035).

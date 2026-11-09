@@ -1,0 +1,4 @@
+// Logs the ledger look for docs/RANGE_MODEL_TELL_FILTER_PREREG_20261105.md BEFORE range_tell_filter.py joins any tell dollar outcome to a forecast (hr-023). 3 counted tests.
+import { logLook } from '../../lib/look_ledger.mjs';
+const id = await logLook({ family: 'range_model_tell_filter_20261105', dataWindow: 'tell_explore_729_matched_trades_305_dates_not_sealed', kind: 'EXPLORE', tests: 3, label: 'Next-hour range forecast (walk-forward p2) as a simulated approve/veto of tell explore trades: WIDE minus NARROW tercile book-A dollars, control on the hard baseline p3, approve-minus-all per day; day-block CI, circular-shift placebo, halves rule; explore era only, no sealed hold-out exists for the forecast', script: 'scripts/tell_context/research_20261103/range_tell_filter.py', prereg: 'docs/RANGE_MODEL_TELL_FILTER_PREREG_20261105.md', ref: 'range_model_tell_filter_20261105_look1' });
+console.log('look id', id); process.exit(0);

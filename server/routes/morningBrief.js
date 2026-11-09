@@ -522,6 +522,7 @@ router.get('/scalp-playbook/:date', async (req, res) => {
       topDowCombos: topDowCombos.map(withStability),
       bestHours: hourPatterns.map(withStability),
       contextSpecific: contextPatterns.map(withStability),
+      patternMiningNote: 'mined from past data, no multiple-testing correction, no forward test: display only, NOT validated (Opus review 2026-11-08)',
       newDiscoveries: newDiscoveries.rows.map(p => ({
         pattern: p.pattern_key, wr: Math.round(p.win_rate * 100), n: p.sample_size, pnl: p.net_pnl_dollars
       })),

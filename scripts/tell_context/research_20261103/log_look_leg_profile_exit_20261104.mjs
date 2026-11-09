@@ -1,0 +1,4 @@
+// Logs the ledger look for docs/TELL_LEG_PROFILE_STOP_AND_FLOOR_EXITS_PREREG_20261104.md BEFORE tell_leg_profile_exit.py reads any outcome (hr-023).
+import { logLook } from '../../lib/look_ledger.mjs';
+const id = await logLook({ family: 'tell_leg_profile_exit_20261104', dataWindow: 'explore_1760_entries', kind: 'EXPLORE', tests: 5, label: 'Leg-profile stop (R0 initial, R1 ratchet with a walk-forward pullback floor) and distance-floor structure exits (T1 zone target, A3F flip at structure, A4F value-area cue, all only beyond the winners normal run) on the 1,760 V1 explore entries: paired capture-of-the-move difference vs V1 with a net-dollar guard; day-block CI 99 percent (5 counted tests)', script: 'scripts/tell_context/research_20261103/tell_leg_profile_exit.py', prereg: 'docs/TELL_LEG_PROFILE_STOP_AND_FLOOR_EXITS_PREREG_20261104.md', ref: 'tell_leg_profile_exit_20261104_look1' });
+console.log('look id', id); process.exit(0);

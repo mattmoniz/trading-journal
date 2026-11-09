@@ -87,6 +87,8 @@ Full text of each entry: `docs/CLAUDE_MD_ARCHIVE/hard_rules.md`, anchor = the id
 - Never apply async status updates last-write-wins: terminal states (FILLED) are absorbing and monotonic fields only increase. (hr-067)
 - Keep the full event history (append-only log) for any state derived from an external event stream; a last-message column can't be repaired later. (hr-068)
 - A strict 'unknown broker order' halt is only usable on an account kept free of unrelated resting orders; clear clutter in Sierra, don't soften the halt. (hr-069)
+- price_bars_primary RTH volume is ~2.7x inflated on some mid-2025 dates (ticks are right); validate bars by tick RTH high/low vs the DB, never by DB volume. (2026-11-03) (hr-070)
+- Before ./restart.sh, check ps -ef | grep start.sh: a leftover supervisor from an earlier backgrounded restart respawns children and makes a 2nd server. Kill by PID, ./stop.sh, one ./start.sh. (hr-071) (hr-071)
 
 ## Conventions
 
@@ -202,6 +204,8 @@ Full text of each entry: `docs/CLAUDE_MD_ARCHIVE/conventions.md`, anchor = the i
 - A prop-firm evaluation account does not carry retail CME margin; never judge its margin figures against generic CME numbers, ask the user what they actually see. (cv-108)
 - The Claude Code sandbox classifier also blocks ARMING the kill switch; if denied, stop, don't retry another way, report what's verified and hand the arm step to the user. (cv-109)
 - New monitors, scoreboards, learning arms, bots and forward tests go in the one Monitor & Learning page (phone Monitor tab, app Learning view) as a new section, not a new tab or menu entry. (cv-110) (cv-110)
+- Sealed-look wrapper: after any script edit run phase 2 end-to-end on explore rows as a separate passing command BEFORE the spend; never chain the check and the sealed run. (2026-11-03) (cv-111)
+- A page/dev-server edit goes live instantly but the API only after a restart: every new summary field a page reads must tolerate being absent; test against the RUNNING server. (cv-112)
 
 ## Collaboration
 
@@ -228,6 +232,10 @@ Full text of each entry: `docs/CLAUDE_MD_ARCHIVE/collaboration.md`, anchor = the
 - `invoke_gemini.sh` must keep its `cd "$REPO"` / `--add-dir` lines, else `agy` wastes time on a filesystem-wide `find /` scan. (co-019)
 - `scratch/claude_request.md` has no versioning; read it before any Write, since a staged task (e.g. one waiting on quota) may be sitting there. (co-020)
 - A background `./start.sh` left running after the session ends becomes an orphan supervisor that can silently take the app down; stop it before ending the session. (co-021)
+- Every monitor/forward test/study ships a written next-step tree (confirm/fail/continue) on its card and a failure autopsy in the improvement register; 'not shown' alone is not closure. (2026-11-04) (co-022)
+- Register every test/variant at its START: prereg, ledger look, claim, register row (next test + retire rule), index rebuild; Stop hook runs check_research_organized.mjs. (co-023)
+- Unsolicited edge search runs as a quarterly queue (docs/CANDIDATE_QUEUE.md): max 8 candidates, charged to the ledger at registration, Holm 0.10, judged on forward days only; explore results are leads. (co-024)
+- Never retire or discard an idea on an estimate or a prior (even an AI reviewer's); keep it open or PARKED with a next step and reopen trigger. Only a pre-registered result closes one. (2026-11-08) (co-025)
 
 ## Where to look
 

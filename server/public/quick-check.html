@@ -510,6 +510,7 @@
     <h2>ML Performance</h2>
     <div style="font-size:11px;color:var(--dim);margin-bottom:8px;">Fully isolated -- never changes what fires as a real alert. Scored across every level individually (not collapsed to one cluster "winner"). Out-of-sample = genuinely never seen by the model during training, the only honest comparison.</div>
     <div id="ml-tab-model-line" style="font-size:11px;color:var(--dim);margin-bottom:8px;"></div>
+    <div id="ml-tab-sample-tabs" class="range-filter" style="margin-bottom:6px;"></div>
     <div id="ml-tab-range-tabs" class="range-filter"></div>
     <div id="ml-tab-range-label" class="range-label"></div>
 
@@ -522,6 +523,11 @@
       <div class="perf-subhead" style="color:#c4b5fd;">ML-Approved</div>
     </div>
     <div id="ml-tab-take-stats" class="range-stats-row"></div>
+
+    <div class="perf-head-row" style="margin-top:10px;">
+      <div class="perf-subhead" style="color:#94a3b8;">ML-Vetoed</div>
+    </div>
+    <div id="ml-tab-veto-stats" class="range-stats-row"></div>
 
     <canvas id="ml-tab-canvas" class="equity" style="margin-top:10px;"></canvas>
     <div id="ml-tab-step-trail" style="margin-top:14px;"></div>
@@ -771,10 +777,19 @@ function renderVolRegimeHistoryChart(canvasId, rows, band) {
 // comment) -- the real live ML VETO gate also scores Globex candidates (mlLiveVetoGate.js,
 // 6pm-10am ET), but that population isn't shown on this page.
 let mlTabRange = 'today';
+let mlTabSample = 'test';      // 'test' = out-of-sample only (default, the honest read); 'all' = everything scored, with the out-of-sample start marked on the chart
+let mlTabTestIds = null;       // ids of the out-of-sample trades in the current range (only fetched for sample 'all')
 let mlTabTradesCache = [];
 let mlTabLoadedOnce = false;
 
 function renderMlTabRangeTabs() {
+  const se = $('ml-tab-sample-tabs');
+  if (se) {
+    se.innerHTML = [['test', 'Out-of-sample'], ['all', 'All data (incl. training)']].map(([val, label]) =>
+      '<button class="range-btn ' + (mlTabSample === val ? 'active' : '') + '" data-ml-sample="' + val + '">' + label + '</button>'
+    ).join('');
+    se.querySelectorAll('button').forEach(b => b.addEventListener('click', () => { mlTabSample = b.dataset.mlSample; loadMlTabRange(mlTabRange); }));
+  }
   const el = $('ml-tab-range-tabs');
   if (!el) return;
   el.innerHTML = [['today', 'Today'], ['week', 'Week'], ['month', 'Month'], ['year', 'Year'], ['all', 'All']].map(([val, label]) =>
@@ -789,11 +804,16 @@ async function loadMlTabRange(range) {
   const statsEl = $('ml-tab-all-stats');
   if (statsEl) statsEl.innerHTML = '<span style="color:var(--dim);">Loading…</span>';
   try {
-    const data = await fetch('/api/ml-silo/range-trades?range=' + range + '&sample=test', { cache: 'no-store' }).then(r => r.json());
+    const data = await fetch('/api/ml-silo/range-trades?range=' + range + '&sample=' + mlTabSample, { cache: 'no-store' }).then(r => r.json());
     mlTabTradesCache = data?.trades || [];
+    mlTabTestIds = null;
+    if (mlTabSample === 'all') {
+      const t = await fetch('/api/ml-silo/range-trades?range=' + range + '&sample=test', { cache: 'no-store' }).then(r => r.json()).catch(() => null);
+      mlTabTestIds = new Set((t?.trades || []).map(x => x.id));
+    }
     mlTabLoadedOnce = true;
     const modelEl = $('ml-tab-model-line');
-    if (modelEl) modelEl.textContent = data?.modelVersion ? data.modelVersion + ' (out-of-sample)' : 'No trained model yet.';
+    if (modelEl) modelEl.textContent = data?.modelVersion ? data.modelVersion + (mlTabSample === 'all' ? ' (all scored data: the part before the dashed line is data the model was trained on, so it looks better than it can trade)' : ' (out-of-sample)') : 'No trained model yet.';
     const labelEl = $('ml-tab-range-label');
     if (labelEl) labelEl.textContent = data?.rangeLabel ? data.rangeLabel + ' — ' + mlTabTradesCache.length + ' scored candidate' + (mlTabTradesCache.length === 1 ? '' : 's') + ' (RTH only, matches Performance)' : '';
     renderMlTabRangeView();
@@ -874,46 +894,39 @@ function renderMlStatsRow(containerId, trades) {
     '<span title="Worst single realized trade P&L in this range">Worst <b class="mono" style="color:' + (s.worstTrade < 0 ? 'var(--red)' : 'var(--dim)') + '">' + (s.worstTrade < 0 ? '-$' + Math.abs(s.worstTrade).toFixed(0) : '$0') + '</b></span>';
 }
 
-// Two-line equity curve (All Trades vs ML-Approved), built from raw per-trade points --
-// same x-axis time/date convention as the main Performance section's renderEquityCurve()
-// (today shows times, everything else shows dates via fmtAxisTime()).
-function renderMlSiloRangeEquityChart(canvasId, allTrades, takeTrades, range) {
+// Equity curves on ONE shared timeline: All Trades, ML-Approved (TAKE) and ML-Vetoed (VETO), built from raw per-trade points ordered the way the main Performance section orders
+// them (resolved_at_str first). Every line steps only when ITS trades resolve, so the three lines share one x-axis (the earlier version drew each line against its own trade
+// count, which stretched the approved line out of time alignment). With sample 'all' a dashed line marks where the out-of-sample period starts (ids in mlTabTestIds).
+function renderMlSiloRangeEquityChart(canvasId, allTrades, range, testIds) {
   const canvas = $(canvasId);
   if (!canvas) return;
   const dpr = window.devicePixelRatio || 1;
   const w = canvas.clientWidth || canvas.parentElement.clientWidth;
-  const h = 170;
+  const h = 190;
   canvas.width = w * dpr; canvas.height = h * dpr;
   const ctx = canvas.getContext('2d');
   ctx.scale(dpr, dpr);
   ctx.clearRect(0, 0, w, h);
 
-  const allDecided = computeMlRangeStats(allTrades).decided;
-  const takeDecided = computeMlRangeStats(takeTrades).decided;
-  if (allDecided.length < 2) {
+  const rows = computeMlRangeStats(allTrades).decided;
+  if (rows.length < 2) {
     ctx.fillStyle = 'rgba(148,163,184,0.6)'; ctx.font = '12px sans-serif'; ctx.textAlign = 'center';
     ctx.fillText('Not enough resolved candidates in this range', w / 2, h / 2);
     return;
   }
-
-  // Same resolved_at_str-first convention as getDecidedRows()/computeMlRangeStats() above --
-  // `rows` here is already sorted that way (computeMlRangeStats().decided), so the labels
-  // must come from the same field or they'd disagree with the curve's own ordering.
-  const cumulate = (rows) => {
-    let running = 0;
-    const timeOf = (t) => t?.resolved_at_str || t?.fired_at_str;
-    const points = [0], times = [timeOf(rows[0])];
-    for (const t of rows) { running += parseFloat(t.actual_pnl); points.push(running); times.push(timeOf(t)); }
-    return { points, times };
-  };
-  const allSeries = cumulate(allDecided);
-  const takeSeries = cumulate(takeDecided);
-
-  const min = Math.min(0, ...allSeries.points, ...takeSeries.points), max = Math.max(0, ...allSeries.points, ...takeSeries.points);
+  const timeOf = (t) => t?.resolved_at_str || t?.fired_at_str;
+  const A = [0], T = [0], V = [0], times = [timeOf(rows[0])]; let a = 0, tk = 0, vt = 0, boundary = -1;
+  rows.forEach((t, i) => {
+    const p = parseFloat(t.actual_pnl); a += p; if (t.ml_verdict === 'TAKE') tk += p; else if (t.ml_verdict === 'VETO') vt += p;
+    if (boundary < 0 && testIds && testIds.has(t.id)) boundary = i + 1;
+    A.push(a); T.push(tk); V.push(vt); times.push(timeOf(t));
+  });
+  const min = Math.min(0, ...A, ...T, ...V), max = Math.max(0, ...A, ...T, ...V);
   const valRange = (max - min) || 1;
   const padL = 50, padR = 8, padT = 20, padB = 20;
-  const plotW = w - padL - padR, plotH = h - padT - padB;
+  const plotW = w - padL - padR, plotH = h - padT - padB, n = A.length;
   const yAt = (v) => padT + plotH - ((v - min) / valRange) * plotH;
+  const xAt = (i) => padL + (i / (n - 1)) * plotW;
 
   ctx.strokeStyle = 'rgba(148,163,184,0.35)'; ctx.lineWidth = 1; ctx.setLineDash([4, 3]);
   ctx.beginPath(); ctx.moveTo(padL, yAt(0)); ctx.lineTo(w - padR, yAt(0)); ctx.stroke();
@@ -924,27 +937,27 @@ function renderMlSiloRangeEquityChart(canvasId, allTrades, takeTrades, range) {
   ctx.fillText(fmtAxisMoney(min), padL - 6, yAt(min) + 3);
 
   const useTime = range === 'today';
-  const drawLine = (series, color) => {
-    if (series.points.length < 2) return;
-    const xAt = (i) => padL + (i / (series.points.length - 1)) * plotW;
+  const drawLine = (pts, color, width) => {
     ctx.beginPath();
-    series.points.forEach((v, i) => { const x = xAt(i), y = yAt(v); if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y); });
-    ctx.strokeStyle = color; ctx.lineWidth = 2; ctx.stroke();
-    // x-axis labels for this line's own timestamps (both series share the same range window)
-    const xTickCount = Math.min(5, series.points.length);
-    ctx.textAlign = 'center'; ctx.fillStyle = 'rgba(148,163,184,0.75)'; ctx.font = '10px monospace';
-    for (let k = 0; k < xTickCount; k++) {
-      const idx = xTickCount === 1 ? 0 : Math.round((k / (xTickCount - 1)) * (series.points.length - 1));
-      const x = xAt(idx);
-      ctx.fillText(fmtAxisTime(series.times[idx], useTime), Math.min(Math.max(x, padL + 20), w - padR - 20), h - 4);
-    }
+    pts.forEach((v, i) => { const x = xAt(i), y = yAt(v); if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y); });
+    ctx.strokeStyle = color; ctx.lineWidth = width; ctx.stroke();
   };
-  drawLine(allSeries, '#3b82f6');
-  drawLine(takeSeries, '#c4b5fd');
-
+  drawLine(V, '#94a3b8', 1.5); drawLine(A, '#3b82f6', 2); drawLine(T, '#c4b5fd', 2);
+  const xTickCount = Math.min(5, n);
+  ctx.textAlign = 'center'; ctx.fillStyle = 'rgba(148,163,184,0.75)'; ctx.font = '10px monospace';
+  for (let k = 0; k < xTickCount; k++) {
+    const idx = xTickCount === 1 ? 0 : Math.round((k / (xTickCount - 1)) * (n - 1));
+    ctx.fillText(fmtAxisTime(times[idx], useTime), Math.min(Math.max(xAt(idx), padL + 20), w - padR - 20), h - 4);
+  }
+  if (boundary > 0 && boundary < n) {
+    const bx = xAt(boundary); ctx.strokeStyle = '#f59e0b'; ctx.lineWidth = 1; ctx.setLineDash([5, 3]);
+    ctx.beginPath(); ctx.moveTo(bx, padT); ctx.lineTo(bx, padT + plotH); ctx.stroke(); ctx.setLineDash([]);
+    ctx.fillStyle = '#f59e0b'; ctx.textAlign = 'left'; ctx.fillText('out-of-sample →', Math.min(bx + 4, w - 90), padT + 10);
+  }
   ctx.textAlign = 'left'; ctx.font = '10px monospace';
-  ctx.fillStyle = '#3b82f6'; ctx.fillText('● All Trades', padL, 12);
-  ctx.fillStyle = '#c4b5fd'; ctx.fillText('● ML-Approved', padL + 70, 12);
+  ctx.fillStyle = '#3b82f6'; ctx.fillText('● All', padL, 12);
+  ctx.fillStyle = '#c4b5fd'; ctx.fillText('● ML-Approved', padL + 40, 12);
+  ctx.fillStyle = '#94a3b8'; ctx.fillText('● ML-Vetoed', padL + 130, 12);
 }
 
 function renderMlTabRangeView() {
@@ -952,7 +965,8 @@ function renderMlTabRangeView() {
   const take = mlTabTradesCache.filter(t => t.ml_verdict === 'TAKE');
   renderMlStatsRow('ml-tab-all-stats', all);
   renderMlStatsRow('ml-tab-take-stats', take);
-  renderMlSiloRangeEquityChart('ml-tab-canvas', all, take, mlTabRange);
+  renderMlStatsRow('ml-tab-veto-stats', mlTabTradesCache.filter(t => t.ml_verdict === 'VETO'));
+  renderMlSiloRangeEquityChart('ml-tab-canvas', all, mlTabRange, mlTabTestIds);
   // 30, not the old modal's 15 -- a permanent full-width tab has room to show more of what
   // the user asked to see ("the trades it picks"), not just a cramped preview.
   renderMlSiloTradeList('ml-tab-trades', all.slice().sort((a, b) => (b.fired_at_str || '').localeCompare(a.fired_at_str || '')).slice(0, 30));
@@ -3401,6 +3415,7 @@ let monitorFetchedAt = 0, monitorLast = null;
 const monEsc = (v) => String(v == null ? '' : v).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const monMoney = (v) => v == null ? 'n/a' : (v < 0 ? '-$' : '+$') + Math.abs(v).toFixed(2);
 function monBox(id, title, inner) { return '<div id="' + id + '" style="border:1px solid var(--border);border-radius:8px;padding:10px 12px;margin-bottom:12px"><div style="font-weight:700;margin-bottom:6px">' + title + '</div>' + inner + '</div>'; }
+function nxt(d, key) { const n = d && d.nextSteps && d.nextSteps[key]; if (!n) return ''; return '<div style="font-size:12px;color:var(--dim);margin:6px 0 2px;line-height:1.45"><b>Next:</b> ' + monEsc(n.review) + '<br><b>If it holds:</b> ' + monEsc(n.ifConfirmed) + '<br><b>If it fails:</b> ' + monEsc(n.ifFailed) + '</div>'; }
 function monRow(k, v) { return '<div style="display:flex;justify-content:space-between;gap:10px;font-size:13px;padding:2px 0"><span style="color:var(--dim)">' + k + '</span><span style="text-align:right">' + v + '</span></div>'; }
 function monErr(x) { return x && x.state === 'ERROR' ? '<div style="color:#e0a030;font-size:13px">could not load: ' + monEsc(x.error) + '</div>' : null; }
 // ---- at-a-glance + collapsible details (2026-11-03, user: "everything looks data heavy and unorganized, hard to look at") ----
@@ -3428,6 +3443,14 @@ function glanceChips(d, lm) {
   }
   if (fw.tell) c += monChip('AMT tell (sim orders)', fw.tell.trades + ' trades', money0(fw.tell.pnl) + ' · review at ' + fw.tell.floor + ' trades', pn(fw.tell.pnl));
   if (fw.forecast) c += monChip('Forecast service', monEsc(fw.forecast.days) + ' / ' + monEsc(fw.forecast.daysNeeded) + ' days', 'forward test collecting data', 'gray');
+  const dc = d.dayContext;                                                     // what the system sees now (2026-11-04): overnight range in ADR and the nearest unfilled unfinished business; colour is never advice
+  if (dc && dc.state === 'OK') {
+    if (dc.overnight && dc.overnight.rangeAdr != null) c += monChip('Overnight range', dc.overnight.rangeAdr.toFixed(2) + ' ADR', Math.round(dc.overnight.range) + ' pts · net ' + (dc.overnight.net >= 0 ? '+' : '') + Math.round(dc.overnight.net) + ' · low to now ' + (dc.overnight.lowToLast >= 0 ? '+' : '') + Math.round(dc.overnight.lowToLast), dc.stale ? 'amber' : 'gray');
+    const up = dc.above && dc.above[0], dn = dc.below && dc.below[0];
+    if (up || dn) c += monChip('Nearest unfinished business', (up ? '&#9650; ' + Math.round(up.distPts) + ' pts' : '') + (up && dn ? ' · ' : '') + (dn ? '&#9660; ' + Math.round(dn.distPts) + ' pts' : ''), (up ? monEsc(up.kind) + ' ' + monEsc(String(up.date).slice(5)) : '') + (up && dn ? ' / ' : '') + (dn ? monEsc(dn.kind) + ' ' + monEsc(String(dn.date).slice(5)) : '') + ' · unfilled by a later RTH session', 'gray');
+  } else if (dc) c += monChip('Day context', 'unavailable', monEsc(dc.error || dc.state), 'amber');
+  const oa = d.ovnArms;                                                       // overnight order-flow forward race (2026-11-04): one chip, the card below carries the next step
+  if (oa && oa.state === 'OK') c += monChip('Overnight order-flow race', oa.research.completeNights + ' / ' + 15 + ' nights', 'research rule ' + monEsc(String(oa.research.status).toLowerCase()) + ' · live rule ' + oa.live.completeNights + ' nights (' + monEsc(String(oa.live.status).toLowerCase()) + ')', 'gray');
   return '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px">' + c + '</div>';
 }
 function renderMonitor(d, err) {
@@ -3471,7 +3494,7 @@ function renderMonitor(d, err) {
     b = monRow('Forecast (shadow)', '<b>' + monEsc(F.days) + ' / ' + monEsc(F.daysNeeded) + '</b> forward days for the next look (' + monEsc(F.points) + ' points)')
       + monRow('Regime gauge outlooks', '<b>' + monEsc(R.realized) + ' / ' + monEsc(R.needed) + '</b> realized (' + monEsc(R.outlooks) + ' stored, last ' + monEsc(R.last || 'none') + ')')
       + monRow('Tell, Sim1 orders', '<b>' + monEsc(T.trades) + ' / ' + monEsc(T.floor) + '</b> trades · ' + monEsc(T.days) + ' days · ' + monMoney(T.pnl) + ' total')
-      + '<div style="font-size:11.5px;color:var(--dim);margin-top:4px">Counts only. Each is judged once at its pre-set look; no rule changes before then.</div>';
+      + '<div style="font-size:11.5px;color:var(--dim);margin-top:4px">Counts only. Each is judged once at its pre-set look; no rule changes before then.</div>' + nxt(d, 'forecast') + nxt(d, 'regime');
   }
   box.fw = monDetails('mon-forward', 'Details: forward tests', b);
   // gates
@@ -3482,13 +3505,13 @@ function renderMonitor(d, err) {
     b = monRow('Live roster gate', monEsc(r.state) + (r.enabled ? '' : ' (gate disabled)') + ' · ' + monEsc((r.types || []).join(', ') || 'none') + (r.ageDays != null ? ' · ' + monEsc(r.ageDays) + 'd old' : ''))
       + monRow('ML veto gate', gt.mlVeto ? (gt.mlVeto.enabled ? (gt.mlVeto.enforce ? '<b style="color:#e0a030">ENFORCING</b>' : 'log-only') : 'disabled') : 'unknown')
       + monRow('Breakeven stop (live)', on(gt.breakevenStopLive)) + monRow('T1-floor runner shadow', on(gt.t1FloorShadow))
-      + monRow('09:31 overnight-levels refresh', c ? monEsc(c.status) + ' · ' + monEsc(c.t) : 'no run recorded yet');
+      + monRow('09:31 overnight-levels refresh', c ? monEsc(c.status) + ' · ' + monEsc(c.t) : 'no run recorded yet') + nxt(d, 'gates');
   }
   box.gt = monDetails('mon-gates', 'Details: research gates', b);
   const P = learningParts(d), foot = '<div style="font-size:11.5px;color:var(--dim)">Updated ' + monEsc(d.generatedAt) + '. Read-only; nothing here changes live trading.</div>';
   // order: at-a-glance cards, charts (P&L by arm, fires vs skips, meta-labeler, bots, delay, pass race), then the collapsed number tables
-  el.innerHTML = P.notice ? glanceChips(d, null) + P.notice + box.sb + box.ml + box.fw + box.gt + foot
-    : P.head + P.top + P.cum + P.fire + P.ml + P.bots + P.delay + P.race + box.sb + box.ml + box.fw + box.gt + P.notes + foot;
+  el.innerHTML = P.notice ? glanceChips(d, null) + P.notice + dayContextBox(d) + ovnArmsBox(d) + structureModelBox(d) + vacuumLiveBox(d) + argonShadowBox(d) + tellContextBox(d) + tellShadowBox(d) + box.sb + box.ml + box.fw + box.gt + foot
+    : P.head + P.top + P.cum + P.fire + P.ml + P.bots + dayContextBox(d) + ovnArmsBox(d) + structureModelBox(d) + vacuumLiveBox(d) + argonShadowBox(d) + tellContextBox(d) + tellShadowBox(d) + P.delay + P.race + box.sb + box.ml + box.fw + box.gt + P.notes + foot;
   bindLearning();
 }
 async function loadMonitor(force) {
@@ -3538,6 +3561,150 @@ function lmBars(days, a, b, ca, cb, la, lb) {
   s += '<text x="' + L + '" y="' + (H - 5) + '" fill="#94a3b8" font-size="10">' + monEsc(String(days[0].date).slice(5)) + '</text><text x="' + (W - R) + '" y="' + (H - 5) + '" fill="#94a3b8" font-size="10" text-anchor="end">' + monEsc(String(days[n - 1].date).slice(5)) + '</text></svg>';
   return s + '<div style="display:flex;gap:12px;font-size:12px"><span style="color:' + ca + '">&#9632; ' + monEsc(la) + '</span><span style="color:' + cb + '">&#9632; ' + monEsc(lb) + '</span></div>';
 }
+function tellContextBox(d) {
+  const tc = d && d.tellContext;
+  if (!tc || tc.state !== 'OK') return monBox('tc-box', 'Tell context (forward log)', '<div style="font-size:12.5px;color:#e0a030">' + (!tc ? 'The summary has no tell-context data yet (the server needs a restart to serve it).' : 'Unavailable: ' + monEsc(tc.error || tc.state) + '.') + '</div>');
+  const L = tc.byLabel || {}, sp = tc.span || {}, rd = tc.reader || {}, col = v => (v == null ? '' : v < 0 ? 'color:#ef4444' : 'color:#22c55e');
+  const row = k => { const x = L[k] || {}; return monRow('<span style="color:' + (TELL_CTX_COL[k] || '#94a3b8') + '">' + k + '</span>', (x.closed || 0) + ' closed of ' + (x.n || 0) + (x.perTrade != null ? ' · <span style="' + col(x.perTrade) + '">' + monMoney(x.perTrade) + '</span>/trade' : '') + (x.belowFloor ? ' <span style="color:var(--dim)">(N&lt;' + tc.minN + ', no result)</span>' : '')); };
+  const recent = (tc.recent || []).slice(0, 8).map(r => '<div style="font-size:12px;display:flex;gap:8px;padding:2px 0"><span class="mono" style="color:var(--dim)">' + monEsc(String(r.fired_at).slice(5, 16)) + '</span><span>' + (r.direction === 1 ? '&#9650;' : '&#9660;') + '</span><span style="color:' + (TELL_CTX_COL[r.label] || '#94a3b8') + '">' + monEsc(r.label) + '</span><span style="color:var(--dim)">' + (r.tail === 'INSIDE' ? (r.location != null ? Math.round(r.location * 100) + '% of value' : 'inside') : monEsc(r.tail || '')) + '</span><span style="margin-left:auto;' + col(r.net) + '">' + (r.status === 'OPEN' ? 'open' : monMoney(r.net)) + '</span></div>').join('');
+  return monBox('tc-box', 'Tell context (forward log, not validated)',
+    '<div style="font-size:12px;color:var(--dim);margin-bottom:6px">Where each tell fire sat in the developing RTH value area when it fired, and how the fires of each label did. Display and learning only: it gates nothing.</div>'
+    + monRow('Fires logged', (sp.rows || 0) + ' on ' + (sp.days || 0) + ' day' + (sp.days === 1 ? '' : 's') + (sp.backfilled ? ' · ' + sp.backfilled + ' backfilled' : '')) + monRow('Reader', rd.problem ? '<span style="color:#e0a030">' + monEsc(rd.problem) + '</span>' : (rd.childAlive ? 'running' + (rd.session ? ' · ' + monEsc(rd.session) : '') : 'not running'))
+    + (tc.missing && tc.missing.length ? '<div style="font-size:12.5px;color:#e0a030;margin:4px 0">' + tc.missing.reduce((a, m) => a + m.n, 0) + ' fire(s) in the last 7 days have no context row (' + tc.missing.map(m => monEsc(m.d) + ': ' + m.n).join(', ') + '). Recover with reader.py --once-date.</div>' : '')
+    + row('AGREES') + row('AGAINST') + row('NEUTRAL') + row('UNKNOWN') + '<div style="margin-top:6px">' + recent + '</div>'
+    + '<div style="font-size:11.5px;color:var(--dim);margin-top:6px">' + (tc.notes || []).map(monEsc).join('<br>') + '</div>' + nxt(d, 'tellContext'));
+}
+// Overnight order-flow forward race card (2026-11-04): both rules (the researched one and what the live detector actually does) followed from the bars, four arms each, and the NEXT STEP written from the pre-registered forward rules.
+// Next-hour RANGE model (shadow) card (2026-11-05, user: 'get this model built and get a historical chart like the other models'). Fed by the `structureModel` key INSIDE the `learning` block of the monitor summary (public/structure_model.json, scripts/structure_model/build_payload.py): a daily
+// series of the model's walk-forward predictions vs the HAR-X + clock baseline and the realized next-hour range; Today / Week / Month / Year / All are counted back from the latest data day. Display only; it forecasts a RANGE (volatility), never a direction, and nothing trades or gates on it.
+let smRange = 'all';
+function smSet(r) { smRange = r; renderMonitor(monitorLast); }
+function structureModelBox(d) {
+  const sm = d && d.learning && d.learning.structureModel, T = 'Next-hour range model (shadow)';
+  if (!sm || sm.state !== 'OK') return monBox('sm-box', T, '<div style="font-size:12.5px;color:#e0a030">' + (!sm ? 'The summary has no range-model data yet.' : 'Unavailable: ' + monEsc(sm.error || sm.state)) + '</div>');
+  const all = sm.daily || [], nBack = { today: 1, week: 5, month: 22, year: 252, all: all.length }[smRange] || all.length, days = all.slice(-nBack);
+  if (days.length < 2) return monBox('sm-box', T, '<div style="font-size:12.5px;color:var(--dim)">Not enough days in this range yet.</div>');
+  const tabs = [['today', 'Today'], ['week', 'Week'], ['month', 'Month'], ['year', 'Year'], ['all', 'All']].map(([k, l]) => '<button class="range-btn ' + (smRange === k ? 'active' : '') + '" onclick="smSet(\'' + k + '\')">' + l + '</button>').join('');
+  let c0 = 0, c2 = 0, c3 = 0, h2 = 0; const cum = [], cumH = []; days.forEach(x => { c0 += x.l0 * x.n; c2 += x.l2 * x.n; c3 += x.l3 * x.n; cum.push(c0 > 0 ? 100 * (c0 - c2) / c0 : 0); cumH.push(c3 > 0 ? 100 * (c3 - c2) / c3 : 0); });
+  const fwdI = days.findIndex(x => x.fwd === 1), W = 340, H = 118, padL = 34, padR = 6, padT = 14, padB = 16, pw = W - padL - padR, ph = H - padT - padB, nn = days.length;
+  const xAt = i => padL + (nn === 1 ? 0 : i / (nn - 1)) * pw, line = (arr, yAt, col, w) => '<polyline fill="none" stroke="' + col + '" stroke-width="' + w + '" points="' + arr.map((v, i) => xAt(i).toFixed(1) + ',' + yAt(v).toFixed(1)).join(' ') + '"/>';
+  const mn1 = Math.min(0, ...cum, ...cumH), mx1 = Math.max(0, ...cum, ...cumH), y1 = v => padT + ph - (v - mn1) / ((mx1 - mn1) || 1) * ph, tick = (v, y) => '<text x="' + (padL - 4) + '" y="' + (y + 3) + '" text-anchor="end" font-size="9" fill="#94a3b8">' + v + '</text>';
+  const fwdLine = (i) => i > 0 ? '<line x1="' + xAt(i) + '" x2="' + xAt(i) + '" y1="' + padT + '" y2="' + (padT + ph) + '" stroke="#f59e0b" stroke-dasharray="4,3"/><text x="' + (xAt(i) + 3) + '" y="' + (padT + 9) + '" font-size="9" fill="#f59e0b">forward &rarr;</text>' : '';
+  const ax = (a, b) => '<text x="' + padL + '" y="' + (H - 3) + '" font-size="9" fill="#94a3b8">' + monEsc(String(a).slice(2)) + '</text><text x="' + (W - padR) + '" y="' + (H - 3) + '" text-anchor="end" font-size="9" fill="#94a3b8">' + monEsc(String(b).slice(2)) + '</text>';
+  const svg1 = '<svg viewBox="0 0 ' + W + ' ' + H + '" style="width:100%;height:auto"><line x1="' + padL + '" x2="' + (W - padR) + '" y1="' + y1(0) + '" y2="' + y1(0) + '" stroke="#64748b" stroke-dasharray="4,3"/>' + tick(mx1.toFixed(0) + '%', y1(mx1)) + tick('0', y1(0)) + (mn1 < -0.5 ? tick(mn1.toFixed(0) + '%', y1(mn1)) : '') + line(cum, y1, '#94a3b8', 1.4) + line(cumH, y1, '#f59e0b', 2) + fwdLine(fwdI) + ax(days[0].d, days[nn - 1].d) + '</svg>';
+  const w = smRange === 'all' ? 10 : smRange === 'year' ? 5 : 1, smo = (k) => days.map((_, i) => { const a = days.slice(Math.max(0, i - w + 1), i + 1); return a.reduce((t, x) => t + x[k], 0) / a.length; });
+  const rp = smo('rp'), mp = smo('mp'), bp = smo('hp'), mn2 = Math.min(...rp, ...mp, ...bp), mx2 = Math.max(...rp, ...mp, ...bp), y2 = v => padT + ph - (v - mn2) / ((mx2 - mn2) || 1) * ph;
+  const svg2 = '<svg viewBox="0 0 ' + W + ' ' + H + '" style="width:100%;height:auto">' + tick(mx2.toFixed(0), y2(mx2)) + tick(mn2.toFixed(0), y2(mn2)) + line(bp, y2, '#94a3b8', 1.2) + line(mp, y2, '#a78bfa', 1.6) + line(rp, y2, '#e2e8f0', 1.4) + fwdLine(fwdI) + ax(days[0].d, days[nn - 1].d) + '</svg>';
+  const rows = days.reduce((t, x) => t + x.n, 0), impR = 100 * (c0 - c2) / c0, impH = 100 * (c3 - c2) / c3, mae = k => days.reduce((t, x) => t + Math.abs(x[k] - x.rp), 0) / nn, tt = sm.totals || {}, E = sm.era || {};
+  const stats = monRow('This range', nn + ' days · ' + rows + ' rows') + monRow('Better than HAR-X + clock by', '<b style="color:' + (impR >= 0 ? '#22c55e' : '#ef4444') + '">' + (impR >= 0 ? '+' : '') + impR.toFixed(1) + '%</b> <span style="color:var(--dim)">(error of the log range, this range)</span>') + monRow('Better than the HARD baseline by', '<b style="color:' + (impH >= 0 ? '#22c55e' : '#ef4444') + '">' + (impH >= 0 ? '+' : '') + impH.toFixed(1) + '%</b> <span style="color:var(--dim)">(adds last-30-min range + range so far; the forward looks are judged on this)</span>')
+    + monRow('Daily mean range error', 'model ' + mae('mp').toFixed(0) + ' pts · hard baseline ' + mae('hp').toFixed(0) + ' pts') + (sm.frozen ? monRow('Frozen model', monEsc(sm.frozen.version) + ' <span style="color:var(--dim)">fitted ' + monEsc(String(sm.frozen.trainedAt).replace('T', ' ').slice(0, 16)) + ' on ' + sm.frozen.rows + ' rows; changes only after the close</span>') : '') + monRow('Forward (frozen before the hour)', E.forwardDays ? E.forwardDays + ' days since ' + monEsc(E.forwardFrom) + (tt.forwardImprovementHardPct != null ? ' · ' + (tt.forwardImprovementHardPct >= 0 ? '+' : '') + tt.forwardImprovementHardPct + '% vs the hard baseline' : ' <span style="color:var(--dim)">· counts only until the first look at 60 days</span>') : '<span style="color:var(--dim)">not started: first rows come with the nightly job</span>');
+  const nx = sm.next ? '<div style="font-size:12px;color:var(--dim);margin:6px 0 2px;line-height:1.45"><b>Next:</b> ' + monEsc(sm.next.review) + '<br><b>If it holds:</b> ' + monEsc(sm.next.ifConfirmed) + '<br><b>If it fails:</b> ' + monEsc(sm.next.ifFailed) + '</div>' : '';
+  return monBox('sm-box', T, '<div style="font-size:12px;color:var(--dim);margin-bottom:6px">Forecasts how big the NEXT HOUR\'s range will be at 10:30, 11:30, 13:00 and 14:30, not which way. Walk-forward replay of the explore era (' + monEsc(E.exploreFrom) + ' to ' + monEsc(E.exploreTo) + '); every day was predicted by a model fitted only on earlier days.</div>'
+    + '<div class="range-filter" style="margin-bottom:6px">' + tabs + '</div>' + stats
+    + '<div style="font-size:11.5px;color:var(--dim);margin:8px 0 2px"><b style="color:#a78bfa">Cumulative improvement over the baseline</b> (HAR-X + clock), % of its error, from the start of the range</div>' + svg1
+    + '<div style="font-size:11.5px;color:var(--dim);margin:8px 0 2px">Next-hour range in points (daily mean' + (w > 1 ? ', ' + w + '-day average' : '') + '): <b style="color:#e2e8f0">realized</b> · <b style="color:#a78bfa">model</b> · <b style="color:#94a3b8">hard baseline</b></div>' + svg2
+    + nx + '<div style="font-size:11.5px;color:var(--dim);margin-top:6px">' + (sm.notes || []).map(monEsc).join('<br>') + '</div>');
+}
+// LIVE expansion rule card (2026-11-09, the user's ORIGINAL idea, candidate Q4-5; scripts/vacuum_live/shadow.py, scripts/lib/vacuumLiveSummary.mjs). Fed by the `vacuumLive` key INSIDE the `learning` block of the monitor summary (public/learning_monitor.json, refreshed by the daemon every minute and after each fire), so no server change. Shadow only: NO orders. cv-112: tolerates an absent key.
+function vacuumLiveBox(d) {
+  const v = d && d.learning && d.learning.vacuumLive, T = 'Expansion rule, live (the user\'s original idea, orders on Sim1)', pt = x => (x == null ? 'n/a' : (x >= 0 ? '+' : '') + Number(x).toFixed(1));
+  if (!v || v.state !== 'OK') return monBox('vl-box', T, '<div style="font-size:12.5px;color:#e0a030">' + (!v ? 'The summary has no live-rule data yet.' : 'Unavailable: ' + monEsc(v.error || v.state)) + '</div>');
+  const dm = v.daemon, age = v.generatedAt ? Math.max(0, Math.round((Date.now() - Date.parse(v.generatedAt)) / 1000)) : 0, la = dm && dm.loopAgeSec != null ? dm.loopAgeSec + age : null, ok = dm && la != null && la < 180 && dm.state === 'LIVE', col = ok ? '#22c55e' : (la != null && la < 900 ? '#f59e0b' : '#ef4444');
+  const dRow = dm ? monRow('Detector', '<b style="color:' + col + '">' + monEsc(dm.state) + '</b> <span style="color:var(--dim)">' + (la == null ? 'n/a' : (la >= 120 ? Math.round(la / 60) + ' min' : la + ' s') + ' since the last loop') + ' · session ' + monEsc(dm.session) + '</span>') + monRow('This session', dm.bars + ' bars · ' + dm.events + ' expansion events') : monRow('Detector', '<span style="color:#ef4444">not reachable</span>');
+  const sc = (v.sessionCounts || []).map(r => (r.track === 'GBX' ? 'Globex' : 'RTH') + ' ' + r.n + ' (' + r.taken + ' taken)').join(' · ') || 'none yet';
+  const fw = (v.forward || []).map(r => '<div style="font-size:12.5px;padding:2px 0"><b>' + (r.track === 'GBX' ? 'Globex' : 'RTH') + '</b>: ' + r.n + ' events on ' + r.days + ' days · taken ' + r.taken + ' (results ' + r.taken_done + ') · mean net per trade WITH the expansion, no stop <b>' + pt(r.net_nostop) + '</b> pt · with the 2.5x stop ' + pt(r.net_stop25) + ' pt · FADING it ' + pt(r.net_fade) + ' pt</div>').join('') || '<div style="font-size:12px;color:var(--dim)">No forward events yet.</div>';
+  const rec = (v.recent || []).map(r => '<div style="font-size:12.5px;display:flex;gap:8px;padding:2px 0;flex-wrap:wrap"><span class="mono" style="color:var(--dim)">' + monEsc(String(r.d).slice(5)) + ' ' + monEsc(r.t) + '</span><span>' + (r.track === 'GBX' ? 'Globex' : 'RTH') + '</span><span>' + (r.direction === 1 ? '&#9650; long' : '&#9660; short') + '</span><span class="mono">@ ' + Number(r.sc).toFixed(2) + '</span><span style="color:var(--dim)">Z ' + Number(r.z).toFixed(2) + (r.late > 3 ? ' · late ' + Math.round(r.late) + ' min' : '') + '</span><span>' + (r.taken ? '<b>taken</b>' : 'skipped (position open)') + '</span><span class="mono">' + (r.nn == null ? 'open' : '30 bars ' + pt(r.f30) + ' pt') + '</span></div>').join('') || '<div style="font-size:12px;color:var(--dim)">No event logged yet.</div>';
+  const od = v.orders && !v.orders.error ? v.orders : null;
+  const odRows = od ? (od.rows || []).map(r => '<div style="font-size:12.5px;display:flex;gap:8px;padding:2px 0;flex-wrap:wrap"><span class="mono" style="color:var(--dim)">' + monEsc(r.t) + '</span><span>' + (r.setup_type === 'VACUUM_EXP_LONG' ? '▲ long' : '▼ short') + '</span><span>' + (r.fill == null ? 'no fill yet' : 'filled ' + Number(r.fill).toFixed(2)) + ' · stop ' + Number(r.stop).toFixed(2) + '</span><b>' + monEsc(r.status === 'ACTIVE' ? 'OPEN' : (r.resolution || r.status) + (r.pnl == null ? '' : ' ' + (r.pnl >= 0 ? '+$' : '-$') + Math.abs(r.pnl).toFixed(2))) + '</b></div>').join('') : '';
+  const odBox = '<div style="font-size:11.5px;color:var(--dim);margin:8px 0 2px">Orders on the simulated account (Sim1)</div>' + (od ? '<div style="font-size:12.5px;padding:2px 0">' + ((od.states || []).map(x => (x.track === 'GBX' ? 'Globex' : 'RTH') + ' ' + monEsc(x.st.toLowerCase().replace('skipped_', 'skipped: ')) + ' ' + x.n).join(' · ') || 'no taken event yet') + '</div>' + (odRows || '<div style="font-size:12px;color:var(--dim)">No order yet: the next taken fire becomes a market order with a 2.5 x EMA10(TR) stop, held 30 bars.</div>') : '<div style="font-size:12px;color:#e0a030">Order status unavailable.</div>');
+  const nx = v.next ? '<div style="font-size:12px;color:var(--dim);margin:6px 0 2px;line-height:1.45"><b>Next:</b> ' + monEsc(v.next.review) + '<br><b>If it holds:</b> ' + monEsc(v.next.ifConfirmed) + '<br><b>If it fails:</b> ' + monEsc(v.next.ifFailed) + '</div>' : '';
+  return monBox('vl-box', T, '<div style="font-size:12px;color:var(--dim);margin-bottom:6px">' + monEsc(v.rule) + '</div>' + dRow + monRow('Latest session', monEsc(String(v.today || 'n/a')) + ': ' + sc) + '<div style="font-size:11.5px;color:var(--dim);margin:8px 0 2px">Forward since ' + monEsc(v.forwardFrom) + '</div>' + fw
+    + odBox + '<div style="font-size:11.5px;color:var(--dim);margin:8px 0 2px">Latest fires</div>' + rec + nx + '<div style="font-size:11.5px;color:var(--dim);margin-top:6px">' + (v.notes || []).map(monEsc).join('<br>') + '</div>');
+}
+// Argon liquidity-vacuum pullback LIVE SHADOW card (2026-11-08, candidate Q4-4; scripts/argon_vacuum_live/, docs/ARGON_VACUUM_LIVE_SHADOW_DESIGN_20261108.md). Fed by the `argonShadow` key INSIDE the `learning` block of the monitor summary
+// (public/learning_monitor.json; scripts/lib/argonShadowSummary.mjs, refreshed by the daemon every few minutes and by the nightly build), so it needs no server change. Descriptive forward log, places NO orders, NOT a validated edge. cv-112: tolerates an absent key.
+function argonShadowBox(d) {
+  const a = d && d.learning && d.learning.argonShadow, T = 'Argon vacuum pullback (live shadow, no orders)', pt = v => (v == null ? 'n/a' : (v >= 0 ? '+' : '') + Number(v).toFixed(1));
+  if (!a || a.state !== 'OK') return monBox('av-box', T, '<div style="font-size:12.5px;color:#e0a030">' + (!a ? 'The summary has no Argon shadow data yet.' : 'Unavailable: ' + monEsc(a.error || a.state)) + '</div>');
+  const dm = a.daemon, age = a.generatedAt ? Math.max(0, Math.round((Date.now() - Date.parse(a.generatedAt)) / 1000)) : 0, hb = dm && dm.heartbeatAgeSec != null ? dm.heartbeatAgeSec + age : null, ok = dm && hb != null && hb < 180 && dm.state === 'LIVE', col = ok ? '#22c55e' : (hb != null && hb < 900 ? '#f59e0b' : '#ef4444');
+  const dRow = dm ? monRow('Detector', '<b style="color:' + col + '">' + monEsc(dm.state) + '</b> <span style="color:var(--dim)">heartbeat ' + (hb == null ? 'n/a' : (hb >= 120 ? Math.round(hb / 60) + ' min' : hb + ' s') + ' ago') + ' · session ' + monEsc(dm.session) + '</span>')
+    + monRow('This session so far', dm.bars + ' bars · ' + dm.rthBars + ' RTH · <b>' + dm.cand + '</b> setup fires · ' + dm.ffc + ' control fires') : monRow('Detector', '<span style="color:#ef4444">no heartbeat row yet</span>');
+  const F = a.forward || {}, C = F.cand || {}, K = F.ffc || {}, out = (r) => r.n_out ? 'n ' + r.n_out + ' · 10 bars ' + pt(r.m10) + ' · 30 bars <b>' + pt(r.m30) + '</b> · 60 bars ' + pt(r.m60) + ' pt · up at 30: ' + Math.round(100 * r.up30) + '%' : '<span style="color:var(--dim)">no finished outcomes yet</span>';
+  const fRow = monRow('Forward since ' + monEsc(a.forwardFrom), (F.sessionsFinal || 0) + ' sessions finished' + (F.sessionsInvalid ? ' · <span style="color:#f59e0b">' + F.sessionsInvalid + ' invalid</span>' : ''))
+    + monRow('Setup fires', (C.n || 0) + ' on ' + (C.days || 0) + ' days') + monRow('&nbsp;&nbsp;outcome, signed pt before cost', out(C)) + monRow('Control fires', (K.n || 0) + ' on ' + (K.days || 0) + ' days') + monRow('&nbsp;&nbsp;outcome, signed pt before cost', out(K));
+  const rec = (a.recent || []).map(r => '<div style="font-size:12.5px;display:flex;gap:8px;padding:2px 0;flex-wrap:wrap"><span class="mono" style="color:var(--dim)">' + monEsc(String(r.d).slice(5)) + ' ' + monEsc(r.t) + '</span><span>' + (r.direction === 1 ? '&#9650; long' : '&#9660; short') + '</span><span class="mono">@ ' + Number(r.ref).toFixed(2) + '</span><span style="color:var(--dim)">risk ' + Number(r.risk).toFixed(1) + (r.late > 3 ? ' · <span style="color:#f59e0b">late ' + Math.round(r.late) + ' min</span>' : '') + '</span><span class="mono">' + (r.f30 == null ? 'open' : '30 bars ' + pt(r.f30) + ' pt') + '</span></div>').join('') || '<div style="font-size:12px;color:var(--dim)">No setup has fired yet in the forward log.</div>';
+  const X = a.explore, ex = X ? monRow('Explore count', X.triggers + ' setup fires on ' + X.scoredSessions + ' sessions · ' + X.activeDays + ' active days') + monRow('Smallest detectable mean', pt(X.mdePool) + ' pt pooled · ' + pt(X.mdePair) + ' pt vs control <span style="color:var(--dim)">(gate ' + X.gate + ' pt; cost about 2 pt)</span>') + monRow('Active days needed for the gate', String(X.activeDaysNeeded)) + '<div style="font-size:12px;color:#f59e0b;margin:4px 0">' + monEsc(X.verdict) + '</div>' : '';
+  const al = (a.alarms || []).length ? '<div style="font-size:12px;color:#f59e0b;margin:4px 0">Alarms (3 days): ' + a.alarms.map(x => monEsc(x.kind) + ' &times;' + x.n).join(' · ') + '</div>' : '';
+  const nx = a.next ? '<div style="font-size:12px;color:var(--dim);margin:6px 0 2px;line-height:1.45"><b>Next:</b> ' + monEsc(a.next.review) + '<br><b>If it holds:</b> ' + monEsc(a.next.ifConfirmed) + '<br><b>If it fails:</b> ' + monEsc(a.next.ifFailed) + '</div>' : '';
+  return monBox('av-box', T, '<div style="font-size:12px;color:var(--dim);margin-bottom:6px">Watches the live tape for the Argon spec\'s pullback-reclaim setup and for its plain fast-flow control. Watch only: no orders, not a validated edge.</div>'
+    + dRow + fRow + '<div style="font-size:11.5px;color:var(--dim);margin:8px 0 2px">Latest setup fires</div>' + rec + al + monDetails('av-explore', 'Explore result and power', ex) + nx
+    + '<div style="font-size:11.5px;color:var(--dim);margin-top:6px">' + (a.notes || []).map(monEsc).join('<br>') + '</div>');
+}
+function ovnArmsBox(d) {
+  const oa = d && d.ovnArms, m$ = v => (v == null ? 'n/a' : monMoney(v));
+  if (!oa || oa.state !== 'OK') return monBox('oa-box', 'Overnight order-flow forward race (shadow, from the bars)', '<div style="font-size:12.5px;color:#e0a030">' + (!oa ? 'The summary has no overnight order-flow data yet (the server needs a restart to serve it).' : 'Unavailable: ' + monEsc(oa.error || oa.state) + '.') + '</div>');
+  const col = { WATCHING: '#94a3b8', 'FIRST LOOK': '#3b82f6', INCONCLUSIVE: '#f59e0b', CONFIRMED: '#22c55e', FAILED: '#ef4444' };
+  const rule = R => monRow('<b>' + monEsc(R.label) + '</b>', '<b style="color:' + (col[R.status] || '#94a3b8') + '">' + monEsc(R.status) + '</b>') + monRow('Qualifying nights', R.completeNights + ' complete' + (R.inProgress ? ' · ' + R.inProgress + ' in progress' : ''))
+    + (R.completeNights ? monRow('Mean per trade', 'BASE ' + m$(R.baseMean) + (R.baseCI ? ' <span style="color:var(--dim)">[' + m$(R.baseCI[0]) + ', ' + m$(R.baseCI[1]) + ']</span>' : '') + ' · RISK-300 ' + m$(R.riskMean)) + monRow('Controls', 'MOM ' + m$(R.momMean) + ' · MIRROR ' + m$(R.mirrorMean)) + monRow('Hit · win · worst', (R.hitRate != null ? R.hitRate + '%' : 'n/a') + ' · ' + (R.winRate != null ? R.winRate + '%' : 'n/a') + ' · ' + m$(R.worstBase)) : '')
+    + '<div style="font-size:12px;color:var(--dim);margin:4px 0 10px"><b>Next:</b> ' + monEsc(R.next) + '</div>';
+  const nights = (oa.nights || []).map(n => '<div style="font-size:12.5px;display:flex;gap:8px;padding:2px 0"><span class="mono" style="color:var(--dim)">' + monEsc(String(n.td).slice(5)) + '</span><span>' + (n.dir === 'LONG' ? '&#9650;' : '&#9660;') + '</span><span style="color:var(--dim)">legs ' + n.legsHl + ' / ' + n.legsClose + ' · flow ' + n.flowPct + '%</span><span>' + (n.research ? 'research' : '') + (n.research && n.live ? ' + ' : '') + (n.live ? 'live' : '') + '</span><span style="margin-left:auto">' + (n.complete ? m$(n.base) : 'in progress') + '</span></div>').join('') || '<div style="font-size:12.5px;color:var(--dim)">No qualifying forward night yet.</div>';
+  const fires = (oa.fires || []).map(f => '<div style="font-size:12.5px;display:flex;gap:8px;padding:2px 0"><span class="mono" style="color:var(--dim)">' + monEsc(String(f.d).slice(5)) + '</span><span>' + monEsc(String(f.setup_type).replace('OVERNIGHT_ORDERFLOW_', '')) + '</span><span style="color:var(--dim)">' + monEsc(f.status) + (f.resolution ? ' · ' + monEsc(f.resolution) : '') + '</span><span style="margin-left:auto">' + (f.pnl != null ? m$(f.pnl) : 'open') + '</span></div>').join('');
+  return monBox('oa-box', 'Overnight order-flow forward race (shadow, from the bars)',
+    '<div style="font-size:12px;color:var(--dim);margin-bottom:6px">Forward nights from ' + monEsc(oa.forwardFrom) + '. The live detector counts legs on closes only (threshold ' + oa.liveLegsThreshold + '), so it is a stricter rule than the researched one; both are followed.</div>'
+    + rule(oa.research) + rule(oa.live) + monDetails('oa-nights', 'Qualifying forward nights and the live shadow rows', '<div style="font-size:11.5px;color:var(--dim);margin:2px 0">Nights (legs high-low / closes · flow lean; BASE result)</div>' + nights + '<div style="font-size:11.5px;color:var(--dim);margin:8px 0 2px">Shadow rows written by the live detector</div>' + fires)
+    + '<div style="font-size:11.5px;color:var(--dim);margin-top:6px">' + (oa.notes || []).map(monEsc).join('<br>') + '</div>');
+}
+// Day context card (2026-11-04, user: "make it clean and nested nicely with what's there"): what the system sees right now, fed by the `dayContext` key of the same summary fetch; the level list is collapsed inside the card.
+// Rotation guide (2026-11-04): the current confirmed 65-point leg, the VWAP anchored at its pivot and where price sits against it; a reading aid, NOT VALIDATED, gates nothing (server/services/rotationGuide.js).
+function rotationRows(r) {
+  if (!r) return monRow('Rotation guide', '<span style="color:#e0a030">not served yet (the server needs a restart)</span>');
+  if (r.state === 'ERROR') return monRow('Rotation guide', '<span style="color:#e0a030">unavailable: ' + monEsc(r.error || 'error') + '</span>');
+  if (r.state !== 'OK') return monRow('Rotation guide', '<span style="color:var(--dim)">' + monEsc(r.note || r.state) + '</span>');
+  const n = r.now, f = (v) => (v == null ? '--' : (v > 0 ? '+' : '') + v), stale = r.stale ? ' <span style="color:#e0a030">feed ' + r.ageMin + ' min old</span>' : '';
+  if (!n || !n.dir) return monRow('Rotation guide', '<span style="color:var(--dim)">no 65-point leg confirmed yet</span>' + stale);
+  const col = n.supported ? '#22c55e' : '#ef4444', recent = (r.legs || []).slice(-5).map(l => (l.dir === 'UP' ? '&uarr;' : '&darr;') + ' ' + l.confirmedT + ' @ ' + l.anchorPrice).join(' &middot; ');
+  return monRow('Rotation leg (65 pt)', '<b>' + (n.dir === 'UP' ? 'UP' : 'DOWN') + '</b> from ' + n.anchorT + ' @ ' + n.anchorPrice + ' <span style="color:var(--dim)">(confirmed ' + n.confirmedT + ', ' + n.size + ' pts, ' + n.minutesSinceConfirm + ' min ago)</span>' + stale)
+    + monRow('Rotational VWAP', '<b>' + n.rvwap + '</b> &middot; price ' + n.price + ' is ' + Math.abs(n.distPts) + ' pts ' + n.side.toLowerCase() + ' it &middot; <b style="color:' + col + '">' + (n.supported ? (n.dir === 'UP' ? 'supports the leg (VWAP under price)' : 'resists (VWAP overhead)') : 'LEG HAS LOST ITS VWAP') + '</b>')
+    + monRow('Last ' + r.moveWindowMin + ' min', 'VWAP ' + f(n.vwapMove) + ' pts, price ' + f(n.priceMove) + ' pts <span style="color:var(--dim)">(raw; a flat VWAP while price moves is the slope the user watches)</span>')
+    + monRow('Legs this session', n.legsLastHour + ' in the last hour <span style="color:var(--dim)">' + recent + '</span>');
+}
+function rotationLine(c) {
+  const r = c && c.rotation; if (!r) return '';
+  if (!r.dir) return '<br>rotation guide (not validated): no 65-point leg confirmed yet';
+  return '<br>rotation guide (not validated): ' + r.dir + ' leg from ' + r.anchorT + ' @ ' + r.anchorPrice + ' (confirmed ' + r.confirmedT + '); VWAP ' + r.rvwap + ', price ' + Math.abs(r.distPts) + ' pts ' + r.side.toLowerCase() + ' it, ' + (r.supported ? 'supported' : 'LEG LOST ITS VWAP');
+}
+function dayContextBox(d) {
+  const dc = d && d.dayContext, f0 = v => (v == null ? 'n/a' : Number(v).toLocaleString('en-US', { maximumFractionDigits: 0 })), f2 = v => (v == null ? 'n/a' : Number(v).toFixed(2));
+  if (!dc || dc.state !== 'OK') return monBox('dc-box', 'Day context (what the system sees now)', '<div style="font-size:12.5px;color:#e0a030">' + (!dc ? 'The summary has no day-context data yet (the server needs a restart to serve it).' : 'Unavailable: ' + monEsc(dc.error || dc.state) + '.') + '</div>');
+  const on = dc.overnight, ib = dc.ib, w = dc.watcher, sg = n => (n >= 0 ? '+' : '') + f0(n);
+  const lv = (L, up) => '<div style="padding:4px 0;border-top:1px solid var(--border)"><div style="display:flex;gap:8px;font-size:13px"><span>' + (up ? '&#9650;' : '&#9660;') + '</span><span class="mono" style="white-space:nowrap">' + f0(L.lo) + (L.hi > L.lo ? '&ndash;' + f0(L.hi) : '') + '</span>' + (L.touched ? '<span style="margin-left:auto;color:#e0a030" title="tonight\'s or today\'s range has already traded into it">touched</span>' : '') + '</div><div style="font-size:11.5px;color:var(--dim);padding-left:22px">' + f0(L.distPts) + ' pts · ' + f2(L.distAdr) + ' ADR · ' + monEsc(L.kind) + ' ' + monEsc(String(L.date).slice(5)) + '</div></div>';
+  const levels = (dc.above.length || dc.below.length) ? '<div style="font-size:11.5px;color:var(--dim);margin:2px 0">Above the price</div>' + (dc.above.map(L => lv(L, true)).join('') || '<div style="font-size:12px;color:var(--dim)">none</div>') + '<div style="font-size:11.5px;color:var(--dim);margin:6px 0 2px">Below the price</div>' + (dc.below.map(L => lv(L, false)).join('') || '<div style="font-size:12px;color:var(--dim)">none</div>') : '<div style="font-size:12.5px;color:var(--dim)">No unfilled single prints or poor highs / lows in the last 5 sessions.</div>';
+  return monBox('dc-box', 'Day context (what the system sees now)',
+    monRow('Latest bar', monEsc(dc.asOf) + ' · ' + (dc.ageMin != null ? dc.ageMin + ' min old' : 'age unknown') + (dc.stale ? ' <b style="color:#e0a030">STALE</b>' : '')) + monRow('Price', f2(dc.price)) + monRow('Typical day (ADR)', f0(dc.adr) + ' pts <span style="color:var(--dim)">median of the last 20 RTH ranges</span>')
+    + (on ? monRow('Overnight', f0(on.range) + ' pts · ' + f2(on.rangeAdr) + ' ADR · net ' + sg(on.net) + ' · low ' + f2(on.low) + ' (now ' + sg(on.lowToLast) + ' above it)') : monRow('Overnight', 'no bars yet'))
+    + monRow('Initial balance', ib ? monEsc(ib.state) + ' <span style="color:var(--dim)">extension up ' + f2(ib.extensionUp) + ' / down ' + f2(ib.extensionDown) + ' IBR</span>' : '<span style="color:var(--dim)">' + monEsc(dc.ibNote || 'n/a') + '</span>')
+    + monRow('Day state', (function (ds) { if (!ds) return '<span style="color:var(--dim)">not served yet (restart pending)</span>'; if (ds.error) return '<span style="color:#e0a030">unavailable: ' + monEsc(ds.error) + '</span>'; var one = function (x) { return !x ? 'no session yet' : x.warmup ? 'warming up' : '<b style="color:' + (x.liquidation ? '#e05050' : x.meltUp ? '#3fb950' : 'inherit') + '">' + monEsc(x.state) + '</b> <span style="color:var(--dim)">since ' + monEsc(String(x.since || '').slice(11)) + (x.ageMin != null && x.ageMin > 5 ? ' &middot; STALE' : '') + '</span>'; }; return 'RTH ' + one(ds.RTH) + ' &middot; Globex ' + one(ds.GLOBEX); })(dc.dayState))
+    + monRow('Watcher', w ? monEsc(w.state) + ' <span style="color:var(--dim)">since ' + monEsc(w.t) + '</span>' : '<span style="color:var(--dim)">no state yet today</span>')
+    + rotationRows(dc.rotation)
+    + monDetails('dc-levels', 'Unfinished business (' + dc.unfilledTotal + ' unfilled, last 5 sessions)', levels)
+    + '<div style="font-size:11.5px;color:var(--dim);margin-top:6px">' + (dc.notes || []).map(monEsc).join('<br>') + '</div>' + nxt(d, 'dayContext'));
+}
+function tellShadowBox(d) {
+  const tc = d && d.tellContext;
+  if (!tc || tc.state !== 'OK' || !tc.shadow) return '';
+  const w = tc.watcher || {}, sh = tc.shadow, col = v => (v == null ? '' : v < 0 ? 'color:#ef4444' : 'color:#22c55e');
+  const tl = (w.timeline || []).slice(-8).map(x => '<div style="font-size:12px;display:flex;gap:8px;padding:1px 0"><span class="mono" style="color:var(--dim)">' + monEsc(x.t) + '</span><span>' + monEsc(TELL_STATE[x.state] || x.state) + '</span></div>').join('');
+  const bk = (k, title) => { const b = sh.books[k]; if (!b) return ''; return monRow(title, b.changed + ' differ from the tell, of ' + b.fires + ' fires, on ' + b.days + ' day' + (b.days === 1 ? '' : 's') + (b.meanDiff != null ? ' · vs tell <span style="' + col(b.meanDiff) + '">' + monMoney(b.meanDiff) + '</span> mean, <span style="' + col(b.medianDiff) + '">' + monMoney(b.medianDiff) + '</span> median · better ' + b.better + ' / worse ' + b.worse + ' / same ' + b.same : '') + (b.belowFloor ? ' <span style="color:var(--dim)">(N&lt;' + (b.floor || sh.minN) + ', no result)</span>' : '')); };
+  return monBox('tw-box', 'Watcher and shadow books (not validated, nothing ordered)',
+    '<div style="font-size:12px;color:var(--dim);margin-bottom:6px">The watcher reads how the day is developing from the completed bars. The shadow books re-run each tell fire with its own exit code on the same bars, changing only the stop (B) or the direction and stop (C, AGAINST fires only), and are compared with the tell on the same fires.</div>'
+    + (tc.missingShadow && tc.missingShadow.length ? '<div style="font-size:12.5px;color:#e0a030;margin:4px 0">' + tc.missingShadow.reduce((a, m) => a + m.n, 0) + ' fire(s) have a context row but no shadow books (' + tc.missingShadow.map(m => monEsc(m.d) + ': ' + m.n).join(', ') + ').</div>' : '')
+    + monRow('Day state now', w.current ? monEsc(TELL_STATE[w.current] || w.current) + (w.date ? ' · ' + monEsc(w.date) : '') : 'no data yet') + monRow('State changes per day (stability)', w.flipsPerDay == null ? '--' : monEsc(w.flipsPerDay) + ' (last ' + ((w.perDay || []).length) + ' days)')
+    + '<div style="margin:4px 0">' + tl + '</div>'
+    + monRow('Control (tell re-simulated)', sh.control.fires + ' closed fires on ' + sh.control.days + ' day' + (sh.control.days === 1 ? '' : 's') + ' · mean ' + monMoney(sh.control.mean) + ', median ' + monMoney(sh.control.median)) + monRow('Parity with the tell', sh.parityFailures ? '<span style="color:#e0a030">' + sh.parityFailures + ' failure(s)</span>' : 'exact')
+    + bk('B', 'B: value-edge stop') + bk('C', 'C: flip when AGAINST') + bk('D', 'D: stop behind node 4') + bk('E', 'E: Sierra-style node stop') + bk('F', 'F: stop beyond the day extreme')
+    + monRow('Live override orders (sim account)', (sh.live || []).length ? (sh.live || []).map(x => (x.order_state === 'LINKED_C' ? 'flip' : 'edge stop') + ' ' + monEsc(x.d) + ' ' + (x.status === 'ACTIVE' ? 'open' : '<span style="' + col(x.pnl) + '">' + monMoney(x.pnl) + '</span>') + ' (tell ' + (x.tell_sim_net == null ? 'n/a' : monMoney(x.tell_sim_net)) + ')').join(' · ') : 'none yet')
+    + '<div style="font-size:11.5px;color:var(--dim);margin-top:6px">' + (sh.notes || []).map(monEsc).join('<br>') + '</div>' + nxt(d, 'tellShadow'));
+}
 function learningParts(d) {
   const lm = d && d.learning;
   if (!lm || lm.state !== 'OK') {
@@ -3550,16 +3717,16 @@ function learningParts(d) {
   P.head = '<div style="font-size:12px;color:var(--dim);margin-bottom:8px">Learning data built ' + (age < 1 ? 'less than an hour' : age + ' h') + ' ago (nightly). MODEL P&L from bars unless labelled broker. Window starts ' + monEsc(String(lm.scoreboardStart).slice(0, 10)) + '. '
     + '<label style="white-space:nowrap"><input type="checkbox" id="lm-hc" ' + (hc ? 'checked' : '') + '> after $' + lm.haircutUsd + '/trade slippage (commission already in P&L)</label> <button id="lm-refresh" style="font-size:12px">Refresh</button></div>';
   P.top = glanceChips(d, lm);
-  P.cum = monBox('lm-cum', 'Cumulative P&L by arm', '<div style="font-size:12px;color:var(--dim);margin-bottom:4px">Each line replays one set of rules on the same fires. Take-everything is multi-position, not one MNQ.</div>' + lmLines(lmMerge(S, arms, key), arms.map(a => ({ k: a, color: LM_COL[a], label: LM_LABEL[a], w: a === 'ROSTER_LIVE' ? 3 : 2 }))));
+  P.cum = monBox('lm-cum', 'Cumulative P&L by arm', '<div style="font-size:12px;color:var(--dim);margin-bottom:4px">Each line replays one set of rules on the same fires. Take-everything is multi-position, not one MNQ.</div>' + lmLines(lmMerge(S, arms, key), arms.map(a => ({ k: a, color: LM_COL[a], label: LM_LABEL[a], w: a === 'ROSTER_LIVE' ? 3 : 2 }))) + nxt(d, 'scoreboard'));
   const rows = [['firedLive', 'Fired live (roster)'], ['onRosterNotFiredLive', 'On roster, not fired live'], ['skippedByRoster', 'Skipped by roster'], ['mlTake', 'ML TAKE (log only)'], ['mlVeto', 'ML VETO (log only)']];
   P.fire = monBox('lm-fire', 'What it fires and what it skips', lmBars(lm.perDay || [], 'firedLive', 'skipped', LM.blue, LM.amber, 'Fired live', 'Skipped by roster') + '<div style="margin-top:6px">' + rows.map(r => monRow(r[1], (fv[r[0]] ? fv[r[0]].n : 0) + ' trades · <span style="' + col(pt(fv[r[0]])) + '">' + monMoney(pt(fv[r[0]])) + '</span>/trade')).join('') + '</div>');
-  P.ml = monBox('lm-ml', 'Meta-labeler: TAKE vs VETO (log only, nothing is gated)', lmLines(lmMerge(S, ['ML_TAKE', 'ML_VETO', 'TAKE_ALL'], key), ['ML_TAKE', 'ML_VETO', 'TAKE_ALL'].map(a => ({ k: a, color: LM_COL[a], label: LM_LABEL[a] }))));
+  P.ml = monBox('lm-ml', 'Meta-labeler: TAKE vs VETO (log only, nothing is gated)', lmLines(lmMerge(S, ['ML_TAKE', 'ML_VETO', 'TAKE_ALL'], key), ['ML_TAKE', 'ML_VETO', 'TAKE_ALL'].map(a => ({ k: a, color: LM_COL[a], label: LM_LABEL[a] }))) + nxt(d, 'mlUnseen'));
   const tell = fw.tell, bot = lm.bot;
   P.bots = monBox('lm-bots', 'Bots', '<div style="font-weight:600;color:#22c55e;font-size:13px">Learning bot (shadow)</div>' + (bot ? monRow('Version / decisions', monEsc(bot.latestVersion) + ' · ' + bot.decisions + ' on ' + bot.daysLogged + ' days') + monRow('TAKE', bot.take.n + ' trades · <span style="' + col(pt(bot.take)) + '">' + monMoney(pt(bot.take)) + '</span>/trade') + monRow('SKIP (avoided / left on the table)', bot.skip.n + ' trades · <span style="' + col(pt(bot.skip)) + '">' + monMoney(pt(bot.skip)) + '</span>/trade') : '<div style="font-size:12.5px;color:var(--dim)">Not running yet. Once a frozen shadow bot writes its decisions (performance_audit BOT_DECISION rows) its arm, skipped set, calibration and pass race appear here automatically.</div>')
-    + '<div style="font-weight:600;color:#22c55e;font-size:13px;margin-top:8px">AMT tell Stage 2 (sim account, running)</div>' + (tell ? monRow('Trades / P&L', tell.trades + ' on ' + tell.days + ' days · ' + monMoney(tell.pnl) + ' model P&L') + monRow('Review at', tell.floor + ' trades (rules frozen until then)') : '') + lmLines(lmMerge(S, ['AMT_TELL_STAGE2'], key), [{ k: 'AMT_TELL_STAGE2', color: LM.green, label: 'Tell cumulative' }], null, { h: 120 }));
-  P.delay = monBox('lm-delay', 'Signal-to-order delay (market entries)', '<div style="font-size:12px;color:var(--dim);margin-bottom:4px">Seconds from signal to order. Realistic 15 s, stress 90 s. A 15 s delay is about 2.9 points of drift in regular hours.</div>' + lmLines((lm.delay || []).map(x => ({ date: x.date, median: x.median, p90: x.p90 })), [{ k: 'median', color: LM.blue, label: 'Median s' }, { k: 'p90', color: LM.amber, label: 'p90 s' }], [{ y: 15, color: LM.green, label: '15 s' }, { y: 90, color: LM.red, label: '90 s' }], { zero: false, floor0: true }));
+    + nxt(d, 'bot') + '<div style="font-weight:600;color:#22c55e;font-size:13px;margin-top:8px">AMT tell Stage 2 (sim account, running)</div>' + (tell ? monRow('Trades / P&L', tell.trades + ' on ' + tell.days + ' days · ' + monMoney(tell.pnl) + ' model P&L') + monRow('Review at', tell.floor + ' trades (rules frozen until then)') : '') + lmLines(lmMerge(S, ['AMT_TELL_STAGE2'], key), [{ k: 'AMT_TELL_STAGE2', color: LM.green, label: 'Tell cumulative' }], null, { h: 120 }) + nxt(d, 'tell'));
+  P.delay = monBox('lm-delay', 'Signal-to-order delay (market entries)', '<div style="font-size:12px;color:var(--dim);margin-bottom:4px">Seconds from signal to order. Realistic 15 s, stress 90 s. A 15 s delay is about 2.9 points of drift in regular hours.</div>' + lmLines((lm.delay || []).map(x => ({ date: x.date, median: x.median, p90: x.p90 })), [{ k: 'median', color: LM.blue, label: 'Median s' }, { k: 'p90', color: LM.amber, label: 'p90 s' }], [{ y: 15, color: LM.green, label: '15 s' }, { y: 90, color: LM.red, label: '90 s' }], { zero: false, floor0: true }) + nxt(d, 'delay'));
   P.race = monBox('lm-race', 'Pass race (virtual prop account)', '<div style="font-size:12px;color:var(--dim);margin-bottom:4px">Reach +$' + lm.passTarget + ' before the $' + lm.trailLoss + ' end-of-day trailing loss. A virtual bust is logged and the account resets, so the learning keeps going.</div>'
-    + Object.keys(lm.passRace || {}).map(k => { const v = lm.passRace[k], pass = v.attempts.filter(a => a.result === 'PASS').length; return '<div style="font-weight:600;font-size:13px;color:' + LM_COL[k] + ';margin-top:6px">' + monEsc(LM_LABEL[k]) + ': attempts ' + v.attempts.length + ' (pass ' + pass + ', bust ' + (v.attempts.length - pass) + '); now ' + monMoney(v.open.equity) + ', floor ' + monMoney(v.open.floor) + '</div>' + lmLines(v.path, [{ k: 'equity', color: LM_COL[k], label: 'Equity' }, { k: 'floor', color: LM.red, label: 'Floor', dash: '4 3', w: 1 }], [{ y: lm.passTarget, color: LM.green, label: 'target' }], { h: 130 }); }).join(''));
+    + Object.keys(lm.passRace || {}).map(k => { const v = lm.passRace[k], pass = v.attempts.filter(a => a.result === 'PASS').length; const pp = (lm.passProb || {})[k], ppTxt = pp && pp.state === 'OK' ? '<div style="font-size:12px;color:var(--dim)">Resampled chance to pass in ' + pp.maxDays + ' days: <b>' + Math.round(100 * pp.pPass) + '%</b> · bust ' + Math.round(100 * pp.pBust) + '% · undecided ' + Math.round(100 * pp.pUndecided) + '% (from ' + pp.sourceDays + ' days of this arm, end-of-day breach only, so optimistic; indicative only)</div>' : ''; return ppTxt + '<div style="font-weight:600;font-size:13px;color:' + LM_COL[k] + ';margin-top:6px">' + monEsc(LM_LABEL[k]) + ': attempts ' + v.attempts.length + ' (pass ' + pass + ', bust ' + (v.attempts.length - pass) + '); now ' + monMoney(v.open.equity) + ', floor ' + monMoney(v.open.floor) + '</div>' + lmLines(v.path, [{ k: 'equity', color: LM_COL[k], label: 'Equity' }, { k: 'floor', color: LM.red, label: 'Floor', dash: '4 3', w: 1 }], [{ y: lm.passTarget, color: LM.green, label: 'target' }], { h: 130 }); }).join('') + nxt(d, 'passRace'));
   P.notes = '<div style="font-size:11.5px;color:var(--dim);margin-bottom:8px">' + (lm.notes || []).map(monEsc).join('<br>') + '</div>';
   return P;
 }
@@ -3575,22 +3742,44 @@ let tellRule = 'split', tellDate = null, tellLast = null, tellFetchedAt = 0;
 const TELL_EXIT = { STOP: 'stopped', STOP_GAP: 'stopped (gap)', TIMEOUT: '120-min no-break exit', FADE: 'tell faded after the break', EOD: '15:55 flatten', EOS: 'end of data' };
 const tellT = (ts) => ts ? String(ts).slice(11, 19) : '--';
 const tellPx = (v) => v == null ? '--' : Number(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+// ---- Tell context (2026-11-03): where each fire sat in the developing RTH value area; a display and learning label, NOT VALIDATED, gates nothing (docs/TELL_CONTEXT_OVERLAY_SCOPE_20261103.md) ----
+const TELL_CTX_COL = { AGREES: '#22c55e', AGAINST: '#ef4444', NEUTRAL: '#94a3b8', UNKNOWN: '#64748b' };
+const TELL_STATE = { UNKNOWN: 'unknown (before 60 RTH minutes)', BALANCE_FORMING: 'balance forming', BALANCE_CONFIRMED: 'balance confirmed', DRIVE_UP: 'driving up', DRIVE_DOWN: 'driving down', DRIVE_UP_BUILDING: 'driving up, built (a fight, then pushed on)', DRIVE_DOWN_BUILDING: 'driving down, built (a fight, then pushed on)' };
+function tellShadowDetail(c, orderState) {
+  if (!c || !c.shadow) return '';
+  const sh = c.shadow, part = (k, name) => { const b = sh[k]; if (!b) return ''; const live = (orderState === 'LINKED_C' && k === 'C') || (orderState === 'LINKED_B' && k === 'B') || ((!orderState || orderState === 'LINKED') && k === 'A'); return name + ' ' + (k !== 'A' && b.followed ? 'same as tell' : (b.dir === 1 ? 'long' : 'short') + ' stop ' + tellPx(b.stop)) + ' ' + (b.status === 'OPEN' ? 'open' : monMoney(b.net)) + (live ? ' (the live order)' : ''); };
+  return '<br>shadow books (not validated, nothing is ordered): ' + [part('A', 'tell'), part('B', 'value-edge stop'), part('C', 'flip'), part('D', 'node-4 stop'), part('E', 'Sierra-node stop'), part('F', 'day-extreme stop')].filter(Boolean).join(' · ');
+}
+function tellCtxTag(c) {
+  if (!c) return '<span class="vb-tag mild sig-tag" title="No context row yet (the context reader has not written one for this fire)">ctx --</span>';
+  return '<span class="vb-tag mild sig-tag" style="color:' + (TELL_CTX_COL[c.label] || '#94a3b8') + '" title="Context label, not validated: ' + monEsc(c.reason || c.tail || '') + '">' + monEsc(c.label) + '</span>';
+}
+function tellCtxDetail(c, orderState) { return tellCtxDetailBase(c, orderState) + rotationLine(c); }
+function tellCtxDetailBase(c, orderState) {
+  if (!c) return '<br>context: not computed yet';
+  if (c.label === 'UNKNOWN') return '<br>context: unknown (' + monEsc(c.reason || 'no reason recorded') + ')';
+  const lv = c.nearest_lvn;
+  return '<br>context ' + monEsc(c.label) + ' (not validated): ' + (c.tail === 'INSIDE' ? 'inside value' : c.tail === 'ABOVE_VAH' ? 'above VAH' : 'below VAL') + ' at ' + (c.location != null ? Math.round(c.location * 100) : '--') + '% of the value area (' + tellPx(c.val) + ' to ' + tellPx(c.vah) + ', POC ' + tellPx(c.poc) + ')'
+    + (c.near_edge ? ' · near the ' + (c.near_edge === 'TOP' ? 'top' : c.near_edge === 'BOTTOM' ? 'bottom' : 'top and bottom') + ' edge' : '') + (c.reason ? ' · ' + monEsc(c.reason) : '') + ' · shape ' + monEsc(c.shape_letter || '--') + (c.multi_hump ? ' (multiple humps)' : '') + (c.opposite_broken ? ' · fades a completed break' : '')
+    + (lv ? ' · nearest relative LVN ' + tellPx(lv.price) + ' (' + monEsc(String(lv.side).toLowerCase()) + ', depth ' + monEsc(lv.depth) + ')' : '') + (c.watcher_state ? '<br>day state at the fire: ' + monEsc(TELL_STATE[c.watcher_state] || c.watcher_state) : '') + tellShadowDetail(c, orderState);
+}
 // Rows use the Session Timeline's own .row / .badge look (dot = direction, time, type, entry price, win/loss/open badge) so the Tell tab reads like Live and All. Tap a row for the stop, conditions and exit.
 function tellTradeRow(r) {
   const long = r.direction === 1, open = r.status === 'OPEN', pnl = r.net_dollars;
   const badgeClass = open ? 'open' : (pnl > 0 ? 'win' : pnl < 0 ? 'loss' : 'other');
   const badgeText = open ? 'open' : (pnl >= 0 ? '+$' : '-$') + Math.abs(pnl).toFixed(0);
   const dot = long ? 'var(--green-soft)' : 'var(--red-soft)';
-  const ord = (r.book === 'V1' && r.bar_rule === 'split') ? (r.active_setup_id ? '<span class="vb-tag mild sig-tag">ORDER #' + monEsc(r.active_setup_id) + '</span>' : (r.order_state ? '<span class="vb-tag mild sig-tag" title="Not ordered: ' + monEsc(String(r.order_state).replace('SKIPPED_', '').toLowerCase()) + '">no order</span>' : '')) : '';
+  const ord = (r.book === 'V1' && r.bar_rule === 'split') ? (r.active_setup_id ? '<span class="vb-tag mild sig-tag">ORDER #' + monEsc(r.active_setup_id) + (r.order_state === 'LINKED_C' ? ' FLIPPED' + (r.context && r.context.shadow && r.context.shadow.C ? ' TO ' + (r.context.shadow.C.dir === 1 ? 'LONG' : 'SHORT') : '') : r.order_state === 'LINKED_B' ? ' EDGE STOP' : '') + '</span>' : (r.order_state ? '<span class="vb-tag mild sig-tag" title="Not ordered: ' + monEsc(String(r.order_state).replace('SKIPPED_', '').toLowerCase()) + '">no order</span>' : '')) : '';
   const exit = '';   // the exit reason lives in the tap-open detail line so the row keeps the Timeline's one-line shape on a phone
+  const cx = (r.book === 'V1' && r.bar_rule === 'split') ? tellCtxTag(r.context) : '';   // context label (display only, NOT VALIDATED); other books carry the same fire so the tag is shown once, on the book that orders
   const d = r.details || {};
   const late = r.late_min != null && r.late_min > 5 ? ' · logged ' + Math.round(r.late_min) + ' min after it fired (restart/catch-up)' : '';
   const detail = 'stop ' + tellPx(r.stop_price) + ' (' + Number(r.risk_points).toFixed(1) + ' pt' + (r.stop_fallback ? ', no 3rd node' : '') + ') · entry bar ' + tellT(r.entry_at) + (r.order_state && !r.active_setup_id && r.book === 'V1' && r.bar_rule === 'split' ? ' · not ordered: ' + monEsc(String(r.order_state).replace('SKIPPED_', '').toLowerCase()) : '') + (open ? '' : ' · ' + monEsc(TELL_EXIT[r.exit_reason] || r.exit_reason) + ' · exit bar ' + tellT(r.exit_bar_start) + ' · ' + (r.exit_points >= 0 ? '+' : '') + Number(r.exit_points).toFixed(1) + ' pt' + (r.broke ? ' · broke the range' : '')) +
-    '<br>ladder of ' + monEsc(d.L) + ' nodes left behind · pace ' + (d.fast ? 'up' : 'no') + ' · flow flips ' + (d.flip ? 'yes' : 'no') + ' · oscillation ' + (d.osc ? 'yes' : 'no') + ' · strides ' + (d.strides ? 'yes' : 'no') + ' · bar #' + monEsc(r.sig_idx) + late;
+    tellCtxDetail(r.context, r.order_state) + '<br>ladder of ' + monEsc(d.L) + ' nodes left behind · pace ' + (d.fast ? 'up' : 'no') + ' · flow flips ' + (d.flip ? 'yes' : 'no') + ' · oscillation ' + (d.osc ? 'yes' : 'no') + ' · strides ' + (d.strides ? 'yes' : 'no') + ' · bar #' + monEsc(r.sig_idx) + late;
   return '<div class="row" onclick="var n=this.nextElementSibling; n.style.display = n.style.display === \'none\' ? \'block\' : \'none\'">' +
     '<span class="rdot" style="background:' + dot + '"></span>' +
     '<span class="time mono">' + String(r.entry_at || r.fired_at || '').slice(11, 16) + '</span>' +
-    '<span class="type">AMT TELL ' + (long ? 'LONG' : 'SHORT') + '</span>' + exit + ord +
+    '<span class="type">AMT TELL ' + (long ? 'LONG' : 'SHORT') + '</span>' + exit + ord + cx +
     '<span class="price mono">' + tellPx(r.entry_price) + '</span>' +
     '<span class="badge ' + badgeClass + '">' + badgeText + '</span></div>' +
     '<div style="display:none;font-size:12px;color:var(--dim);padding:4px 0 8px 14px;border-bottom:1px solid rgba(51,65,85,0.3)">' + detail + '</div>';

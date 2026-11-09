@@ -1,0 +1,4 @@
+// Logs an UNCOUNTED descriptive look (tests 0) on the saved rows of docs/TELL_LEG_PROFILE_STOP_AND_FLOOR_EXITS_PREREG_20261104.md BEFORE reading it: R0 versus V1 split by the size of the tell's own stop (hr-023).
+import { logLook } from '../../lib/look_ledger.mjs';
+const id = await logLook({ family: 'tell_leg_profile_exit_20261104', dataWindow: 'explore_1760_entries', kind: 'EXPLORE', tests: 0, label: 'Uncounted descriptive follow-up: R0 (leg-profile initial stop) minus V1 net dollars and worst loss split by the size of the tell stop (under 50, 50 to 100, over 100 points), from the saved rows; post hoc, motivated by the user live case (a 267-point stop)', script: 'scripts/tell_context/research_20261103/r0_by_risk.py', prereg: 'docs/TELL_LEG_PROFILE_STOP_AND_FLOOR_EXITS_PREREG_20261104.md', ref: 'tell_leg_profile_exit_20261104_r0_by_risk' });
+console.log('look id', id); process.exit(0);

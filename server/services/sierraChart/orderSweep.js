@@ -145,6 +145,7 @@ const MARKET_ENTRY_PREFIXES = [
   'IB_LOW_PNR_', 'STOP_SWEEP_', 'VWAP_RECLAIM_',
   'A_UP_STRONG', 'A_DOWN_WEAK', 'A_UP_WEAK', 'A_DOWN_STRONG', 'C_PAIRED_', 'C_REVERSAL_', 'C_STANDALONE_', 'TRT_', 'FAILED_AUCTION_',
   'ZONE_EDGE_FADE', 'BRACKET_BREAKOUT_',
+  'VACUUM_EXP_',   // 2026-11-09: the expansion rule enters at the NEXT bar's open (market), like the tell
   'AMT_TELL_',   // 2026-10-28: the tell enters at the NEXT bar's open (market), not at a level -- a resting limit would be a different trade
 ];
 export function wantsMarketEntry(row) {

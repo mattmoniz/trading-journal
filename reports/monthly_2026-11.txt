@@ -1,0 +1,43 @@
+TRADING JOURNAL — MONTHLY REPORT
+Month         : 2026-11  (2026-11-01 – 2026-11-30)
+Generated     : 2026-11-02T00:00:00.829Z
+============================================================
+
+PERFORMANCE SUMMARY
+----------------------------------------
+Trading days  : 0
+Total P&L     : +$0.00
+Daily avg     : +$0.00
+Daily σ       : $0.00
+Win days      : 0 / 0 (N/A)
+
+SETUP STATISTICS
+----------------------------------------
+GLOBEX_VWAP_FADE_SHORT         fired: 1 | wins: 0 | losses: 0 | expired: 0 | wr: unresolved | avg conf: 1.0
+POC_ROTATION_JOIN_LONG         fired: 1 | wins: 0 | losses: 1 | expired: 0 | wr: 0.0% | avg pnl: -$42.00
+POC_ROTATION_JOIN_SHORT        fired: 1 | wins: 0 | losses: 1 | expired: 0 | wr: 0.0% | avg pnl: -$42.00
+
+ACD SIGNAL ACCURACY
+----------------------------------------
+No ACD data this month.
+
+EDGE VALIDATION (confluence buckets)
+----------------------------------------
+Confluence bucket | Fired | W | L | Win% | Avg P&L
+------------------------------------------------------------
+0-2               | 1     | 0 | 0 | N/A   | N/A
+no_score          | 2     | 0 | 2 | 0.0%  | -$42.00
+
+BACKTEST DRIFT
+----------------------------------------
+Insufficient resolved setups (min 5) for drift analysis this month.
+
+FLAGS (auto-detected)
+----------------------------------------
+No notable flags this month.
+
+INTERPRETATION (AI)
+----------------------------------------
+(Anthropic API error: 400 {"type":"error","error":{"type":"invalid_request_error","message":"Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits."},"request_id":"req_011Cgd7mn8XZDMUzYJzwkE2n"})
+
+============================================================

@@ -1,0 +1,4 @@
+// Logs the ledger look for docs/IMBALANCE_BREAKOUT_PREREG_20261104.md section 13 (A3, coarser volume bars) BEFORE imbalance_sizes.py computes any statistic (hr-023). 4 counted tests (family total 10).
+import { logLook } from '../../lib/look_ledger.mjs';
+const id = await logLook({ family: 'imbalance_breakout_20261104', dataWindow: 'explore_522_sessions', kind: 'EXPLORE', tests: 4, label: 'AMENDMENT A3 (user: try 1000v 2000 5000 10000): per-bar diagonal imbalances and stacks on 1000/2000/5000/10000-contract volume bars (exact merges of the 500-contract bars, same 10,000-contract window), rho(net aligned stacks 3:1, y) per bar size; family total 10, Bonferroni 10', script: 'scripts/tell_context/research_20261103/imbalance_sizes.py', prereg: 'docs/IMBALANCE_BREAKOUT_PREREG_20261104.md', ref: 'imbalance_breakout_20261104_look3' });
+console.log('look id', id); process.exit(0);

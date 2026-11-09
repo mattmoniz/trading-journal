@@ -774,7 +774,7 @@ export async function runDailyCoaching(targetDate, io) {
         `, [`%×${nextDow}%`]);
 
         const signalsNotes = patternsQ.rows.length > 0
-          ? patternsQ.rows.map(p => `${p.pattern_key}: ${p.wr_pct}% WR N=${p.sample_size} EV=${p.ev}`).join('\n')
+          ? '(mined patterns, NOT validated: no multiplicity correction, no forward test)\n' + patternsQ.rows.map(p => `${p.pattern_key}: ${p.wr_pct}% WR N=${p.sample_size} EV=${p.ev}`).join('\n')
           : null;
 
         const openNotes = [

@@ -118,7 +118,7 @@ export async function resolveSetupsByPrice(io) {
   // where this function reads fired_at, since string comparison here needs to match
   // Postgres's own timestamp-text ordering, not JS's local-timezone Date parsing.
   const needsBars = active.rows.filter(row => {
-    if (row.setup_type === 'ABSORPTION_LONG' || row.setup_type.startsWith('COIL_SURGE') || row.setup_type.startsWith('POC_ROTATION_JOIN') || row.setup_type.startsWith('IB_LOW_PNR') || row.setup_type.startsWith('AMT_TELL_')) return false;
+    if (row.setup_type === 'ABSORPTION_LONG' || row.setup_type.startsWith('COIL_SURGE') || row.setup_type.startsWith('POC_ROTATION_JOIN') || row.setup_type.startsWith('IB_LOW_PNR') || row.setup_type.startsWith('AMT_TELL_') || row.setup_type.startsWith('VACUUM_EXP_')) return false;
     const entry = row.entry_zone_high ?? row.entry_zone_low;
     const { stop_level: stop, t1_level: t1 } = row;
     if (entry == null || stop == null || t1 == null) return false;
@@ -430,7 +430,7 @@ export async function resolveSetupsByPrice(io) {
   // an unreachable informational placeholder, never checked.
     // AMT_TELL_LONG/SHORT (2026-10-28) share this branch: a real bar-walk stop check and a TIMEOUT_EXIT backstop at expires_at (the session's 15:57 ET flatten backstop). The tell-driven exits
     // (tell fades after the range breaks, 120-minute no-break exit, 15:55 flatten) are written by server/services/amtTellOrders.js from the detector's own V1 book, never by this resolver.
-    if (row.setup_type.startsWith('IB_LOW_PNR') || row.setup_type.startsWith('AMT_TELL_')) {
+    if (row.setup_type.startsWith('IB_LOW_PNR') || row.setup_type.startsWith('AMT_TELL_') || row.setup_type.startsWith('VACUUM_EXP_')) {   // VACUUM_EXP_ (2026-11-09): same bar-walk stop + TIMEOUT_EXIT backstop at expires_at; the 30-bar exit is written by vacuumLiveOrders.js
       const stop = row.stop_level;
       if (entry == null || stop == null) continue;
       const long = row.setup_type.endsWith('_LONG'); // always false today -- SHORT only, see spec

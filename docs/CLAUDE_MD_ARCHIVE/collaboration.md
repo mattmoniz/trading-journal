@@ -25,6 +25,10 @@ Full text of every entry that CLAUDE.md now summarises in one line. Nothing was 
 - [co-019](#co-019) `invoke_gemini.sh` now `cd`s into the repo and passes `--add-dir` before invoking …
 - [co-020](#co-020) `scratch/claude_request.md` has no versioning — a `Write` to it is destructive, and …
 - [co-021](#co-021) A background `./start.sh` Bash call left running when a Claude Code session ends …
+- [co-022](#co-022) Every monitor/forward test/study ships a written next-step tree (confirm/fail/continue) on its card and a failure autopsy in the improvement register; 'not shown' alone is not closure. (2026-11-04)
+- [co-023](#co-023) Register every test/variant at its START: prereg, ledger look, claim, register row (next test + retire rule), index rebuild; Stop hook runs check_research_organized.mjs. (co-023)
+- [co-024](#co-024) Unsolicited edge search runs as a quarterly queue (docs/CANDIDATE_QUEUE.md): max 8 candidates, charged to the ledger at registration, Holm 0.10, judged on forward days only; explore results are leads.
+- [co-025](#co-025) Never retire or discard an idea on an estimate or a prior (even an AI reviewer's); keep it open or PARKED with a next step and reopen trigger. Only a pre-registered result closes one. (2026-11-08)
 
 ---
 
@@ -142,3 +146,54 @@ Full text of every entry that CLAUDE.md now summarises in one line. Nothing was 
 <a id="co-021"></a>
 
 - **A background `./start.sh` Bash call left running when a Claude Code session ends becomes an orphaned dev-server supervisor**, invisible to `systemctl status` and capable of silently taking the app down hours or days later. `start.sh` has an EXIT/INT/TERM trap that hands port 3002 back to `trading-journal-server.service` when the top-level dev session ends — but this does NOT cover `nodemon`'s spawned child crashing independently while `start.sh`/`nodemon`/`vite` all stay alive (verified live: a health-monitor now polls port 3002 directly and self-heals if it goes dark, and the systemd unit's restart-burst limits were widened so a real failure surfaces instead of looping silently). If you run `./start.sh` as a background Bash call, either run `./stop.sh` before the session ends or verify the trap fired (`systemctl --user is-active trading-journal-server.service`) — don't let a background dev session dangle and assume it's harmless. See [docs/COLLABORATION_DETAIL.md#orphaned-startsh-dev-server-supervisor-incident](../../docs/COLLABORATION_DETAIL.md#orphaned-startsh-dev-server-supervisor-incident) for the 4-day, 114,824-attempt crash loop this was found from.
+
+<a id="co-022"></a>
+
+- **Every monitor/forward test/study ships a written next-step tree (confirm/fail/continue) on its card and a failure autopsy in the improvement register; 'not shown' alone is not closure. (2026-11-04)**
+
+Added 2026-11-04 after the user's critique ("a lot of the things we've built to monitor don't have next steps once they've been monitored; we just shoot them down without any further critique to improve it"). A result that only says 'not shown' or 'watching' is a dead end (hr-001). Every monitor, forward test or study is registered with a written NEXT-STEP TREE: what we do on confirm, on fail and on continue (the pre-registered looks and the failure rule), shown ON the monitor card itself ('Next:' line, as in the overnight order-flow forward race and the Day context cards). Every failed or flat result gets an AUTOPSY recorded in the same session in docs/IMPROVEMENT_REGISTER_*.md: (1) which assumption broke (the gate, the signal, the exit, the sample or the era), (2) the strongest SALVAGEABLE component, (3) the cheapest next test with its owner, (4) what result would retire it. Verdicts without a named next test are not accepted as closure; 'retire' is a valid autopsy outcome only when stated with its reason. First applied in docs/IMPROVEMENT_REGISTER_20261104.md; the audit of the older Monitor & Learning cards (row 9) is open.
+
+<a id="co-023"></a>
+
+- **Register every test/variant at its START: prereg, ledger look, claim, register row (next test + retire rule), index rebuild; Stop hook runs check_research_organized.mjs. (co-023)**
+
+Every new test, variant or monitor is registered when it STARTS, not afterwards (user, 2026-11-04: "make sure that everything stays organized as we test and move forward with other tests or test variants"). The checklist, in order:
+1. Pre-registration doc (frozen rules, counted tests, sealed windows) before any outcome is read; the look is logged in `research_looks` first (hr-023).
+2. A claim for every result, positive or null, via `recordClaim()` (hr-024); link it to the look (`claim_slug` or `ref`).
+3. A row in the current `docs/IMPROVEMENT_REGISTER_*.md`: what the evidence says, the salvageable part, the cheapest next test, the retire rule, status. A variant is a new row that says what basis it has (data, not a guess).
+4. A pending user decision goes through `scripts/flag_decision.mjs`, an unfinished item into `docs/OPEN_THREADS.md`; a new card on the Monitor & Learning page gets an entry in `server/services/monitorNextSteps.js` (phone page and app both render it).
+5. Rebuild the generated `docs/RESEARCH_INDEX.md` (`node scripts/build_research_index.mjs`).
+Mechanical guard: `scripts/check_research_organized.mjs` (run by the Stop hook `.claude/hooks/check-docs-drift.sh`) fails when a dated prereg/scope/design doc is missing from the index, a card has no next-step entry, a register row lacks a next test or retire rule, or a recent look has no claim. Fix the named item; never silence the check.
+
+<a id="co-024"></a>
+
+- **Unsolicited edge search runs as a quarterly queue (docs/CANDIDATE_QUEUE.md): max 8 candidates, charged to the ledger at registration, Holm 0.10, judged on forward days only; explore results are leads.**
+
+# Candidate queue protocol: how the system "continuously finds edge" without fooling itself (adopted 2026-11-08 from the Opus architecture review; user: 'Can we implement to fix all your bullets first')
+
+STATUS: ADOPTED as the working rule for machine-driven search. User-originated ideas keep the existing path (a pre-registered test of the user's own hypothesis, charged to the look ledger) and are NOT capped by this queue; what is capped is search that nobody proposed.
+
+## Why
+130 looks were charged to the ledger in 11 days on the same explore era (2023-03 to 2025-05-16, about 520 sessions); at p < 0.05 about six apparent leads are expected by chance alone. At this N (one test, 80 percent power) a daily Sharpe of about 2.8 / sqrt(N days) is the smallest effect that can be seen: about 0.18 per day (annualised Sharpe 2.8) at 250 forward days, about 2.0 annualised at 500. A continuous search cannot out-run that, so the realistic yield is 0-1 confirmed edges a year and the goal is reframed: keep the forecasts and gates calibrated, and run a small fixed queue of candidates through FORWARD tests.
+
+## The queue
+1. **Quarter windows** (Jan-Mar, Apr-Jun, Jul-Sep, Oct-Dec). At most **K = 8** unsolicited candidates per quarter. A candidate is a written spec: the feature or bucket, the sign, the target, the exit (frozen, never derived from the population being tested, cv-022), the data window it will be judged on, and its kill rule (co-022).
+2. **Charged at registration**, not at run time: `logLook()` the day the spec is written (hr-023), so a candidate that is registered and never run still counts against the budget.
+3. **Alpha spending**: Holm at a family-wise 0.10 across the quarter's candidates; a candidate's own test is a day-block bootstrap on the dollars of the frozen rule.
+4. **Stages**: REGISTERED -> SHADOW (rows logged forward, no orders) -> one look at 60 forward days, one at 120, one at 250, no peeking between (cv-006; the forward statistic stays hidden until the look, as in `build_payload.py`). Explore-era work can only ever produce a LEAD, which moves a candidate to SHADOW; it never promotes.
+5. **Promotion to a trade** needs: a forward day-block lower bound above 0 at the Holm-corrected level, both halves positive, a beat over its own placebo AND an entry-price-only control (hr-042), and a pass-race check that the rule does not lower P(pass) (see the pass-race simulator on the Monitor page once built).
+6. **Learned outputs touch orders only as a VETO or a force-SHADOW** until a candidate has 250 forward days and one confirming sealed look; never an add or an upsize (the account trades 1 MNQ, cv-064).
+7. **Champion / challenger on a fixed calendar**: refits are monthly and frozen (the range model's artifact pattern); a challenger replaces the champion only at a scheduled look.
+
+## What this deliberately does not do
+It does not stop the user from testing their own ideas (that would conflict with 'test the idea, don't interrogate'); deviation from the Opus recommendation (freeze all new explore-era studies) recorded here (hr-035): the diagnosis (explore is mined out, so explore results are leads only) is taken, the remedy is applied to unsolicited search, not to the user's hypotheses. Every explore-era result stays 'LEAD at most' in its claim text.
+
+## The queue file
+`docs/CANDIDATE_QUEUE.md` (one row per candidate: id, quarter, spec, ledger look id, stage, next look date, kill rule, outcome). Rows are added only with a ledger look. `scripts/check_research_organized.mjs` should flag a queue row without a look id (not yet wired; listed in OPEN_THREADS).
+
+<a id="co-025"></a>
+
+- **Never retire or discard an idea on an estimate or a prior (even an AI reviewer's); keep it open or PARKED with a next step and reopen trigger. Only a pre-registered result closes one. (2026-11-08)**
+
+User directive 2026-11-08, after Claude retired the Argon liquidity-vacuum candidate (Q4-4) UNTESTED on a power-versus-cost estimate and a reviewer's guessed 8 percent prior: "Dont discard another idea please".
+How to apply: a thin funnel, low power, or a pessimistic reviewer prior is a reason to PARK (status PARKED, a stated reopen trigger such as more forward data, a cheaper cost basis or a longer-hold variant, and the cheapest next test), never to retire. Say "not tested" or "underpowered", never "futile" or "disproved". Only a pre-registered result closes an idea, and even then the improvement register needs the salvage and next test (co-022). 'No futile tasks' means do not burn effort on a test that cannot resolve anything, not that the idea is dropped: park it with the numbers.

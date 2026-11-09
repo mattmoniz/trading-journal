@@ -1,0 +1,13 @@
+# Stage 2 end rule: when the tell orders on the sim account stop (adopted by the user 2026-11-04: 'Yes to both'; decision `tell_stage2_retire_rule_at_floor_20261104`)
+
+## The rule (written now, so it is not decided later while looking at results)
+Population: the live Stage 2 tell trades = book V1, bar rule 'split', an order placed (order_state LINKED*), closed, with a model net P&L (`amt_tell_trades.net_dollars`; the model-vs-broker gap is measured separately by the nightly live attestation). Evidence floors: `FORWARD_FLOORS.tellTrades` (150) AND `FORWARD_FLOORS.tellDates` (60) in `server/config/forwardFloors.js` (one copy). BELOW either floor nothing is decided and nothing changes (the rules stay frozen, as the Stage 2 spec says). AT BOTH floors, once: the day-block bootstrap 95 percent CI (4,000 draws, one resample unit per trade date) of the mean net dollars per linked trade.
+- Upper bound BELOW 0: RETIRE the tell orders (set `AMT_TELL_ORDERS.enabled = false` in `server/services/amtTellOrders.js` and restart when the broker is flat), keep logging the tell, keep it as a move-detector context feature (register row 1).
+- Interval INCLUDES 0: REVIEW with the user; the orders continue only on the user's word.
+- Lower bound ABOVE 0: evidence of an edge ON THE SIM ACCOUNT only; anything beyond the sim account is a separate decision.
+## How it is evaluated (no dead end, CLAUDE.md hr-001)
+`scripts/tell_stage2_floor_check.mjs` runs nightly from `scripts/run_daily_calibration.sh` (8:20 PM ET Mon-Fri). Below the floors it prints progress only (the Monitor card's Next line states the rule; it appears after the next server restart). At both floors it computes the interval once per run, prints the verdict and flags a HIGH decision `tell_stage2_end_rule_review_due` with the numbers. It NEVER changes a setting, places or cancels an order, or switches anything off: a person acts on the flagged decision. `--dry [trades dates]` tests the verdict branch with lower floors and flags nothing.
+## State when adopted (2026-11-04)
+31 linked closed trades on 5 dates, mean net -24.13 per trade (a day-block interval on 5 dates is not meaningful; the rule applies only at the floors). The floors need about 55 more trading days (the dates floor binds).
+## Not part of the rule
+The flip override has its own look after 5 live flips (decision `tell_override_first_five_flips_checkpoint`); a pause for a safety or data problem (the existing halts and alarms) is separate and unchanged; the rule does not look at the hold-out replay, which is not evidence about the live account.

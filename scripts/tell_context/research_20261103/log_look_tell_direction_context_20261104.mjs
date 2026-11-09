@@ -1,0 +1,4 @@
+// Logs the ledger look for docs/TELL_AS_DIRECTION_CONTEXT_PREREG_20261104.md BEFORE tell_direction_context.py joins any fire outcome to a tell side (hr-023). 3 counted tests.
+import { logLook } from '../../lib/look_ledger.mjs';
+const id = await logLook({ family: 'tell_direction_context_20261104', dataWindow: 'shadow_fires_2026-07-09_to_10-19_rth', kind: 'EXPLORE', tests: 3, label: 'Shadow fires (ACTIVE+SHADOW, declustered, RTH 10:00-14:30) by agreement with the active tell side (latest tell within 60 minutes): AGREE minus AGAINST, AGREE minus NONE, AGAINST minus NONE; day-block CI, tell-timeline-from-another-day placebo, momentum-side drift control', script: 'scripts/tell_context/research_20261103/tell_direction_context.py', prereg: 'docs/TELL_AS_DIRECTION_CONTEXT_PREREG_20261104.md', ref: 'tell_direction_context_20261104_look1' });
+console.log('look id', id); process.exit(0);

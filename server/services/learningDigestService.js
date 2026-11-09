@@ -95,7 +95,7 @@ async function newPatternDiscoveries() {
       event_type: 'NEW_PATTERN', signal_name: p.pattern_key,
       old_value: null, new_value: `${Math.round(p.win_rate * 100)}% WR`,
       magnitude: p.sample_size,
-      description: `New pattern: ${p.pattern_key} — ${Math.round(p.win_rate * 100)}% WR (N=${p.sample_size}, net $${Math.round(p.net_pnl_dollars)})`,
+      description: `New MINED pattern (NOT validated: no multiplicity correction, no forward test): ${p.pattern_key} — ${Math.round(p.win_rate * 100)}% WR (N=${p.sample_size}, net $${Math.round(p.net_pnl_dollars)})`,
       _discoveryId: p.id,
     });
   }
@@ -105,7 +105,7 @@ async function newPatternDiscoveries() {
       event_type: 'PATTERN_DEGRADED', signal_name: p.pattern_key,
       old_value: 'ACTIVE', new_value: 'DEGRADED',
       magnitude: p.sample_size,
-      description: `Retired: ${p.pattern_key} no longer clears the bar (was ${Math.round(p.win_rate * 100)}% WR, N=${p.sample_size})`,
+      description: `Retired (mined, never validated): ${p.pattern_key} no longer clears the bar (was ${Math.round(p.win_rate * 100)}% WR, N=${p.sample_size})`,
       _discoveryId: p.id,
     });
   }

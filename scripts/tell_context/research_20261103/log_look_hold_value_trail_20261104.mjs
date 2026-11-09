@@ -1,0 +1,4 @@
+// Logs the ledger look for docs/TELL_HOLD_VALUE_TRAIL_PREREG_20261104.md BEFORE tell_hold_value_trail.py reads any outcome (hr-023).
+import { logLook } from '../../lib/look_ledger.mjs';
+const id = await logLook({ family: 'tell_hold_value_trail_20261104', dataWindow: 'explore_1760_entries', kind: 'EXPLORE', tests: 3, label: 'Volatility-scaled trailing stop arms (k = 3, 6, 12 typical 500-contract-bar ranges behind the best extreme) on the 1,760 V1 explore entries: paired capture-of-the-move difference vs V1 with a net-dollar guard; descriptive pullback profile; day-block CI 98.33 percent (3 counted tests)', script: 'scripts/tell_context/research_20261103/tell_hold_value_trail.py', prereg: 'docs/TELL_HOLD_VALUE_TRAIL_PREREG_20261104.md', ref: 'tell_hold_value_trail_20261104_look1' });
+console.log('look id', id); process.exit(0);

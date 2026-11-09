@@ -2,7 +2,7 @@
 Reuses extract_cells_20261020's contract map, layout sniffing, price scaling and DB-volume validation (a date is kept only if the tick total matches price_bars_primary RTH volume within 3 percent).
 Bar rule (ASSUMPTION, Sierra docs say a volume bar is 'equal to or greater than' the setting and recommend Split Data Records, which they do not describe): bars close at EXACTLY 500 contracts, a trade that overflows is SPLIT and the remainder opens the next bar (bid/ask volume allocated pro rata); the first bar starts at 18:00 (new session) and bars run continuously through 17:00; the last bar is partial and flagged. start/end are seconds since the 18:00 open (RTH open = 55800).
 Output scratch/volbars500_20261028/YYYY-MM-DD.bars.tsv: idx start_sec end_sec open high low close vol bid ask ntrades complete ; .vap.tsv: idx price vol bid ask.
-Usage: extract_volbars_20261028.py [--validate DATE] (default: all explore dates)"""
+Usage: extract_volbars_20261028.py [--validate DATE] (default: all explore dates) | --holdout (dates after LAST_EXPLORE; VB_OUT=<dir>) | --only DATE..."""
 import sys, os, json, collections, datetime
 from multiprocessing import Pool
 sys.path.insert(0, os.path.dirname(__file__))
@@ -13,6 +13,7 @@ from barbuilder import SessionBars, session_sec, VB
 OVERFLOW = os.environ.get('VB_OVERFLOW', 'split')       # 'split' (research default: a trade that overflows 500 is split, remainder opens the next bar) or 'whole' (Stage-0 sensitivity: the whole trade stays in the bar, which closes at >= 500)
 OUT = os.environ.get('VB_OUT') or os.path.join(X.ROOT, 'scratch', 'volbars500_full_20261028'); os.makedirs(OUT, exist_ok=True)
 LAST_EXPLORE = '2025-05-16'
+HILO = json.load(open(os.environ['VB_HILO'])) if os.environ.get('VB_HILO') else None; HILO_TOL = float(os.environ.get('VB_HILO_TOL', 2.0))
 
 def _legacy_range(p, d0, d1):
     for dt, o, h, l, c, nt, tv, bv, av in sr._raw_records(p, start_date=d0):
@@ -24,7 +25,7 @@ def _legacy_range(p, d0, d1):
 
 def bars_for_path(p, d):
     dd = datetime.date.fromisoformat(d); lay = X._sniff_layout(p, dd)
-    if lay == 'empty': return None, 0
+    if lay == 'empty': return None, 0, None
     if lay == 'other': raise ValueError('unknown record layout')
     sc = 1.0
     if lay == 'std':
@@ -34,24 +35,27 @@ def bars_for_path(p, d):
             pr.append(t0.price)
             if k >= 300: break
         if pr and statistics.median(pr) < 1000: sc = 100.0
-    prev = dd - datetime.timedelta(days=1); tot = 0
+    prev = dd - datetime.timedelta(days=1); tot = 0; hi = -1e18; lo = 1e18
     sb = SessionBars(OVERFLOW)                      # the bar rule lives in scripts/amt_tell_live/barbuilder.py, shared with the live tell detector
     for t in (sr.read_ticks(p, start_date=prev, end_date=dd) if lay == 'std' else _legacy_range(p, prev, dd)):
         m = t.ts_et.hour * 60 + t.ts_et.minute
         if sc != 1.0: t.price = t.price * sc
         sec = session_sec(t.ts_et, dd)
         if sec is None: continue
-        if t.ts_et.date() == dd and 570 <= m < 960: tot += int(t.size)
+        if t.ts_et.date() == dd and 570 <= m < 960: tot += int(t.size); hi = max(hi, t.price); lo = min(lo, t.price)
         sb.feed(sec, t.price, t.size, t.aggressor)
-    return sb.all_bars(), tot
+    return sb.all_bars(), tot, ((hi, lo) if tot else None)
 
 def bars_for(d):
     best = None
     for code in X.candidate_codes(X.CAL[d]):
         for p in X.scid_paths(code):
-            try: bars, tot = bars_for_path(p, d)
+            try: bars, tot, hl = bars_for_path(p, d)
             except ValueError: return 'nontick'
             if bars is None: continue
+            if HILO is not None:                        # sealed-window price check: tick RTH high and low within HILO_TOL points of the DB's (the DB volume is unusable there, see db_rth_hilo_holdout_20261103.mjs)
+                if d in HILO and hl and abs(hl[0] - HILO[d][0]) <= HILO_TOL and abs(hl[1] - HILO[d][1]) <= HILO_TOL: return bars
+                continue
             if d in X.DBVOL and abs(tot - X.DBVOL[d]) <= 0.03 * X.DBVOL[d]: return bars
             if best is None or abs(tot - X.DBVOL.get(d, 0)) < abs(best[1] - X.DBVOL.get(d, 0)): best = (bars, tot)
     return None
@@ -70,6 +74,8 @@ def work(d):
 
 if __name__ == '__main__':
     dates = [d for d in sorted(X.CAL) if '2023-03-06' <= d <= LAST_EXPLORE]
+    if len(sys.argv) > 1 and sys.argv[1] == '--holdout':        # the sealed window: every date after LAST_EXPLORE (bars only, no outcome labels read; the analysis that spends the sealed look is separate); set VB_OUT to a separate directory
+        dates = [d for d in sorted(X.CAL) if d > LAST_EXPLORE]
     if len(sys.argv) > 2 and sys.argv[1] == '--only':
         dates = sys.argv[2:]
     with Pool(int(os.environ.get('VB_POOL', 8))) as pool:

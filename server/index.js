@@ -84,6 +84,9 @@ import { startConnectionManager } from './services/sierraChart/connectionManager
 import { startMlScoringService } from './services/mlScoringServiceManager.js';
 import { startAmtTellService } from './services/amtTellServiceManager.js';
 import { startAmtTellOrders } from './services/amtTellOrders.js';
+import { startVacuumLiveOrders } from './services/vacuumLiveOrders.js';
+import { startTurnSignalOrders } from './services/turnSignalOrders.js';
+import { startTellContextService } from './services/tellContextServiceManager.js';
 import volatilityRegimeRouter from './routes/volatilityRegime.js';
 import { runTripwireCheck } from './services/overnightTripwire.js';
 import { sendAlert } from './services/alertNotifier.js';
@@ -778,6 +781,13 @@ httpServer.listen(PORT, () => {
   try { startAmtTellService(); } catch (err) { console.error('[amtTellServiceManager] startAmtTellService failed:', err); }
   // Stage 2 (2026-10-28): the tell's V1 book -> real orders on the SIMULATED account via ordinary active_setups rows. Ships DISABLED in code (AMT_TELL_ORDERS.enabled), pauses itself on a reconciliation misfire.
   try { startAmtTellOrders(); } catch (err) { console.error('[amtTellOrders] startAmtTellOrders failed:', err); }
+  // Expansion rule (the user's ORIGINAL idea) -> real orders on the SIMULATED account via ordinary active_setups rows (2026-11-09, server/services/vacuumLiveOrders.js; kill switch VACUUM_EXP_ORDERS.enabled). Sim only: exempt from the roster gate only while DTC_AUTO_REARM_SAFE=true.
+  try { startVacuumLiveOrders(); } catch (err) { console.error('[vacuumLiveOrders] startVacuumLiveOrders failed:', err); }
+  // Turn signal (end of the last move / start of a new one) -> Sim1 orders via ordinary active_setups rows VACUUM_EXP_TURN_* (2026-11-09, server/services/turnSignalOrders.js; kill switch TURN_ORDERS.enabled).
+  try { startTurnSignalOrders(); } catch (err) { console.error('[turnSignalOrders] startTurnSignalOrders failed:', err); }
+  // Tell context reader (2026-11-03, read-only, no orders): appends the value-area / LVN / shape context of every live tell fire to tell_context_fires for the Tell tab and the Monitor & Learning page.
+  // Fire-and-forget; a failure only means fires are logged without context. See tellContextServiceManager.js and docs/TELL_CONTEXT_OVERLAY_SCOPE_20261103.md.
+  try { startTellContextService(); } catch (err) { console.error('[tellContextServiceManager] startTellContextService failed:', err); }
 
   // Performance/health telemetry (2026-10-19): deploy marker now, a perf_snapshots row every 5 min, regression detection against its own history.
   startPerfTelemetry({ requestProfile: () => getRequestProfile(500) }).catch((err) => console.error('[perf] startPerfTelemetry failed:', err));

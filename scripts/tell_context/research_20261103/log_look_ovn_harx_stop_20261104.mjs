@@ -1,0 +1,4 @@
+// Logs the ledger look for docs/OVN_HARX_STOP_PREREG_20261104.md BEFORE ovn_harx_stop.py computes any scaled-stop outcome (hr-023). 3 counted tests.
+import { logLook } from '../../lib/look_ledger.mjs';
+const id = await logLook({ family: 'ovn_harx_stop_20261104', dataWindow: 'ovn_all_nights_863_not_sealed', kind: 'EXPLORE', tests: 3, label: 'Overnight flow-sign trade: stop scaled by the HAR-X width forecast (causal at 00:00) vs the fixed 400-point stop and vs the baseline-width and flat-ADR controls; paired dollars per night, week-block CI, circular-shift placebo; the 2026 outcomes were already read for the base trade (not sealed)', script: 'scripts/tell_context/research_20261103/ovn_harx_stop.py', prereg: 'docs/OVN_HARX_STOP_PREREG_20261104.md', ref: 'ovn_harx_stop_20261104_look1' });
+console.log('look id', id); process.exit(0);

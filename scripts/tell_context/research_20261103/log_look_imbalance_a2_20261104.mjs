@@ -1,0 +1,4 @@
+// Logs the ledger look for docs/IMBALANCE_BREAKOUT_PREREG_20261104.md section 11 (A2, per-bar footprint) BEFORE imbalance_breakout_a2.py computes any statistic (hr-023). 3 counted tests (family total 6).
+import { logLook } from '../../lib/look_ledger.mjs';
+const id = await logLook({ family: 'imbalance_breakout_20261104', dataWindow: 'explore_522_sessions', kind: 'EXPLORE', tests: 3, label: 'AMENDMENT A2 (after DeepSeek round X): PER-BAR diagonal imbalances and stacks (the aggregation of cells across 20 bars destroyed adjacency); T4/T5 rho(net aligned per-bar stacks 3:1 / 4:1, y), T6 rank contrast of fast-tape events with vs without an aligned stack; family total 6, Bonferroni 6', script: 'scripts/tell_context/research_20261103/imbalance_breakout_a2.py', prereg: 'docs/IMBALANCE_BREAKOUT_PREREG_20261104.md', ref: 'imbalance_breakout_20261104_look2' });
+console.log('look id', id); process.exit(0);

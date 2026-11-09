@@ -1,0 +1,4 @@
+// Logs the ledger look for docs/STRUCTURE_MODEL_STEP_A_PREREG_20261104.md BEFORE structure_model_stepA.py computes any feature-outcome relation (hr-023). 2 counted tests.
+import { logLook } from '../../lib/look_ledger.mjs';
+const id = await logLook({ family: 'structure_model_stepA_20261104', dataWindow: 'explore_498_sessions_4_decision_times', kind: 'EXPLORE', tests: 2, label: 'Next-hour range at 10:30/11:30/13:00/14:30: HAR-X + clock baseline vs + price-movement state and now-vs-lately (T1) vs + auction-structure principles (T2); ridge walk-forward, week-block CI, circular-shift placebo; gradient-boosted challenger uncounted', script: 'scripts/tell_context/research_20261103/structure_model_stepA.py', prereg: 'docs/STRUCTURE_MODEL_STEP_A_PREREG_20261104.md', ref: 'structure_model_stepA_20261104_look1' });
+console.log('look id', id); process.exit(0);

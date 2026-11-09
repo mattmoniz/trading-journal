@@ -1,0 +1,4 @@
+// Logs the ledger look for docs/OVERNIGHT_INVENTORY_PREREG_20261104.md section 8 (A1) BEFORE overnight_inventory_checks.py runs its regression (hr-023). 1 counted test (T3).
+import { logLook } from '../../lib/look_ledger.mjs';
+const id = await logLook({ family: 'overnight_inventory_20261104', dataWindow: 'explore_522_sessions', kind: 'EXPLORE', tests: 1, label: 'AMENDMENT A1 (after DeepSeek round V): continuous-stress regression of the signed first-hour move on D, s and s x D with a week-block CI and a circular-shift placebo; T2 recorded UNTESTABLE; committed diagnostics', script: 'scripts/tell_context/research_20261103/overnight_inventory_checks.py', prereg: 'docs/OVERNIGHT_INVENTORY_PREREG_20261104.md', ref: 'overnight_inventory_20261104_look2' });
+console.log('look id', id); process.exit(0);
