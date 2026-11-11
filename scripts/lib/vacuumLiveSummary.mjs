@@ -21,6 +21,22 @@ async function sessionChart() {
     FROM vacuum_live_events WHERE trade_date = $1::date ORDER BY fired_at, id`, [d])).rows;
   return { date: d, bars: bars.map((b) => [b.m, b.c]), fires, lastBarMin: bars.length ? bars[bars.length - 1].m : null };
 }
+
+// ROC3 forward arm (register row 36, prereg docs/GLOBEX_ROC3_VACUUM_PREREG_20261110.md; table vacuum_roc3_events, written by shadow.py evaluate_roc3). Globex only, log only, NO orders. Forward = late_min < 3 (rows replayed after a restart are backfill and never counted).
+// Judged next to the live GBX ROC10 track after >= 30 forward TAKEN events. Display only; absent / failing => the card says so (cv-112).
+async function roc3Summary() {
+  const fw = (await query(`SELECT count(*)::int n, count(DISTINCT trade_date)::int days, count(*) FILTER (WHERE taken)::int taken, count(*) FILTER (WHERE taken AND outcome_at IS NOT NULL)::int taken_done,
+      avg(net_nostop) FILTER (WHERE taken)::float net_nostop, avg(net_stop25) FILTER (WHERE taken)::float net_stop25, sum(net_nostop) FILTER (WHERE taken)::float sum_nostop
+    FROM vacuum_roc3_events WHERE COALESCE(late_min, 0) < 3`)).rows[0];
+  const backfill = (await query(`SELECT count(*)::int n FROM vacuum_roc3_events WHERE COALESCE(late_min, 0) >= 3`)).rows[0].n;
+  const recent = (await query(`SELECT trade_date::text d, to_char(fired_at,'HH24:MI') t, direction, signal_close::float sc, zroc::float z, taken, late_min::float late, net_nostop::float nn, net_stop25::float ns, outcome_at IS NOT NULL AS done
+      FROM vacuum_roc3_events ORDER BY fired_at DESC, id DESC LIMIT 8`)).rows;
+  const roc10 = (await query(`SELECT count(*) FILTER (WHERE taken)::int taken, avg(net_nostop) FILTER (WHERE taken)::float net_nostop FROM vacuum_live_events WHERE track = 'GBX' AND trade_date >= $1`, [FORWARD_FROM])).rows[0];
+  return { forward: fw, backfill, recent, roc10Gbx: roc10, floorTaken: 30,
+    rule: 'ROC3 ARM (Globex only, log only, no orders): the same expansion rule as the live Globex track with ONE change, the rate of change is over 3 bars instead of 10 (the Sierra ROC 10 to 3 idea). Explore 2023-25 result: NOT SHOWN (continuation -1.59 pt, reversion -2.41, ROC3 minus ROC10 +0.43, nothing survives Holm; the 2.0 pt cost is the whole gap).',
+    next: { review: 'Judge after at least 30 TAKEN forward events (late under 3 min) next to the live Globex ROC10 track: net per trade above the 2.0 pt cost already included, day-blocked interval above zero, no day above 35 percent of the profit.',
+      ifConfirmed: 'If it clears, register a Globex-specific order wiring design and ask for the go.', ifFailed: 'If it does not, this is the second registered null for the question; co-025 then allows retiring it (only the user revives). Until then park, never retire on this log.' } };
+}
 export async function vacuumLiveSummary() {
   try {
     const h = await health();
@@ -33,7 +49,7 @@ export async function vacuumLiveSummary() {
     const bar6 = (await query(`SELECT track, COALESCE(b6_src, '-') src, b6_status st, count(*)::int n, count(DISTINCT trade_date)::int days, avg(b6_net_a)::float net_a, avg(b6_net_b - b6_net_a)::float b_minus_a, avg(b6_net_c - b6_net_a)::float c_minus_a
       FROM vacuum_live_events WHERE taken AND b6_status IS NOT NULL AND trade_date >= $1 GROUP BY 1, 2, 3 ORDER BY 1, 2, 3`, [FORWARD_FROM])).rows;   // forward bar-6 flag (register row 54), display only
     return { state: 'OK', generatedAt: new Date().toISOString(), forwardFrom: FORWARD_FROM, bar6, daemon: h ? { state: h.state, session: h.session, bars: h.bars, events: h.events, errors: h.errors, loopAgeSec: h.loopAt ? Math.round(Date.now() / 1000 - h.loopAt) : null, lastTick: h.lastTick } : null,
-      today, sessionCounts: sess, forward: fw, recent, chart: await sessionChart().catch((e) => ({ error: e.message })), orders: await ordersSummary().catch((e) => ({ error: e.message })),
+      today, sessionCounts: sess, forward: fw, recent, chart: await sessionChart().catch((e) => ({ error: e.message })), orders: await ordersSummary().catch((e) => ({ error: e.message })), roc3: await roc3Summary().catch((e) => ({ error: e.message })),
       rule: 'LIQUIDITY PULL (formerly the vacuum / expansion rule): ROC10 expansion onset (|Z_ROC10| > 2, SMA50 +-2 SD, direction = the sign of ROC10). BOTH Globex and RTH fire: enter at the next bar open, hold 30 bars (hard flat 09:29:50 Globex, 15:55 RTH), one position at a time per track (taken = yes). In the research Globex expansions continued in 2026 (not significant) and RTH expansions REVERTED, so for RTH the fade-equivalent (trade against the expansion) is shown next to the with-expansion result.',
       next: { review: 'Forward sample only. Judge the Globex candidate after at least 30 TAKEN events: net per trade above 2.0 pt after the 2.0 pt cost, positive at a 3.0 pt cost, day-blocked interval above zero, no day above 35 percent of the profit (prereg A5); the held-back sessions are reserved for one pre-registered look.',
         ifConfirmed: 'If the forward sample clears that bar, write the order wiring design (Sim1) and ask for the go.', ifFailed: 'If it does not, the idea stays parked, never retired on this log alone (CLAUDE.md co-025).' },

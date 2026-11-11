@@ -45,6 +45,22 @@ export default function VacuumLiveSection({ board }) {
           <span style={{ color: '#94a3b8', fontFamily: 'monospace' }}>{String(r.d).slice(5)} {r.t}</span><span>{r.track === 'GBX' ? 'Globex' : 'RTH'}</span><span>{r.direction === 1 ? '▲ long' : '▼ short'}</span><span style={{ fontFamily: 'monospace' }}>@ {Number(r.sc).toFixed(2)}</span>
           <span style={{ color: '#94a3b8' }}>Z {Number(r.z).toFixed(2)}{r.late > 3 ? ` · late ${Math.round(r.late)} min` : ''}</span><span>{r.taken ? 'taken' : 'skipped (position open)'}</span><span style={{ fontFamily: 'monospace' }}>{r.nn == null ? 'open' : `30 bars ${pt(r.f30)} pt`}</span>
         </div>))}
+      {board.roc3 && !board.roc3.error && board.roc3.forward ? (() => {
+        const r3 = board.roc3, f = r3.forward;
+        return <div style={{ marginTop: 10, paddingTop: 8, borderTop: '1px solid var(--border-color, #334155)' }}>
+          <div style={{ ...small, margin: '0 0 2px' }}>ROC3 arm (Globex only, log only, no orders; register row 36)</div>
+          <div style={{ ...small, marginBottom: 6 }}>{r3.rule}</div>
+          <Row k="Forward events">{f.n} on {f.days} {f.days === 1 ? 'day' : 'days'} · taken {f.taken} (results {f.taken_done}) of the {r3.floorTaken} needed{r3.backfill ? ` · ${r3.backfill} replayed after a restart, not counted` : ''}</Row>
+          <Row k="Mean net per taken trade">no stop <b>{pt(f.net_nostop)}</b> pt · 2.5x stop {pt(f.net_stop25)} pt <span style={{ color: '#94a3b8' }}>{f.taken < 20 ? '(under 20 trades: not decisive)' : ''}</span></Row>
+          <Row k="Live Globex ROC10, same period">{r3.roc10Gbx ? `${r3.roc10Gbx.taken} taken · no stop ${pt(r3.roc10Gbx.net_nostop)} pt` : 'n/a'}</Row>
+          {(r3.recent || []).map((r, i) => (
+            <div key={i} style={{ fontSize: 13, display: 'flex', gap: 10, flexWrap: 'wrap', padding: '2px 0' }}>
+              <span style={{ color: '#94a3b8', fontFamily: 'monospace' }}>{String(r.d).slice(5)} {r.t}</span><span>{r.direction === 1 ? '▲ long' : '▼ short'}</span><span style={{ fontFamily: 'monospace' }}>@ {Number(r.sc).toFixed(2)}</span>
+              <span style={{ color: '#94a3b8' }}>Z {Number(r.z).toFixed(2)}{r.late >= 3 ? ` · replayed, late ${Math.round(r.late)} min` : ''}</span><span>{r.taken ? 'taken' : 'skipped (position open)'}</span><span style={{ fontFamily: 'monospace' }}>{r.done ? `30 bars ${pt(r.nn)} pt` : 'open'}</span>
+            </div>))}
+          {r3.next && <NextSteps n={{ review: r3.next.review, ifConfirmed: r3.next.ifConfirmed, ifFailed: r3.next.ifFailed }} label={null} />}
+        </div>;
+      })() : (board.roc3 && board.roc3.error ? <div style={{ ...small, color: '#f59e0b', marginTop: 8 }}>ROC3 arm unavailable: {board.roc3.error}</div> : null)}
       {board.next && <NextSteps n={{ review: board.next.review, ifConfirmed: board.next.ifConfirmed, ifFailed: board.next.ifFailed }} label={null} />}
       <div style={{ ...small, marginTop: 6 }}>{(board.notes || []).join(' ')}</div>
     </div>
