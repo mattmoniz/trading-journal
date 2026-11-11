@@ -1,0 +1,6 @@
+import { logLook } from './lib/look_ledger.mjs';
+import { recordClaim } from './record_claim.mjs';
+console.log('look', await logLook({ family: 'level_confluence_tags_20261109', dataWindow: 'forward tagging from first logged fire (tell 2026-10-28, vacuum 2026-11-08, turn 2026-11-08); no outcome read', kind: 'FORWARD', tests: 0, label: 'Row 33 tag logger built: level-confluence tags on every tell, vacuum and turn-signal fire (descriptive counts only, no outcome)', script: 'scripts/level_confluence_tags.mjs', prereg: 'docs/LEVEL_CONFLUENCE_TAGS_PREREG_20261109.md', claimSlug: 'level_confluence_tags_20261109', outcome: 'COUNTS_ONLY', ref: 'row33_tags_register_20261109' }));
+console.log(await recordClaim({ slug: 'level_confluence_tags_20261109', status: 'PROVISIONAL', rigorStatus: 'not_checked', sourceFile: 'docs/LEVEL_CONFLUENCE_TAGS_PREREG_20261109.md', sourceDate: '2026-11-09', sampleSize: 117,
+  claimText: 'Row 33 level-confluence tagging BUILT and logging (no outcome read): 117 fires tagged (tell 61 / 9 days, vacuum 47 / 2 days, turn 9 / 1 day). Counted contrasts (3, Holm 0.10, forward days only, binary tags with cutoffs derived from the logged distribution) wait for 20 independent tagged fires per setup.', unblockCondition: '20 independent tagged fires per setup' }));
+process.exit(0);

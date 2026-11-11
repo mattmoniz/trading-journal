@@ -1,0 +1,6 @@
+import { logLook } from './lib/look_ledger.mjs';
+import { recordClaim } from './record_claim.mjs';
+console.log('look', await logLook({ family: 'capitulation_exit_shadow_20261109', dataWindow: 'forward from 2026-11-09 14:30 ET (FAILED_SWEEP_REVERSAL rows)', kind: 'FORWARD', tests: 1, label: 'Row 30 A7: forward test C3 of the capitulation exit on FAILED_SWEEP_REVERSAL (registration, no forward row judged)', prereg: 'docs/CAPITULATION_EXIT_SWEEP_FORWARD_PREREG_20261109.md', claimSlug: 'capitulation_exit_sweep_forward_20261109', outcome: 'REGISTERED', ref: 'cap_c3_register_20261109' }));
+console.log(await recordClaim({ slug: 'capitulation_exit_sweep_forward_20261109', status: 'PROVISIONAL', rigorStatus: 'not_checked', sourceFile: 'docs/CAPITULATION_EXIT_SWEEP_FORWARD_PREREG_20261109.md', sourceDate: '2026-11-09', sampleSize: 43,
+  claimText: 'REGISTERED, forward. Hint from the all-setups replay: capitulation exit on FAILED_SWEEP_REVERSAL +$52.3/event over 43 events (p 0.013, post-hoc split). C3 = forward-only counted test on that setup, floor 20 events / 10 days. The sweep setups have been nearly silent since 10-27 (2 rows in 10 sessions), cause not found; duration unknown.', unblockCondition: 'floor 20 signalled events on 10 days' }));
+process.exit(0);

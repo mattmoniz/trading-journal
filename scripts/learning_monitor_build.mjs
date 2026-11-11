@@ -6,6 +6,8 @@
 //   node scripts/learning_monitor_build.mjs --print    print a summary, write nothing
 import { argonShadowSummary } from './lib/argonShadowSummary.mjs';
 import { vacuumLiveSummary } from './lib/vacuumLiveSummary.mjs';
+import { capitulationShadowSummary } from './lib/capitulationShadowSummary.mjs';
+import { levelConfluenceSummary } from './lib/levelConfluenceSummary.mjs';
 import fs from 'fs';
 import { query } from '../server/db.js';
 import { buildRosterLookup } from '../server/services/rosterScoreboard.js';
@@ -116,6 +118,8 @@ async function main() {
     notes: ['All P&L is MODEL P&L (resolved from bars) except brokerEvidence, which is broker truth on the DTC-Live-Simulator (fills are generous there).', 'Haircut series subtract the standing slippage allowance (1 tick per fill = 1 dollar per round trip; commission is already inside model P&L); the 15 s and 90 s delay lines are the REALISTIC and STRESS delays from docs/FILL_MODEL_SCOPE_20261103.md.', 'The pass-race ledger is daily (end-of-day) and uses the slippage-adjusted P&L of the rows exactly as recorded; the TAKE_ALL arm is multi-position and is NOT used for it.'] };
   out.argonShadow = await argonShadowSummary();
   out.vacuumLive = await vacuumLiveSummary();
+  out.capitulationShadow = await capitulationShadowSummary();
+  out.levelConfluence = await levelConfluenceSummary();
   try { out.structureModel = JSON.parse(fs.readFileSync(new URL('../public/structure_model.json', import.meta.url).pathname, 'utf8')); } catch (e) { out.structureModel = { state: e.code === 'ENOENT' ? 'NO_DATA' : 'ERROR', error: e.message }; }     // the shadow next-hour range model's history (scripts/structure_model/build_payload.py): a separate file so this build never recomputes it
   if (print) { console.log(JSON.stringify({ days: allDays.length, arms: Object.fromEntries(Object.entries(arms).map(([k, v]) => [k, v.length])), firedVsSkipped, race: Object.fromEntries(Object.entries(race).map(([k, v]) => [k, { attempts: v.attempts.length, open: v.open }])), delay: out.delay.slice(-5), brokerEvidence: bk }, null, 1)); return; }
   fs.mkdirSync(new URL('../public/', import.meta.url), { recursive: true }); fs.writeFileSync(OUT.pathname + '.tmp', JSON.stringify(out)); fs.renameSync(OUT.pathname + '.tmp', OUT.pathname);

@@ -1,0 +1,3 @@
+import { logLook } from './lib/look_ledger.mjs';
+console.log('look', await logLook({ family: 'capitulation_defended_reengage_20261110', dataWindow: 'explore_2023-04..2025-05-16 500V full sessions (rows 42 and 43 events)', kind: 'EXPLORE', tests: 0, label: 'DESCRIPTIVE post-hoc (amendment A2): exit at the climax and re-enter (RESUME / FAIL) versus holding, benefit = price improvement of the re-entry minus one extra round trip; never counted', script: 'scripts/vacuum_sim/capitulation_exit_reenter.py', prereg: 'docs/CAPITULATION_DEFENDED_REENGAGE_PREREG_20261110.md', claimSlug: 'capitulation_defended_reengage_20261110', outcome: 'DESCRIPTIVE', ref: 'capitulation_exit_reenter_20261110_descriptive' }));
+process.exit(0);

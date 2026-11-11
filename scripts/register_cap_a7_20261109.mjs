@@ -1,0 +1,6 @@
+import { logLook } from './lib/look_ledger.mjs';
+import { recordClaim } from './record_claim.mjs';
+console.log('look', await logLook({ family: 'capitulation_exit_shadow_20261109', dataWindow: 'explore_2023-04-10..2025-05-16 flush backtest events (sealed and 2025-05-17.. untouched)', kind: 'EXPLORE', tests: 2, label: 'Row 30 A8: capitulation exit on explore FLUSH backtest events, F_RTH and F_GBX counted (Holm 0.10); registered before any outcome', script: 'scripts/vacuum_sim/capitulation_replay_a7.py', prereg: 'docs/CAPITULATION_EXIT_FLUSH_PREREG_20261109.md', claimSlug: 'capitulation_exit_flush_20261109', outcome: 'RUN_PENDING', ref: 'cap_a7_register_20261109' }));
+console.log(await recordClaim({ slug: 'capitulation_exit_flush_20261109', status: 'PROVISIONAL', rigorStatus: 'not_checked', sourceFile: 'docs/CAPITULATION_EXIT_FLUSH_PREREG_20261109.md', sourceDate: '2026-11-09', sampleSize: 649,
+  claimText: 'REGISTERED, RUN PENDING. Capitulation exit (next 500V open after the first same-direction extended vacuum thrust) vs the flush setups own simulated exit on the 649 explore flush backtest events (RTH 345, Globex 304), F_RTH and F_GBX counted, Holm 0.10, risk-set placebo. The real 2026 flush rows gave -$47.7 per signalled event (23 events, CI includes zero).' }));
+process.exit(0);

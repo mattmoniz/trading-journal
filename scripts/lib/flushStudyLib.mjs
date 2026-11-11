@@ -40,13 +40,14 @@ export function realistic(setup, targetPts, mirror) {   // ARM C/D: entry at the
   const stopDist = Math.abs(entry - setup.stopPrice);
   const stop = mirror ? (long ? entry - stopDist : entry + stopDist) : setup.stopPrice, tgt = long ? entry + targetPts : entry - targetPts; let exit = sessBars[sessBars.length - 1].close;
   const beyond = long ? entry <= stop : entry >= stop;   // already through the structural stop at the open: filled at the open
-  if (beyond && !mirror) exit = entry;
+  let exitIdx = sessBars.length - 1;                      // index of the bar the position closed in (added 2026-11-09 night for the capitulation replay; extra return fields only)
+  if (beyond && !mirror) { exit = entry; exitIdx = entryIdx + 1; }
   else for (let i = entryIdx + 1; i < sessBars.length; i++) {
     const b = sessBars[i], stopHit = long ? b.low <= stop : b.high >= stop, hit = long ? b.high >= tgt : b.low <= tgt;
-    if (stopHit) { exit = long ? Math.min(stop, b.open) : Math.max(stop, b.open); break; }
-    if (hit) { exit = long ? Math.max(tgt, b.open) : Math.min(tgt, b.open); break; }
+    if (stopHit) { exit = long ? Math.min(stop, b.open) : Math.max(stop, b.open); exitIdx = i; break; }
+    if (hit) { exit = long ? Math.max(tgt, b.open) : Math.min(tgt, b.open); exitIdx = i; break; }
   }
-  const pnl = (long ? exit - entry : entry - exit) * PPT - COMM; return { pnl, win: pnl > 0 };
+  const pnl = (long ? exit - entry : entry - exit) * PPT - COMM; return { pnl, win: pnl > 0, entry, long, exitIdx };
 }
 
 

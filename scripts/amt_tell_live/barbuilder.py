@@ -27,9 +27,9 @@ def _new_bar(sec):
 class SessionBars:
     """Feed one session's logical trades in time order with feed(); completed bars accumulate in .done, the bar still filling is .cur."""
 
-    def __init__(self, overflow='split'):
+    def __init__(self, overflow='split', vb=VB):
         if overflow not in ('split', 'whole'): raise ValueError(overflow)
-        self.overflow = overflow; self.done = []; self.cur = None
+        self.overflow = overflow; self.vb = int(vb); self.done = []; self.cur = None      # vb defaults to the module's 500 (every existing caller unchanged); the Globex bar-size research passes 100 / 125 (row 39)
 
     def feed(self, sec, price, size, aggressor):
         """One logical trade. Returns the number of bars this trade completed."""
@@ -37,7 +37,7 @@ class SessionBars:
         while size > 0:
             if self.cur is None: self.cur = _new_bar(sec)
             cur = self.cur
-            take = size if self.overflow == 'whole' else min(size, VB - cur['v'])
+            take = size if self.overflow == 'whole' else min(size, self.vb - cur['v'])
             if cur['o'] is None: cur['o'] = px
             cur['h'] = max(cur['h'], px); cur['l'] = min(cur['l'], px); cur['c'] = px; cur['end'] = sec; cur['v'] += take
             b = a = 0.0
@@ -46,7 +46,7 @@ class SessionBars:
             cur['bid'] += b; cur['ask'] += a; cur['n'] += 1 if first else 0; first = False
             c = cur['vap'][px]; c[0] += take; c[1] += b; c[2] += a
             size -= take
-            if cur['v'] >= VB: self.done.append(cur); self.cur = None; completed += 1
+            if cur['v'] >= self.vb: self.done.append(cur); self.cur = None; completed += 1
         return completed
 
     def all_bars(self):

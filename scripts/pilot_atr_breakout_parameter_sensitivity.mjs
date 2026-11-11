@@ -2,6 +2,7 @@ import { query } from '../server/db.js';
 import { LIVE_INSTRUMENT } from '../server/config/instruments.js';
 import { computeRigor } from '../server/services/rigorDiagnostics.js';
 import { recordClaim } from './record_claim.mjs';
+import { loadNqStitches, crossesStitch } from './lib/nqRollStitch.mjs';   // 2026-11-10: bars on a contract stitch / bad-bar date open no trade, discard an open one, and carry no stitch jump into the true range
 import fs from 'fs';
 
 const BAR_MIN = 60;
@@ -40,9 +41,16 @@ async function main() {
     }
   }
   const mBars = Array.from(buckets.values()).sort((a, b) => a.ts.localeCompare(b.ts));
+  // 2026-11-10 stitch guard (scripts/lib/nqRollStitch.mjs): the first bar after a contract stitch and every bad-bar date are unsafe
+  const SD = loadNqStitches();
+  const badDates = new Set(SD.bad_dates.map(x => x.date));
+  const stitchBar = mBars.map((b, i) => i > 0 && crossesStitch(SD, mBars[i - 1].ts, b.ts));
+  const unsafeBar = mBars.map((b, i) => stitchBar[i] || badDates.has(b.ts.slice(0, 10)));
+  let skippedPositions = 0;
 
   for (let i = 0; i < mBars.length; i++) {
     if (i === 0) mBars[i].tr = mBars[i].high - mBars[i].low;
+    else if (stitchBar[i]) mBars[i].tr = mBars[i].high - mBars[i].low;
     else mBars[i].tr = Math.max(mBars[i].high - mBars[i].low, Math.abs(mBars[i].high - mBars[i-1].close), Math.abs(mBars[i].low - mBars[i-1].close));
     mBars[i].isFridayExit = mBars[i].dow === 5 && (!mBars[i+1] || mBars[i+1].dow !== 5);
   }
@@ -67,6 +75,7 @@ async function main() {
     for (let i = atrSlow; i < mBars.length - 1; i++) {
       const prevBar = mBars[i - 1];
       const bar = mBars[i];
+      if (unsafeBar[i]) { if (position) { position = null; skippedPositions++; } continue; }
 
       if (position) {
         let stopHit = false, exitPrice = null;
@@ -184,6 +193,7 @@ async function main() {
     rigorStatus: pooledRigor.clean ? 'clean' : 'failed'
   });
 
+  console.log(`Stitch guard: ${skippedPositions} positions discarded at a contract stitch / bad-bar date (summed over all runs); ${stitchBar.filter(Boolean).length} stitch bars, ${unsafeBar.filter(Boolean).length} unsafe bars of ${mBars.length}`);
   process.exit(0);
 }
 main().catch(err => { console.error(err); process.exit(1); });

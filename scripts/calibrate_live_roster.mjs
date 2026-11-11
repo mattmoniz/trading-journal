@@ -17,6 +17,13 @@
 // DOW / CAPITAL_EXPOSURE_OVERRIDE still apply on top (live = on roster AND not suppressed by any of those).
 import { query } from '../server/db.js';
 import { collapseClusterSiblings, dayBlockedBootstrapCI } from '../server/services/rigorDiagnostics.js';
+import { getBetClass } from '../server/config/setupTypes.js';
+
+// USER DECISION 2026-11-09 ("continue to monitor these levels to trade off of them for extra confluence but lets not fire off them"): the LEVEL-BASED families (price approaching a level: bet classes VALUE_FADE and GLOBEX_LEVEL) stay detected and logged as
+// SHADOW rows (monitored, and used as confluence inputs for the market setups) but NEVER fire orders: they are excluded from the live roster here, in the one place the roster is built (not a hardcoded list in acd.js, cv-081). The exempt market setups
+// (AMT tell, vacuum, turn signal) are unaffected. Family 9 (VWAP magnet) sits in GLOBEX_LEVEL and is caught too (the user has not classified it yet). Reversible: remove a class from this set.
+export const MONITOR_ONLY_BET_CLASSES = new Set(['VALUE_FADE', 'GLOBEX_LEVEL']);
+export function excludeMonitorOnly(roles, betClassOf = getBetClass) { const kept = new Map(), dropped = []; for (const [t, r] of roles) { if (MONITOR_ONLY_BET_CLASSES.has(betClassOf(t))) dropped.push(t); else kept.set(t, r); } return { kept, dropped }; }
 
 // 2026-10-25 (user: "I just want to get things promoted ... not sure I care if it's 10 or 20 or 30"): the hardcoded 20-events/10-days floors were replaced
 // by the interval test doing the work. A what-if (scratch/roster_floor_whatif_20261025.mjs) showed the floors were NOT the binding constraint (20/10 -> 1 type passing,
@@ -108,12 +115,12 @@ async function main() {
     for (const [t, e] of evals) if (!e.thin) e.holmPass = keep.has(t);
     holmInfo = { alpha: ROSTER_CORRECTION.alpha, family_size: testable.length, holm_passing: keep.size };
   }
-  const roles = buildRoster(evals, prevPassing, known);
+  const allRoles = buildRoster(evals, prevPassing, known); const { kept: roles, dropped: monitorOnly } = excludeMonitorOnly(allRoles);      // level-based types are monitor-only (user 2026-11-09)
 
   const status = new Map((await query(`SELECT DISTINCT ON (signal_name) signal_name n, recommendation r FROM performance_audit WHERE signal_type='SETUP_STATUS' ORDER BY signal_name, run_date DESC, id DESC`)).rows.map((r) => [r.n, r.r]));
   const roster = [...roles].map(([type, r]) => ({ type, ...r, setup_status: status.get(type) || null, stats: evals.get(type) || null }));
   const held = [...evals].filter(([t, e]) => e.pass && !roles.has(t)).map(([t, e]) => ({ type: t, reason: e.holmPass === false ? 'failed_multiplicity_correction' : 'failed_leave_best_day_out', lobdLo: e.lobdLo, p: e.p ?? null }));
-  const notes = { roster, held_back_promotions: held, multiplicity_correction: holmInfo ? { ...holmInfo, rule: 'Holm step-down on one-sided day-block bootstrap p, applied ON TOP of the uncorrected rule', addedDate: ROSTER_CORRECTION.addedDate } : { enabled: false }, rule: { MIN_EVENTS, MIN_DAYS, ci: 'day-blocked bootstrap 95% lower bound > 0', halves: 'both chronological halves positive', hysteresis: 'new promotions must pass leave-best-day-out; demotion instant', siblings: INCLUDE_OPPOSITE_SIBLINGS ? 'opposite-direction sibling of each passing type' : 'off (passing types only)' },
+  const notes = { roster, monitor_only_level_based: monitorOnly, held_back_promotions: held, multiplicity_correction: holmInfo ? { ...holmInfo, rule: 'Holm step-down on one-sided day-block bootstrap p, applied ON TOP of the uncorrected rule', addedDate: ROSTER_CORRECTION.addedDate } : { enabled: false }, rule: { MIN_EVENTS, MIN_DAYS, ci: 'day-blocked bootstrap 95% lower bound > 0', halves: 'both chronological halves positive', hysteresis: 'new promotions must pass leave-best-day-out; demotion instant', siblings: INCLUDE_OPPOSITE_SIBLINGS ? 'opposite-direction sibling of each passing type' : 'off (passing types only)' },
     types_evaluated: evals.size, testable: [...evals.values()].filter((e) => !e.thin).length, previous_passing: prevPassing ? [...prevPassing] : null, seeded_without_hysteresis: !prevPassing, source: 'scripts/calibrate_live_roster.mjs' };
   const WINDOW_DAYS = 0; // unique key (run_date, window_days, signal_type, signal_name): one row per day, rerun overwrites
   await query(`INSERT INTO performance_audit (run_date, window_days, signal_type, signal_name, sample_size, notes) VALUES (CURRENT_DATE, $1, 'LIVE_ROSTER', 'CURRENT', $2, $3)

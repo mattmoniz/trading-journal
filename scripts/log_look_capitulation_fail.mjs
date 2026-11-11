@@ -1,0 +1,6 @@
+import { logLook } from './lib/look_ledger.mjs';
+import { recordClaim } from './record_claim.mjs';
+const prereg = 'docs/CAPITULATION_FAIL_FORK_PREREG_20261110.md';
+console.log('claim', (await recordClaim({ slug: 'capitulation_fail_null_mc_20261110', claimText: 'NULL MONTE CARLO for row 43: 1000 iterations (per-day sign flips of the entry outcomes, event-level permutation of the at-level label for the share contrast), 10 tests, Holm 0.10: false-pass 0.100, exactly at the required <= 0.10 (borderline pass; the registered rule was met, no fallback).', sourceFile: prereg, sourceDate: '2026-11-10', rigorStatus: 'not_checked', status: 'CONFIRMED', unblockCondition: null, extra: { false_pass_rate: 0.100, alpha: 0.10, borderline: true } })).slug);
+console.log('look', await logLook({ family: 'capitulation_fail_fork_20261110', dataWindow: 'explore_2023-04..2025-05-16 500V full sessions + level_prices', kind: 'EXPLORE', tests: 10, label: 'RUN row 43: capitulation FAIL (user definition) vs BOUNCED fork entries at a major level, RTH and Globex, 10 counted tests, Holm 0.10', script: 'scripts/vacuum_sim/capitulation_fail.py', prereg, claimSlug: 'capitulation_fail_fork_20261110', outcome: 'RUN_STARTED', ref: 'capitulation_fail_fork_20261110_run1' }));
+process.exit(0);

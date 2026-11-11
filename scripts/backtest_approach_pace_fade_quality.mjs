@@ -17,6 +17,7 @@
 import { query } from '../server/db.js';
 import { computeRigor } from '../server/services/rigorDiagnostics.js';
 import { recordClaim } from './record_claim.mjs';
+import { loadNqStitches, crossesStitch, touchesBadDate } from './lib/nqRollStitch.mjs';   // 2026-11-10: skip touches whose approach window spans a contract stitch or a bad-bar date
 
 const APPROACH_BARS = 15;
 const WARMUP_TRADES = 150;
@@ -43,26 +44,30 @@ async function main() {
 
   const minDate = setupsRes.rows[0].trade_date, maxDate = setupsRes.rows[setupsRes.rows.length - 1].trade_date;
   const barsRes = await query(`
-    SELECT ts, close::float FROM price_bars_primary
+    SELECT ts, ts::text AS tt, close::float FROM price_bars_primary
     WHERE symbol='NQ' AND ts >= $1::date - INTERVAL '3 days' AND ts < $2::date + INTERVAL '1 day'
     ORDER BY ts ASC
   `, [minDate, maxDate]);
-  const bars = barsRes.rows.map(b => ({ ts: b.ts.getTime(), close: b.close }));
+  const bars = barsRes.rows.map(b => ({ ts: b.ts.getTime(), tt: b.tt, close: b.close }));
   const tsIndex = new Map();
   for (let i = 0; i < bars.length; i++) tsIndex.set(bars[i].ts, i);
   console.log(`Loaded ${bars.length} bars.`);
 
+  const stitchData = loadNqStitches();
+  let skippedStitch = 0;
   const scored = [];
   for (const t of setupsRes.rows) {
     const flooredFiredAt = new Date(t.fired_at);
     flooredFiredAt.setSeconds(0, 0);
     const touchIdx = tsIndex.get(flooredFiredAt.getTime());
     if (touchIdx === undefined || touchIdx < APPROACH_BARS) continue;
+    const tA = bars[touchIdx - APPROACH_BARS].tt, tB = bars[touchIdx].tt;
+    if (crossesStitch(stitchData, tA, tB) || touchesBadDate(stitchData, tA, tB)) { skippedStitch++; continue; }
     const pace = Math.abs(bars[touchIdx].close - bars[touchIdx - APPROACH_BARS].close) / APPROACH_BARS;
     const isRth = t.fired_min >= 570 && t.fired_min < 960;
     scored.push({ ...t, pace, isRth, win: t.pnl > 0 ? 1 : 0 });
   }
-  console.log(`Scoreable (enough bar history): ${scored.length}`);
+  console.log(`Scoreable (enough bar history): ${scored.length}; skipped for a contract stitch / bad-bar date in the approach window: ${skippedStitch}`);
 
   // Global AUC -- pooled, then RTH/Globex split (this codebase's own hard rule: check both).
   const paces = scored.map(s => s.pace), wins = scored.map(s => s.win);

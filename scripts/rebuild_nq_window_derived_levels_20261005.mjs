@@ -24,10 +24,13 @@ import { computeAndPersistSession } from '../server/services/developingValueServ
 import { computeORLevelsOnly, getBestACDParams } from '../server/services/acdService.js';
 
 const WRITE = process.argv.includes('--write');
-const FROM = '2025-09-26';   // backup window starts before the first rebuilt session on purpose
-const TO = '2025-11-21';
-const REBUILD_FROM = '2025-09-29';
-const SUFFIX = '_nqbad_backup_20261005';
+// Window arguments (added 2026-11-10 for the raw minute-bar repair, docs/NQ_RAW_BAR_REPAIR_20261110.md; the defaults are the original 2025-10-05 window):
+//   --backup-from D  --from D  --to D  --suffix _name_backup_YYYYMMDD
+const arg = (n, d) => { const i = process.argv.indexOf(n); return i > 0 ? process.argv[i + 1] : d; };
+const FROM = arg('--backup-from', '2025-09-26');   // backup window starts before the first rebuilt session on purpose
+const TO = arg('--to', '2025-11-21');
+const REBUILD_FROM = arg('--from', '2025-09-29');
+const SUFFIX = arg('--suffix', '_nqbad_backup_20261005');
 const TABLES = ['developing_value_log', 'acd_daily_log', 'level_prices'];
 const DATE_COL = 'trade_date';
 
@@ -101,7 +104,7 @@ console.log(`level_prices: recomputed ${lvOk} dates, failed ${lvFail}`);
 // ---------- verify against the corrected bars ----------
 const chk = await query(`
   with rth as (select ts::date d, max(high) hi, (array_agg(close order by ts desc) filter (where ts::time <= '15:59'))[1] cl from price_bars_primary
-               where symbol='NQ' and ts::time between '09:30' and '15:59' and ts>='2025-09-15' and ts<'2025-12-05' group by 1),
+               where symbol='NQ' and ts::time between '09:30' and '15:59' and ts >= $1::date - 10 and ts < $2::date + 1 group by 1),
   lp as (select trade_date d, max(case when level_name='PD_HIGH' then price end) pdh, max(case when level_name='PD_CLOSE' then price end) pdc
          from level_prices where trade_date between $1 and $2 group by 1),
   pairs as (select lp.d, lp.pdh, lp.pdc, (select max(d) from rth where rth.d < lp.d) pd from lp)
@@ -113,7 +116,7 @@ const chk = await query(`
 console.log('verify PD_HIGH/PD_CLOSE vs corrected prior-session bars:', chk.rows[0]);
 const dvChk = await query(`
   select count(*)::int n, count(*) filter (where abs(dv.session_high - r.hi) > 2)::int bad_hi
-  from developing_value_log dv join (select ts::date d, max(high) hi from price_bars_primary where symbol='NQ' and ts::time between '09:30' and '15:59' and ts>='2025-09-15' and ts<'2025-12-05' group by 1) r on r.d = dv.trade_date
+  from developing_value_log dv join (select ts::date d, max(high) hi from price_bars_primary where symbol='NQ' and ts::time between '09:30' and '15:59' and ts >= $1::date - 10 and ts < $2::date + 1 group by 1) r on r.d = dv.trade_date
   where dv.trade_date between $1 and $2`, [REBUILD_FROM, TO]);
 console.log('verify developing_value_log.session_high vs corrected bars:', dvChk.rows[0]);
 process.exit(0);

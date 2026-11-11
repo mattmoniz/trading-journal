@@ -157,6 +157,10 @@ run /usr/bin/node scripts/data_sanity_audit.mjs
 # Non-zero exit = a gap was found (informational here, same convention as data_sanity_audit.mjs); repair with the tick-file rebuild + load_nq_bars_from_scid_csv.mjs.
 run /usr/bin/node scripts/check_nq_history_coverage.mjs
 
+# Data-derived NQ contract-stitch and bad-bar-date list for research scripts (2026-11-10): rebuilds scripts/lib/data/nq_roll_stitches.json
+# from the bars (scripts/lib/nqRollStitch.mjs, read by crossesStitch()/unsafeDates() and scripts/lib/nq_roll_stitch.py). Price-only, about 10 s.
+run /usr/bin/node scripts/build_nq_roll_stitches.mjs
+
 # Pipeline freshness/consumption audit (built 2026-07-17, scheduled 2026-09-07) -- was
 # manual-only until now, ironically the one script in this audit family not following its
 # own no-dead-ends rule. Cross-references every performance_audit signal_type against

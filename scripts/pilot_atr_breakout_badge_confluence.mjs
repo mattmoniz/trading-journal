@@ -1,6 +1,7 @@
 import { query } from '../server/db.js';
 import { LIVE_INSTRUMENT } from '../server/config/instruments.js';
 import { recordClaim } from './record_claim.mjs';
+import { loadNqStitches, crossesStitch } from './lib/nqRollStitch.mjs';   // 2026-11-10: bars on a contract stitch / bad-bar date open no trade, discard an open one, and carry no stitch jump into the true range
 import fs from 'fs';
 
 const BAR_MIN = 60;
@@ -52,11 +53,18 @@ async function main() {
   }
 
   const mBars = Array.from(buckets.values()).sort((a, b) => a.ts.localeCompare(b.ts));
+  // 2026-11-10 stitch guard (scripts/lib/nqRollStitch.mjs): the first bar after a contract stitch and every bad-bar date are unsafe
+  const SD = loadNqStitches();
+  const badDates = new Set(SD.bad_dates.map(x => x.date));
+  const stitchBar = mBars.map((b, i) => i > 0 && crossesStitch(SD, mBars[i - 1].ts, b.ts));
+  const unsafeBar = mBars.map((b, i) => stitchBar[i] || badDates.has(b.ts.slice(0, 10)));
+  let skippedPositions = 0;
   console.log(`Aggregated to ${mBars.length} 60-min bars.`);
 
   for (let i = 0; i < mBars.length; i++) {
     const bar = mBars[i];
     if (i === 0) bar.tr = bar.high - bar.low;
+    else if (stitchBar[i]) bar.tr = bar.high - bar.low;
     else bar.tr = Math.max(bar.high - bar.low, Math.abs(bar.high - mBars[i-1].close), Math.abs(bar.low - mBars[i-1].close));
   }
 
@@ -160,6 +168,7 @@ async function main() {
   for (let i = 30; i < mBars.length - 1; i++) {
     const prevBar = mBars[i - 1];
     const bar = mBars[i];
+    if (unsafeBar[i]) { if (position) { position = null; skippedPositions++; } continue; }
 
     if (position) {
       let stopHit = false, exitPrice = null;
@@ -310,6 +319,7 @@ Overall EV: +$${(trades.reduce((s,t)=>s+t.pnl,0)/trades.length).toFixed(2)}
     evPerTrade: trades.reduce((s,t)=>s+t.pnl,0)/trades.length,
     rigorStatus: 'PROVISIONAL'
   });
+  console.log(`Stitch guard: ${skippedPositions} positions discarded at a contract stitch / bad-bar date (summed over all runs); ${stitchBar.filter(Boolean).length} stitch bars, ${unsafeBar.filter(Boolean).length} unsafe bars of ${mBars.length}`);
   process.exit(0);
 }
 main().catch(err => { console.error(err); process.exit(1); });

@@ -20,7 +20,8 @@ export function buildGroupRows(ev) {
     if (hist.length >= MIN_PRIOR) {
       const target = percentile(hist.map((h) => h.mfe), 0.5), skip = sp > percentile(hist.map((h) => h.sp), 0.8);
       const real = realistic(e.setup, target, false), mir = realistic(e.setup, target, true);
-      if (real && mir) rows.push({ date: e.date, dir: e.dir, fireMin: e.fireMin, sp, skip, pnl: real.pnl, mir: mir.pnl, target, stopDist: e.stopDist, adr: e.adr });
+      if (real && mir) rows.push({ date: e.date, dir: e.dir, fireMin: e.fireMin, sp, skip, pnl: real.pnl, mir: mir.pnl, target, stopDist: e.stopDist, adr: e.adr,
+        entryTs: e.setup.sessBars[e.setup.entryIdx + 1].ts, exitTs: e.setup.sessBars[real.exitIdx].ts, entry: real.entry });   // entry/exit times added for the capitulation replay (extra fields only)
     }
     hist.push({ sp, mfe });
   }

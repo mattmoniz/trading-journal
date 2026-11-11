@@ -1,0 +1,5 @@
+import { recordClaim } from '../record_claim.mjs';
+const r = await recordClaim({ slug: 'vacuum_bar6_exit_globex_20261110', sourceFile: 'scratch/vacuum_bar6_exit_20261110/output_globex_split.txt', sourceDate: '2026-11-10', sampleSize: 1998,
+  claimText: 'Vacuum bar-6 DETERIORATING exit, Globex only, by entry clock block (amendment A1, look 276, descriptive, 0 counted tests, explore, 1,998 trades): NO BLOCK EXCLUDES ZERO. Arm B (exit at the bar-6 close) minus the live 30-bar hold, pt per trade: 18:00-19:59 reopen N 356 +0.09 [-1.76, +1.81]; 20:00-23:59 N 224 +1.80 [-0.80, +4.53] (placebo -1.35, C minus A +2.05 [-0.46, +4.64]); 00:00-05:59 N 672 +0.52 [-1.12, +2.19]; 06:00-09:25 N 746 -0.09 [-1.23, +1.07]. Deteriorating trades lose -7 to -13 pt under the live exit in every block. The 20:00-23:59 block is the largest point estimate but is 224 trades on 209 days, one of four unregistered cuts: a lead at most. Parked.',
+  rigorStatus: 'not_checked', status: 'PROVISIONAL', unblockCondition: 'forward vacuum rows with the bar-6 status stored', extra: { look: 276, tests: 0 } });
+console.log('claim', r.slug || 'ok'); process.exit(0);

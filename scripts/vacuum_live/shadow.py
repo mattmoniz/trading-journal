@@ -17,6 +17,7 @@ _saved = sys.modules.get('features'); sys.modules['features'] = Fm
 v2 = _load('vac_v2', os.path.join(ROOT, 'scripts', 'vacuum_sim', 'v2.py'))
 if _saved is not None: sys.modules['features'] = _saved
 import turn_signal as TS
+B6 = _load('vac_bar6_status', os.path.join(ROOT, 'scripts', 'vacuum_live', 'bar6_status.py'))      # the shared bar-6 checkpoint (research uses the same file)
 assert TS.Z_RATIO == Fm.Z_RATIO and TS.Z_ROC == Fm.Z_ROC, 'turn_signal thresholds must equal the research features'
 ET = ZoneInfo('America/New_York'); STORE = os.path.join(ROOT, 'scratch', 'vacuum_live'); os.makedirs(STORE, exist_ok=True)
 PRI = os.path.join(ROOT, 'scratch', 'argon_vacuum_live', 'priors'); POLL_S, CATCHUP_BYTES, HOLD = 1.0, 40 * 20000, 30
@@ -32,11 +33,13 @@ class Health(BaseHTTPRequestHandler):
         body = json.dumps(STATUS, default=str).encode(); self.send_response(200); self.send_header('Content-Type', 'application/json'); self.send_header('Content-Length', str(len(body))); self.end_headers(); self.wfile.write(body)
     def log_message(self, *a): pass
 def onset(m): return m & ~np.r_[False, m[:-1]]
-def calc_outcome(en, o, h, l, c, a, dr, etr_a, lim, n_bars, hold=HOLD, mult=2.5, cost=2.0):
+def calc_outcome(en, o, h, l, c, a, dr, etr_a, lim, n_bars, hold=HOLD, mult=2.5, cost=2.0, n0=0):
     """30-bar hold from Open[a+1], clamped at the hard flat (lim = 55790 s since 18:00 for Globex = 09:29:50, close - 300 for RTH). Returns None while the exit bar does not exist yet; ('NOENTRY',) when the cutoff passed before bar a+1;
     otherwise dict(fwd, net_nostop, net_stop25, mfe, mae, note). The V0 stop (mult x EMA10(TR) at the signal bar, bar high/low, fill at the stop or the open if gapped, +1 tick) is evaluated bar by bar."""
     if a + 1 >= n_bars: return None
-    inside = np.where(en[:n_bars] <= lim)[0]; passed = bool(np.any(en[:n_bars] > lim)); flat = int(inside.max()) if len(inside) else -1
+    # n0 = offset of the CURRENT session in the continuous arrays. The previous session's bars come first and its late bars (15:55-17:00) always lie beyond the RTH cutoff, so counting them made `passed` True for EVERY RTH event and
+    # finalized the outcome at the latest bar (exit_note 'flat-clamped', outcome_at seconds after the fire) instead of waiting for the 30th bar. Only the current session decides whether the hard flat has passed (bug fixed 2026-11-09).
+    cur = en[n0:n_bars]; inside = n0 + np.where(cur <= lim)[0]; passed = bool(np.any(cur > lim)); flat = int(inside.max()) if len(inside) else -1
     target = a + hold
     if target < n_bars and en[target] <= lim: last = target; note = 'hold'
     elif passed:
@@ -55,7 +58,7 @@ def calc_outcome(en, o, h, l, c, a, dr, etr_a, lim, n_bars, hold=HOLD, mult=2.5,
 class Live:
     def __init__(self, once_date=None, dry_out=None):
         self.once_date = once_date; self.dry_out = dry_out; self.dry = []; self.conn = None; self.d = None; self.ls = None; self.tl = None; self.stored = {}; self.n_done_eval = 0; self.end_reached = False; self.first_eval = True
-        self.tstored = {}; self.tqual = set(); self.adr20 = None; self.prior67 = {}
+        self.tstored = {}; self.tqual = set(); self.stored3 = {}; self.adr20 = None; self.prior67 = {}
         try: self.prior67 = json.load(open(os.path.join(ROOT, 'scratch', 'vacuum_sim_20261108', 'turn_ext_prior.json')))['pct67']
         except Exception as ex: log('turn prior missing (the order rule will not qualify anything until the table has its own history):', ex)
     def db(self):
@@ -80,6 +83,8 @@ class Live:
         STATUS.update(session=d, state='HISTORY', contract=self.contract, tickFile=self.path); STATUS['loopAt'] = time.time(); self.load_history(d)
         with self.db().cursor() as c:
             c.execute("SELECT track, bar_idx, direction, decision_hash FROM vacuum_live_events WHERE trade_date=%s", (d,)); self.stored = {(t, k, int(x)): h for t, k, x, h in c.fetchall()}
+            try: c.execute("SELECT bar_idx, direction, decision_hash FROM vacuum_roc3_events WHERE trade_date=%s", (d,)); self.stored3 = {(k, int(x)): h for k, x, h in c.fetchall()}
+            except Exception as ex: self.conn.rollback(); self.stored3 = {}; log('roc3 table not readable:', ex)
             try:
                 c.execute("SELECT track, bar_idx, kind, direction, decision_hash, hook_delay FROM turn_signal_events WHERE trade_date=%s", (d,)); self.tstored = {(t, k, kd, int(x)): (h, hd) for t, k, kd, x, h, hd in c.fetchall()}
                 c.execute("SELECT track, bar_idx, kind, direction FROM turn_signal_events WHERE trade_date=%s AND qualified", (d,)); self.tqual = {(t, k, kd, int(x)) for t, k, kd, x in c.fetchall()}
@@ -105,7 +110,7 @@ class Live:
             if a >= lock[tr]: taken = True; lock[tr] = a + HOLD            # one position at a time per track (30-bar hold); BOTH tracks fire as candidates
             ctx = dict(user_fast=bool(F['user_fast'][a]), pace_cdf=None if np.isnan(F['pace'][a]) else round(float(F['pace'][a]), 3), flow_aligned=bool(flow[a]), acc=round(float(F['acc'][a]), 3), hour_et=int(Fm.hour_et(np.array([en[a]]))[0]), zr_proxy=None if np.isnan(zr[a]) else round(float(zr[a]), 2))
             ev.append(dict(a=int(a), k=int(a - n0), tr=tr, dr=dr, taken=taken, ctx=ctx))
-        return dict(P=P, F=F, n0=n0, etr=etr, ev=ev, close=close, S=S)
+        return dict(P=P, F=F, n0=n0, etr=etr, ev=ev, close=close, S=S, reset=reset)
     def evaluate(self):
         r = self.analyse()
         if r is None: return
@@ -129,19 +134,62 @@ class Live:
         try: self.evaluate_turn(r)
         except Exception as ex: self.conn = None; STATUS['turnErrors'] = STATUS.get('turnErrors', 0) + 1; STATUS['turnLastError'] = f'{type(ex).__name__}: {ex}'; log('TURN_ERROR', traceback.format_exc()[-400:])    # never lets the turn signal break the expansion-rule logging
         STATUS.update(bars=len(self.ls.sb.done), events=len(self.stored), taken=sum(1 for _ in r['ev'] if _['taken'])); self.first_eval = False
+        try: self.evaluate_roc3(r, nowet)
+        except Exception as ex: self.conn = None; STATUS['roc3Errors'] = STATUS.get('roc3Errors', 0) + 1; STATUS['roc3LastError'] = f'{type(ex).__name__}: {ex}'; log('ROC3_ERROR', traceback.format_exc()[-400:])    # the ROC3 shadow arm never breaks the live expansion-rule logging
         if self.dry_out: return
-        # outcomes (fill once): the entry open of bar a+1 as soon as it exists; the clamped 30-bar outcome once its exit bar exists
-        close = r['close']; en_all = P['en']; nb = len(c)
+        self.fill_outcomes('vacuum_live_events', r, nowet)
+        try: self.fill_bar6(r, nowet)
+        except Exception as ex: self.conn = None; STATUS['bar6Errors'] = STATUS.get('bar6Errors', 0) + 1; STATUS['bar6LastError'] = f'{type(ex).__name__}: {ex}'; log('BAR6_ERROR', traceback.format_exc()[-400:])    # a flag failure never stops the detector
+    def fill_outcomes(self, table, r, nowet):
+        """Outcomes (fill once) for one event table (a constant of this module, never user input): the entry open of bar a+1 as soon as it exists; the clamped 30-bar outcome once its exit bar exists."""
+        P, n0, etr = r['P'], r['n0'], r['etr']; c, o, h, l = P['c'], P['o'], P['h'], P['l']; close = r['close']; en_all = P['en']; nb = len(c)
         with self.db().cursor() as cu:
-            cu.execute("SELECT id, track, bar_idx, direction, entry_open FROM vacuum_live_events WHERE trade_date=%s AND outcome_at IS NULL", (self.d,)); pend = cu.fetchall()
+            cu.execute(f"SELECT id, track, bar_idx, direction, entry_open FROM {table} WHERE trade_date=%s AND outcome_at IS NULL", (self.d,)); pend = cu.fetchall()
             for rid, tr, k, dr, eo in pend:
                 a = n0 + k
-                if a + 1 < nb and eo is None: cu.execute("UPDATE vacuum_live_events SET entry_open=%s WHERE id=%s AND entry_open IS NULL", (float(o[a + 1]), rid))
+                if a + 1 < nb and eo is None: cu.execute(f"UPDATE {table} SET entry_open=%s WHERE id=%s AND entry_open IS NULL", (float(o[a + 1]), rid))
                 lim = 55790.0 if tr == 'GBX' else close - 300.0
-                oc = calc_outcome(en_all, o, h, l, c, a, int(dr), float(etr[a]), lim, nb)
+                oc = calc_outcome(en_all, o, h, l, c, a, int(dr), float(etr[a]), lim, nb, n0=n0)
                 if oc is None: continue
-                if isinstance(oc, tuple): cu.execute("UPDATE vacuum_live_events SET exit_note='no-entry (cutoff)', outcome_at=%s WHERE id=%s AND outcome_at IS NULL", (nowet, rid)); continue
-                cu.execute("UPDATE vacuum_live_events SET fwd30=%s, net_nostop=%s, net_stop25=%s, mfe30=%s, mae30=%s, exit_note=%s, outcome_at=%s WHERE id=%s AND outcome_at IS NULL", (oc['fwd'], oc['net_nostop'], oc['net_stop25'], oc['mfe'], oc['mae'], oc['note'][:24], nowet, rid))
+                if isinstance(oc, tuple): cu.execute(f"UPDATE {table} SET exit_note='no-entry (cutoff)', outcome_at=%s WHERE id=%s AND outcome_at IS NULL", (nowet, rid)); continue
+                cu.execute(f"UPDATE {table} SET fwd30=%s, net_nostop=%s, net_stop25=%s, mfe30=%s, mae30=%s, exit_note=%s, outcome_at=%s WHERE id=%s AND outcome_at IS NULL", (oc['fwd'], oc['net_nostop'], oc['net_stop25'], oc['mfe'], oc['mae'], oc['note'][:24], nowet, rid))
+    def fill_bar6(self, r, nowet):
+        """Forward flag of the bar-6 checkpoint (register row 54; gates nothing, no order code reads it): once an event's 30-bar outcome is final, store status, bar-6 close and the net of arms A / B / C (fill once)."""
+        P, n0, etr = r['P'], r['n0'], r['etr']; c, o, h, l, en = P['c'], P['o'], P['h'], P['l'], P['en']; close = r['close']; nb = len(c)
+        with self.db().cursor() as cu:
+            cu.execute("SELECT id, track, bar_idx, direction FROM vacuum_live_events WHERE trade_date=%s AND outcome_at IS NOT NULL AND b6_status IS NULL AND exit_note NOT LIKE 'no-entry%%'", (self.d,)); pend = cu.fetchall()
+            for rid, tr, k, dr in pend:
+                a = n0 + k; lim = 55790.0 if tr == 'GBX' else close - 300.0; last = B6.last_bar(en, a, lim, nb, n0=n0)
+                if last is None: continue
+                x = B6.bar6(o, h, l, c, a + 1, last, int(dr), 2.5 * float(etr[a]))
+                cu.execute("UPDATE vacuum_live_events SET b6_status=%s, b6_close=%s, b6_net_a=%s, b6_net_b=%s, b6_net_c=%s, b6_src='LIVE', b6_at=%s WHERE id=%s AND b6_status IS NULL", (x['status'], None if x['close6'] is None else round(x['close6'], 2), round(x['a'], 2), round(x['b'], 2), round(x['cc'], 2), nowet, rid))
+    def evaluate_roc3(self, r, nowet):
+        """Row 36 forward arm (docs/GLOBEX_ROC3_VACUUM_PREREG_20261110.md section 9): the SAME rule as the Globex track above with the ROC length 3 (features.L_ROC set around the one v2.feats call). LOG ONLY: its own table vacuum_roc3_events, no order wiring reads it,
+        Globex window only (the prereg arm). Decision columns frozen at insert, outcomes fill once, a restart replays statelessly."""
+        P, n0, close = r['P'], r['n0'], r['close']; Fm.L_ROC = 3
+        try: F3 = v2.feats(P, n0, r['reset'], self.prs, close)
+        finally: Fm.L_ROC = 10
+        n = len(P['c']); en, c = P['en'], P['c']; idx = np.arange(n); z = F3['zroc']; roc = F3['roc']; etr = r['etr']
+        ok = (idx >= n0) & ~np.isnan(z); prev_ok = np.r_[False, ~np.isnan(z[:-1])]; dd = np.where(roc > 0, 1, np.where(roc < 0, -1, 0))
+        c0u = ~np.isnan(z) & (np.abs(z) > Fm.Z_ROC) & (np.sign(z) == dd); on0 = onset(c0u) & prev_ok; gw = ok & (en <= 55500.0); lock = -1; new = 0
+        for a in np.where(on0 & gw)[0]:
+            dr = int(dd[a]); k = int(a - n0); taken = bool(a >= lock)
+            if taken: lock = a + HOLD
+            hsh = hashlib.sha1(json.dumps([self.d, 'GBX3', k, dr, round(float(c[a]), 2), taken]).encode()).hexdigest()[:16]; key = (k, dr)
+            if key in self.stored3:
+                if self.stored3[key] != hsh: log('ALARM DRIFT ROC3', key, self.stored3[key], hsh)
+                continue
+            fired = persist.et_naive(self.ls.bar_end_utc[k]); late = round((nowet - fired).total_seconds() / 60.0, 1)
+            ctx = dict(user_fast=bool(F3['user_fast'][a]), pace_cdf=None if np.isnan(F3['pace'][a]) else round(float(F3['pace'][a]), 3), acc=round(float(F3['acc'][a]), 3), hour_et=int(Fm.hour_et(np.array([en[a]]))[0]))
+            row = (self.d, 'GBX', k, dr, fired, float(en[a]), float(c[a]), float(z[a]), float(roc[a]), float(etr[a]), float(F3['dur'][a]), float(F3['zr'][a]) if not np.isnan(F3['zr'][a]) else None, taken, hsh, nowet, late, json.dumps(ctx))
+            if self.dry_out: self.dry.append(dict(track='GBX3', bar=k, dir=dr, taken=taken, zroc=round(row[7], 3), roc=round(row[8], 1))); continue
+            with self.db().cursor() as cu:
+                cu.execute("""INSERT INTO vacuum_roc3_events (trade_date, track, bar_idx, direction, fired_at, bar_end_sec, signal_close, zroc, roc3, etr, dur, zr_proxy, taken, decision_hash, detected_at, late_min, ctx)
+                              VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT (trade_date, track, bar_idx, direction) DO NOTHING""", row)
+            self.stored3[key] = hsh; new += 1
+            if late < 3: log(f'*** ROC3 FIRE {self.d} {"LONG " if dr == 1 else "SHORT"} signal close {c[a]:.2f}  Z_ROC3 {z[a]:+.2f} ROC3 {roc[a]:+.1f}  taken={taken} (shadow arm, no orders)')
+        STATUS.update(roc3Events=len(self.stored3))
+        if not self.dry_out: self.fill_outcomes('vacuum_roc3_events', r, nowet)
     def ext_cut(self, tr):
         """Top-tercile cutoff of Stage-1 extensions of this track: the rolling distribution of the table's own PRIOR sessions once it has >= 60 events, else the explore prior (data-derived, never typed)."""
         with self.db().cursor() as cu:
@@ -188,7 +236,7 @@ class Live:
                 a = n0 + k
                 if a + 1 < nb and eo is None: cu.execute("UPDATE turn_signal_events SET entry_open=%s WHERE id=%s AND entry_open IS NULL", (float(o[a + 1]), rid))
                 lim = 55790.0 if tr == 'GBX' else close - 300.0
-                oc = calc_outcome(en, o, h, l, c, a, int(dr), float(etr[a]), lim, nb)
+                oc = calc_outcome(en, o, h, l, c, a, int(dr), float(etr[a]), lim, nb, n0=n0)
                 if oc is None: continue
                 if isinstance(oc, tuple): cu.execute("UPDATE turn_signal_events SET exit_note='no-entry (cutoff)', outcome_at=%s WHERE id=%s AND outcome_at IS NULL", (nowet, rid)); continue
                 cu.execute("UPDATE turn_signal_events SET fwd30=%s, net_nostop=%s, net_stop25=%s, mfe30=%s, mae30=%s, exit_note=%s, outcome_at=%s WHERE id=%s AND outcome_at IS NULL", (oc['fwd'], oc['net_nostop'], oc['net_stop25'], oc['mfe'], oc['mae'], oc['note'], nowet, rid))

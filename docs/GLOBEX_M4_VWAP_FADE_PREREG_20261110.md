@@ -1,0 +1,33 @@
+# Globex climax fade toward the overnight VWAP (Argon M4, data-derived), row 38. PRE-REGISTRATION, FROZEN 2026-11-10 before any outcome is read
+
+Origin: rows 36 and 37 found no gross edge in the Globex ROC-onset ENTRY at any ROC length 1..20. The other half of Argon's v2.2 spec is M4: after a thin-book spike stretched far from the ETH VWAP, fade the hook back toward VWAP. The spec's numbers (stretch >= 2.0 x EMA_TR, >= 1.5 x EMA_TR at entry, stop 1.5 x EMA_TR beyond the extreme, hook 0.20 / 0.35 sd, windows 19:30-02:59) are NOT adopted (hr-003); each is replaced by a data-derived or structure-derived rule below. This is the user's go ("continue with the Globex tests"), analysis only: no live change.
+
+## Definitions (all causal at bar close t; hr-020)
+- Series: Explore 500V bars 2023-03-07..2025-05-16, current Globex session (from 18:00 ET), bars with END <= 09:25 ET are signal bars. Same sessions, priors (20 prior sessions), `v2.continuous` + `v2.feats` (L_ROC = 3), cost 2.0 pt as rows 36/37.
+- ETH VWAP_t = cumulative sum(typical price x volume) / cumulative volume over the current session's bars up to and including bar t, typical = (H+L+C)/3, reset at the 18:00 session start. Target uses VWAP of the PREVIOUS bar close (known before the bar).
+- stretch_t = |C_t - VWAP_t| / EMA10(TR)_t (scale-free). CUTOFF = the 0.90 quantile of stretch over all Globex bars of the 20 prior sessions (session-equal weights, each prior session's own VWAP and EMA10(TR); `features.wq`). Descriptive variants 0.80 and 0.95 are never counted.
+- Climax bar a: onset of (|Z_ROC3| > 2 and sign(Z) == sign(ROC3)), s = sign(ROC3), AND s*(C_a - VWAP_a)/EMA10(TR)_a >= CUTOFF (stretched in the spike direction). Warm-up: >= 10 bars into the session (the EMA10 length).
+- Hook bar j: the FIRST bar in a+1..a+5 where s*Z_ROC3[j] <= 0 (momentum back through its own 50-bar mean, no typed sd multiple) AND s*(C_j - VWAP_j) > 0 (still on the stretched side). If none, the climax lapses.
+- Entry: fade, direction -s, at Open[j+1]. Target: the previous-bar VWAP level, a limit touched by the bar's range (checked from the entry bar). Stop: the climax extreme = max High (s = +1) / min Low (s = -1) over bars a-3..j, hit when the bar trades through it (gap: fills at the open, cv-030). Both in one bar: stop first (conservative). Time exit: Close of the 30th bar after entry or the 09:29:50 hard flat, whichever first. One position at a time (lock until exit). Net = signed exit - entry - 2.0.
+- PLACEBO arm (cv-029, hr-041/042: same exit structure, same cutoff, no spike, no hook): onset of the stretched state (first bar where s*(C - VWAP)/EMA10(TR) >= CUTOFF after the previous bar was below), s = side of VWAP, entry Open[a+1] fading toward VWAP, stop = extreme of bars a-3..a, same target, time exit, lock, cost.
+
+## Counted family (assert 4) and gate
+- M1 fade net > 0 (all Globex). M2 fade minus placebo net > 0 (the real test: what the spike+hook adds over merely being stretched). M3 fade net > 0 in the SLOW-hours tercile. M4 fade net > 0 in the FAST-hours tercile. Hour terciles = row 36's rule (15 Globex ET hours ranked by explore median bar duration, hour of the signal bar END).
+- Estimator sum(net)/N; day-blocked bootstrap 3000 draws, seeds 501..504, p = (1 + count)/(draws + 1), one-sided; Holm 0.10 over cells passing the gate (>= 100 events and >= 60 event days, else PARKED).
+- Descriptive, never counted: win rate and the target/stop/time split of exits, median, avg win vs avg loss, thirds, by year, top-5-days share, MDE in ADR20, cutoff 0.80 / 0.95, the spec's clock window 19:30-02:59 vs the rest, pre-cost mean.
+
+## Null gate (before the real run)
+200 iterations: within each arm subtract that arm's mean net (centering), flip the sign per day, cost 0, same gate/bootstrap/Holm; family-wise false-pass <= 0.10 required. (A plain sign flip is not a null for an asymmetric stop/target structure, so outcomes are centered first.) Claim `globex_m4_null_mc_20261110`.
+
+## Ledger / next-step tree (co-022, co-023)
+Registration look (tests 0) now; the run look (tests 4) is logged before any outcome is printed; unit tests of the exit simulator on hand-made bars pass before the run.
+- M2 survives Holm AND thirds agree: register a forward shadow arm (log only) and a sealed replication on the user's go.
+- M1 positive but M2 not: the stretch alone (mean reversion toward VWAP) is the lead, not the spike+hook; register that separately.
+- Nothing survives with MDE <= 0.015 ADR20: second independent family of nulls on Globex entries (different mechanism from rows 36/37): the Globex vacuum idea is parked for entries, per co-025 the user decides retirement.
+- Autopsy: exit mix, by hour tercile, by year, cutoff variants, share of climaxes that lapse without a hook.
+
+## RESULT (2026-11-10; looks 244 registration / 245 run, tests 0; output `scratch/globex_m4_20261110/run_output.txt`): ALL FOUR COUNTED CELLS PARKED BY THE GATE, nothing counted
+Outcome-blind first: 513 sessions, median CUTOFF = 7.93 EMA10(TR) units (the 0.90 quantile of Globex stretch is far larger than the spec's typed 2.0), 91 fade events (65 days) < the 100-event gate, so M1-M4 were parked BEFORE any outcome was read; the null gate passed trivially (0.000, nothing to test). The run script was still executed to print descriptives, logged as a descriptive look with tests = 0. The gate was NOT relaxed after seeing the count.
+DESCRIPTIVE ONLY (never counted, no CI): FADE N 91: mean net -5.80 pt, median -10.00, pre-cost -3.80, win rate 19.8 percent, average win +32.61 vs average loss -15.27; exits 68 stop / 22 time / 1 target; thirds +2.18 / -12.24 / -6.53; by year -0.28 (2023), -12.42 (2024), -5.58 (2025). PLACEBO (stretched-state onset, same exits, N 906 on 294 days): mean net -2.67, pre-cost -0.67, win rate 7.8 percent; exits 821 stop / 77 time / 8 target.
+What it says: at a 0.90-quantile stretch the VWAP target is almost never reached inside 30 bars (1 of 91, 8 of 906), and the extreme-based stop is hit most of the time, so being stretched from the overnight VWAP does not by itself bring price back; the spike+hook filter is not better than the placebo in this descriptive look (-5.80 vs -2.67 net, N 91 so unmeasured). It does NOT show the idea is wrong: 91 events is below the power gate and the stop (structural extreme, 4 bars) may be too tight for a target this far away.
+Next (not done, needs a decision): a follow-up registration with a lower cutoff (outcome-blind event COUNT first, choose the cutoff by count only, e.g. the 0.80 quantile that this prereg listed as a descriptive variant) and a data-derived stop width; this is a NEW family and the 91-event descriptives above are a declared forking-path look at the 0.90 version.

@@ -19,6 +19,7 @@ import { query } from '../server/db.js';
 import { LIVE_INSTRUMENT } from '../server/config/instruments.js';
 import { computeRigor } from '../server/services/rigorDiagnostics.js';
 import { recordClaim } from './record_claim.mjs';
+import { loadNqStitches, crossesStitch } from './lib/nqRollStitch.mjs';   // 2026-11-10: bars on a contract stitch / bad-bar date open no trade, discard an open one, and carry no stitch jump into the true range
 import fs from 'fs';
 
 const BAR_MIN = parseInt(process.argv[2] || '60', 10);
@@ -78,6 +79,12 @@ async function main() {
   }
 
   const mBars = Array.from(buckets.values()).sort((a, b) => a.ts.localeCompare(b.ts));
+  // 2026-11-10 stitch guard (scripts/lib/nqRollStitch.mjs): the first bar after a contract stitch and every bad-bar date are unsafe
+  const SD = loadNqStitches();
+  const badDates = new Set(SD.bad_dates.map(x => x.date));
+  const stitchBar = mBars.map((b, i) => i > 0 && crossesStitch(SD, mBars[i - 1].ts, b.ts));
+  const unsafeBar = mBars.map((b, i) => stitchBar[i] || badDates.has(b.ts.slice(0, 10)));
+  let skippedPositions = 0;
   console.log(`Aggregated to ${mBars.length} ${BAR_MIN}-min bars.`);
   const minCounts = mBars.map(b => b.mins.length).sort((a, b) => a - b);
   const fullBar = BAR_MIN; // 1-min rows per bucket when fully dense
@@ -89,7 +96,7 @@ async function main() {
       bar.tr = bar.high - bar.low;
     } else {
       const prevClose = mBars[i - 1].close;
-      bar.tr = Math.max(bar.high - bar.low, Math.abs(bar.high - prevClose), Math.abs(bar.low - prevClose));
+      bar.tr = stitchBar[i] ? bar.high - bar.low : Math.max(bar.high - bar.low, Math.abs(bar.high - prevClose), Math.abs(bar.low - prevClose));
     }
   }
 
@@ -150,6 +157,7 @@ async function main() {
     for (let i = 30; i < mBars.length - 1; i++) {
       const prevBar = mBars[i - 1];
       const bar = mBars[i];
+      if (unsafeBar[i]) { if (position) { position = null; skippedPositions++; } continue; }
 
       if (position) {
         let stopHit = false, exitPrice = null;
@@ -367,6 +375,7 @@ Optimistic: \`${JSON.stringify(rigorOpt)}\`
   const verify = await query(`SELECT signal_name, sample_size, win_rate, ev_per_trade FROM performance_audit WHERE signal_type = 'RESEARCH_CLAIM' AND signal_name = $1 ORDER BY run_date DESC LIMIT 1`, [`atr_compression_breakout_${BAR_MIN}m`]);
   console.log('Verified Claim Row:', verify.rows[0]);
 
+  console.log(`Stitch guard: ${skippedPositions} positions discarded at a contract stitch / bad-bar date (summed over all runs); ${stitchBar.filter(Boolean).length} stitch bars, ${unsafeBar.filter(Boolean).length} unsafe bars of ${mBars.length}`);
   process.exit(0);
 }
 

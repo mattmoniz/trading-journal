@@ -1,0 +1,7 @@
+// Records the A8/A7 flush capitulation replay result (awaited, hr-060).
+import { recordClaim } from './record_claim.mjs';
+import { query } from '../server/db.js';
+const txt = 'Row 30 A8 (EXPLORE LEAD, 2 counted tests, 641 explore flush backtest events 2023-04..2025-05-16 with the flush studys own simulated exit, dollars): F_RTH 205 signalled events, mean d -$11.6 (-5.8 pt) CI90 [-26.6, +3.7], one-sided p 0.896 NOT SHOWN (wrong sign, fails winsor/drop-top-2/leave-one-day-out/halves/placebo), MDE 11.5 pt = 0.024 ADR20. F_GBX 80 events, mean d -$1.7, p 0.558 NOT SHOWN, MDE 13.0 pt = 0.027 ADR20. Both MDEs above the 0.015 ADR20 bar: PARKED, not retired. Together with the real 2026 flush rows (A6.2: 23 events -$47.7) the capitulation exit has not helped flushes in either sample. Descriptive: signalled rows own exit +$13.0 vs capitulation exit +$4.2 mean; underwater at the signal (progress < 0) -$34.9 (CI [-55, -14]); progress 0.5-1 of the target +$24.4 (CI [-0.6, +52.5], p 0.053, post-hoc); the non-extended thrust exit +$9.9 (p 0.19). Globex continuation -$6.0, reversal +$2.3.';
+console.log(await recordClaim({ slug: 'capitulation_exit_flush_20261109', claimText: txt, sourceFile: 'scratch/capitulation_replay_20261109/a7_go.log', sourceDate: '2026-11-09', sampleSize: 285, rigorStatus: 'not_checked', status: 'PROVISIONAL' }));
+await query(`UPDATE research_looks SET outcome = $2 WHERE ref = $1`, ['cap_a7_register_20261109', 'F_RTH NOT SHOWN (p 0.896, wrong sign, MDE 0.024 ADR20), F_GBX NOT SHOWN (p 0.558, MDE 0.027 ADR20): both PARKED']);
+process.exit(0);

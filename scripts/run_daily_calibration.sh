@@ -142,6 +142,10 @@ timed_step daily /usr/bin/node scripts/roster_scoreboard.mjs
 # Next-hour RANGE shadow model (docs/STRUCTURE_SHADOW_MODEL_DESIGN_20261105.md, user 2026-11-05 'get this model built'): predicts today's four rows with the model frozen BEFORE the session, labels finished rows, refits and freezes tomorrow's model, rebuilds public/structure_model.json.
 # Shadow only; counts only; a failed day is logged and retried next night; never fails this job. Runs BEFORE the learning monitor build so that build merges the fresh payload.
 timed_step daily ./venv/bin/python3 scripts/structure_model/run_nightly.py
+# Capitulation-exit overlay forward shadow logger (register row 30, docs/CAPITULATION_EXIT_SHADOW_PREREG_20261109.md): shadow only, writes capitulation_exit_shadow, never places an order or touches a setup.
+timed_step daily /usr/bin/node scripts/capitulation_exit_shadow.mjs
+# Level-confluence tag logger (register row 33, docs/LEVEL_CONFLUENCE_TAGS_PREREG_20261109.md): append-only tags on every tell / vacuum / turn-signal fire; writes level_confluence_tags only, no order, no setup change.
+timed_step daily /usr/bin/node scripts/level_confluence_tags.mjs
 timed_step daily /usr/bin/node scripts/learning_monitor_build.mjs
 timed_step daily /usr/bin/node scripts/derive_day_types.js
 

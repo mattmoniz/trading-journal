@@ -11922,3 +11922,10 @@ not just in test fixtures.
 
 
 
+
+---
+## Archive batch: 2026-11-10 (cutoff 2026-11-03, keep last 7 days)
+
+### From "2026-11-10 night — Fable strategy-review reply AUDITED (docs/FABLE_REVIEW_AUDIT_20261110.md); roll helper BUILT, candidate A registered (Q4-6)"
+
+- One real row was stopped out by the 2026-09-14 +296 point stitch: id 121094 (SHADOW POC_ROTATION_JOIN_SHORT, -$42). Flagged `bad_bars_basis = TRUE` (was NULL; undo: set it back to NULL). Ids 33062, 33066, 33214 (2026-07-09 ACTIVE rows closed TIME_EXPIRED on 2026-10-14 at -$1) also span that stitch; they are old cleanup rows, left alone.

@@ -1,0 +1,40 @@
+# Audit of Argon's review of the A10 replace-the-target lead (2026-11-09 night)
+
+Brief: `scratch/argon_a10_brief_20261109.md` (9 questions, whole-program context). Reply pasted by the user. Audited by Claude (hr-030, hr-034): arithmetic re-done, claims checked against our data, and the checkable ones run as DESCRIPTIVE analyses (amendment A10.2, look `cap_a10_extras_20261109`, tests 0; script `scripts/vacuum_sim/capitulation_replay_a10_extras.py`, log `scratch/capitulation_replay_20261109/a10_extras.log`). Dollars, 1 pt = $2.
+
+## What the new analyses show (same 5,129 scored rows; H equals C0 on rows with no thrust)
+**ITT (unconditional, all rows of a stratum)**
+| stratum | rows | thrust before stop/expiry | A (own exit) | C0 | H | H - A [CI90] | H - C0 [CI90] | C0 - A |
+|---|---|---|---|---|---|---|---|---|
+| R2_RTH (boundary, RTH) | 615 | 149 | -6.7 | -22.7 | -7.7 | **-1.0 [-11.6, +11.4]** | +15.0 [+5.2, +24.3] | -16.0 |
+| R2_GBX | 336 | 45 | +3.0 | -10.1 | -7.9 | -10.9 [-25.8, +5.6] | +2.2 [-7.3, +11.0] | -13.1 |
+| R1_RTH (defended pivot, RTH) | 143 | 19 | -10.0 | +5.9 | +14.0 | **+24.0 [+4.3, +44.4]** | +8.1 [-10.8, +28.4] | +15.9 |
+| untagged RTH | 3,332 | 938 | -2.1 | -12.2 | -1.4 | +0.7 [-5.0, +6.6] | +10.7 [+2.1, +19.1] | -10.1 |
+| untagged Globex | 740 | 154 | -5.9 | +0.6 | -6.2 | -0.3 [-11.3, +12.0] | -6.7 [-22.3, +6.7] | +6.5 |
+| ALL rows | 5,129 | 1,300 | -3.1 | -11.0 | -3.0 | +0.0 [-4.7, +4.8] | +8.0 [+1.8, +14.1] | -8.0 |
+Reading: on the whole boundary-RTH stratum, replacing the target with the capitulation exit is a wash against the setup's own exit (-$1.0 per row, CI spans zero): removing the target costs $16 a row, the capitulation timing gives back $15. The conditional +$72 is real post-thrust mean reversion on the rows where a thrust came, but it does not turn into a net gain over the existing exit.
+**Matched static target control T (R2_RTH, 587 rows, walk-forward median excursion 0.129 ADR20 of earlier days' H exits)**: T - C0 +$14.5 [+2.6, +24.6] vs H - C0 +$13.9 [+4.1, +23.5] unconditionally; H - T = -$0.6 [-9.5, +10.2]. A plain price target at the median excursion captures as much as the capitulation exit over the whole stratum. On the 138 signalled rows H beats T (+$49.2 [+25.9, +73.0]) because T applies to all rows and exits earlier; that conditional number is not the fair comparison.
+**Thrust type (R2_RTH, H - C0)**: extended only +$72.3 (59 events), NON-extended only +$20.3 (122 events, CI [-18.4, +55.1]), first of either +$40.2 (165 events). The extension adds; the thrust alone is weaker.
+**Timing / extension split of the 59 events (H - C0 by tercile)**: minutes from entry to thrust +69 / +91 / +63 (flat); pre-entry 240-minute displacement +98 / +46 / +87 (no pattern); extension E at the thrust +42 / +57 / +118 (rises with E).
+**Globex**: onsets by ET hour peak at 08:00 (780), 03:00 (492), 20:00 (371), 04:00 (370), 07:00 (337); the 11-09 02:45 event (E 0.84) is at the 99.2nd percentile of Globex extensions (0.8 percent of events are >= 0.84).
+
+## Claim by claim
+| # | Argon's claim | Check | Verdict |
+|---|---|---|---|
+| 1 | H - C0 on the signalled subset is not a fair measure of H against the setup's own exit; run the unconditional ITT | Arithmetic exact (A -$3.06, C0 -$11.03, 1,319 / 5,177 = 25.5 percent, C0 - A = +$113.1 on untagged Globex signalled rows). ITT run: R2_RTH H - A = -$1.0 [-11.6, +11.4] | ADOPTED; the headline is restated: a lead for post-thrust reversion, NOT a net gain over the setup's exit |
+| 2 | A10 is a round-trip stop-saver, not a trend runner (stop-ended +$172, expiry-ended -$76.8) | Numbers are the ones I reported; the split follows from how H and C0 are defined | CONFIRMED; protected arm P (stop to breakeven when the row's own `t1_level` is first reached, then hold to the capitulation) REGISTERED, not built |
+| 3 | The 240-minute window bleeds pre-entry movement into the post-entry thrust | Tercile splits above: no pattern by pre-entry displacement or elapsed time | NOT SUPPORTED on this data |
+| 4 | The risk-set placebo (matched elapsed time) does not separate order flow from price excursion; H - C0 is minus the C0 holder's future P&L after the thrust | Logically right (both arms identical until the thrust). Matched static target control run: H - T = -$0.6 | ACCEPTED; the placebo no longer carries the "order flow" claim; extension helps (E terciles), the thrust type alone is weaker |
+| 5 | Run the non-extended thrust arm on R2_RTH | Run: +$20.3, CI includes 0 | DONE |
+| 6 | AMT TELL: 18 percent win rate, about 6 fires a day, -$26 average loss, ruin probability above 65 percent | 17.8 percent and 5.9 fires a day are right; the live average STOP loss is -$82.8 (35 stops, -$2,896.5), not -$26 (-$24..-$27 is the research mean of non-breaking tells); the 65 percent is Argon's GUESS | PARTLY WRONG, conclusion (tell is a drawdown risk) not rejected; the user decides the tell |
+| 7 | DROP BRACKET_BREAKOUT, VWAP_RECLAIM and passive level fades "from live/active" | None of them is live: the live roster is empty by design, only tell, vacuum and turn signal trade | MISREAD, nothing to drop |
+| 8 | STOP_SWEEP + RTH_FLUSH are ideal base-hit engines for an EOD trailing race | RTH_FLUSH has a 780-point stop class (workplan item E; $1,560 on one contract) against a $2,000 trailing limit; STOP_SWEEP's setup is currently silent (decision `rth_shadow_families_silent_since_1023_20261109`) | NOT ADOPTED; merge into four archetypes recorded as an idea (the user classifies families) |
+| 9 | Option (c) overlay plus (a) location + flow exit on the market setups; reject (b) | Same as the plan already built (forward logger, row 33 tags) | AGREED |
+| 10 | The live vacuum entry should not fire a continuation entry into an at_boundary level when extended; use a second thrust (after a reset below |Z| 0.5) as its exit | An inference from rows entered AT a boundary; not tested on vacuum events; the earlier extension-skip test was NOT SHOWN. The row 33 tags log every vacuum fire with its location | REGISTERED as a testable hypothesis (vacuum fwd 30-bar by extension x location); NO live change |
+| 11 | Multiplicity: p 0.003 is one of 3 tests, about 18-25 in the sub-program | Counted tests in the capitulation program: A5 2, A6.2 2, A8 2, A9 2, A10 3 = 11 (not 18-25; his figure is a GUESS) | The weight is moderate; the ITT and the static-target control matter more |
+| 12 | Replicate on the 2023-25 backfill; forward demands: 35 events on 20 days, conditional > +$30, ITT > 0, kill at 20 events if the estimate is negative | Replication: sensible (H - C0 does not use the synthetic A; 500V thrust events are exact; the backfill entry times and tags are the synthetic part). The kill-on-estimate rule contradicts co-025 | REPLICATION registered (Phase 1 first, user's go); promotion floor 35 / 20 and ITT condition ADOPTED (A11.1); kill on a negative estimate DECLINED |
+| 13 | Globex: 500V ROC10 is mis-specified overnight; onsets cluster at London and 08:30; the origin episode is a tail event; use a time-of-day baseline or faster bars | Onset clustering and the 99.2nd percentile CONFIRMED (counts above); "fix" untested | Globex stays shadow-only; the variant (time-of-day baseline or ONR20 extension) REGISTERED as an idea |
+| 14 | Other order-flow exits (absorption at the extreme, book thinning, delta exhaustion, tape-speed climax), outcome-blind screen first | Reasonable ideas; none run | REGISTERED as ideas for the L2 sessions, nothing built |
+
+## Where this leaves the idea
+The honest status: capitulation after an extended thrust at a boundary in RTH marks real post-thrust mean reversion (+$72 per event on the rows where it fires; extension matters), but as a REPLACEMENT for the target it does not beat what the setups already do (ITT -$1.0) and a matched price target captures about the same. The one positive unconditional cell is the defended-pivot RTH rows (H - A +$24.0 [+4.3, +44.4] on 143 rows, 19 with a thrust, driven mostly by C0 itself, +$15.9): post-hoc, one of nine strata, a forward-test lead (F2 in A11.1), not a finding.

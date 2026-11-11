@@ -1,0 +1,5 @@
+import { recordClaim } from '../record_claim.mjs';
+const r = await recordClaim({ slug: 'vacuum_take_hold_20261110', sourceFile: 'scratch/vacuum_take_look_20261110/output_hold.txt', sourceDate: '2026-11-10', sampleSize: 9116,
+  claimText: 'Vacuum item 1 amendment A1 (look 274, descriptive, 0 counted tests, explore): LONGER HOLD CHANGES NOTHING. Net points per trade of the stop/hold result, excess over the same bars in both directions: RTH hold 30 / 60 / 120 bars -0.196 [-0.779, +0.378] / -0.122 [-0.738, +0.516] / -0.034 [-0.709, +0.642]; Globex +0.031 [-1.265, +1.302] / +0.594 [-0.940, +2.090] / +0.534 [-1.221, +2.260]. Extra MFE_pre in stop units stays about zero at every hold (RTH -0.004 / +0.001 / +0.007; Globex -0.001 / -0.003 / -0.008). The excursion grows with the hold (real MFE_pre 1.05 -> 1.66 sd RTH) exactly as much for the opposite direction. Parked, not retired.',
+  rigorStatus: 'not_checked', status: 'PROVISIONAL', unblockCondition: 'forward vacuum rows (30 taken) and a larger depth-era sample', extra: { look: 274, tests: 0 } });
+console.log('claim', r.slug || 'ok'); process.exit(0);

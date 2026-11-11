@@ -1,8 +1,8 @@
-# Research index (generated 2026-11-09 by scripts/build_research_index.mjs; do not edit by hand)
+# Research index (generated 2026-11-11 by scripts/build_research_index.mjs; do not edit by hand)
 
 One entry per pre-registration, scope or design document dated 2026-10-25 or later. Looks come from the ledger `research_looks`, claims from `RESEARCH_CLAIM`. The text after "claim" is the claim's own wording, not a summary. Rebuild after adding a doc, a look or a claim; `scripts/check_research_organized.mjs` fails if this file is stale or a doc is missing.
 
-125 documents · 156 looks since 2026-10-25 · 1037 claims since 2026-10-25
+158 documents · 226 looks since 2026-10-25 · 1102 claims since 2026-10-25
 
 ## NEXT_STEPS_SCOREBOARD_AND_BAR_STUDIES_SCOPE_20261025
 Scope: roster scoreboard + bar-level context studies — 2026-10-25
@@ -13,7 +13,7 @@ Scope: roster scoreboard + bar-level context studies — 2026-10-25
 Roster scoreboard — pre-registration (2026-10-25)
 - Looks: none logged against this doc (design/scope, or run under another prereg)
 - Claims (1):
-  - `roster_scoreboard_20261025` [day_blocked_bootstrap / PROVISIONAL]: Roster scoreboard since 2026-10-25 (11 trading days, 2026-10-25..2026-11-06). VERDICT: NOT_SHOWN_YET. Per-day account view, roster-only minus take-all: mean -$4.38/day, day-blocked 95% CI [-$456.92, +$454.53], halves -$88.10 / +$6
+  - `roster_scoreboard_20261025` [day_blocked_bootstrap / PROVISIONAL]: Roster scoreboard since 2026-10-25 (15 trading days, 2026-10-25..2026-11-11). VERDICT: NOT_SHOWN_YET. Per-day account view, roster-only minus take-all: mean +$160.32/day, day-blocked 95% CI [-$206.23, +$535.63], halves -$203.21 / 
 
 ## BAR_CONTEXT_STUDIES_PREREG_A_20261026
 Bar-level context studies — Part A: overnight-to-RTH (pre-registration, 2026-10-25)
@@ -652,6 +652,54 @@ Pre-registration: where do institutions get involved? Pace x vacuum x ROC expans
 - Looks (10): #189 vacuum_original_idea (EXPLORE, 10 tests, 2026-11-08); #190 vacuum_original_idea (EXPLORE, 12 tests, 2026-11-08); #193 vacuum_original_idea (EXPLORE, 6 tests, 2026-11-08); #194 vacuum_original_idea (EXPLORE, 5 tests, 2026-11-08); #195 vacuum_original_idea (EXPLORE, 2 tests, 2026-11-09); #196 vacuum_original_idea (EXPLORE, 2 tests, 2026-11-09); #197 vacuum_original_idea (EXPLORE, 3 tests, 2026-11-09); #198 vacuum_original_idea (EXPLORE, 4 tests, 2026-11-09); #199 vacuum_original_idea (EXPLORE, 4 tests, 2026-11-09); #200 vacuum_original_idea (EXPLORE, 3 tests, 2026-11-09)
 - Claims: none recorded against this doc
 
+## CAPITULATION_EXIT_ALL_SETUPS_PREREG_20261109
+Capitulation as an EXIT for the system's other setups, tested on WIDE-BRACKET rows of every setup (row 30 amendment A6, row 35 stage 2). PRE
+- Looks (1): #226 capitulation_exit_shadow_20261109 (EXPLORE, 2 tests, 2026-11-09)
+- Claims: none recorded against this doc
+
+## CAPITULATION_EXIT_DEFENDED_PREREG_20261109
+Capitulation exit on the DEFENDED-LEVEL setups, explore backtest events with their own live exits (row 30 amendment A9). PRE-REGISTRATION, F
+- Looks (1): #230 capitulation_exit_shadow_20261109 (EXPLORE, 2 tests, 2026-11-09)
+- Claims: none recorded against this doc
+
+## CAPITULATION_EXIT_FLUSH_PREREG_20261109
+Capitulation exit on the FLUSH setups, explore backtest events with their own simulated exits (row 30 amendment A8). PRE-REGISTRATION, FROZE
+- Looks (1): #229 capitulation_exit_shadow_20261109 (EXPLORE, 2 tests, 2026-11-09)
+- Claims: none recorded against this doc
+
+## CAPITULATION_EXIT_SHADOW_PREREG_20261109
+Capitulation as an EXIT overlay on the system's own setups: FORWARD SHADOW with a defended-level tag (row 30). PRE-REGISTRATION, FROZEN 2026
+- Looks (6): #208 capitulation_exit_shadow_20261109 (FORWARD, 0 tests, 2026-11-09); #212 capitulation_exit_shadow_20261109 (EXPLORE, 0 tests, 2026-11-09); #219 capitulation_exit_shadow_20261109 (EXPLORE, 0 tests, 2026-11-09); #220 capitulation_exit_replay_20261109 (EXPLORE, 0 tests, 2026-11-09); #223 capitulation_exit_shadow_20261109 (EXPLORE, 0 tests, 2026-11-09); #225 capitulation_exit_shadow_20261109 (EXPLORE, 2 tests, 2026-11-09)
+- Claims (1):
+  - `capitulation_exit_shadow_20261109` [not_checked / PROVISIONAL]: REGISTERED, NOT RUN, LOGGER NOT BUILT. Row 30: for open SHORT/LONG setup rows (ACTIVE/SHADOW, cluster primary), a same-direction ROC10 expansion onset with extension in the rolling top tercile is the virtual exit (next-bar open); 
+
+## CAPITULATION_EXIT_SWEEP_FORWARD_PREREG_20261109
+Capitulation exit on FAILED_SWEEP_REVERSAL: FORWARD test C3 (row 30 amendment A7). PRE-REGISTRATION, FROZEN 2026-11-09 night before any forw
+- Looks (1): #227 capitulation_exit_shadow_20261109 (FORWARD, 1 tests, 2026-11-09)
+- Claims (1):
+  - `capitulation_exit_sweep_forward_20261109` [not_checked / PROVISIONAL]: REGISTERED, forward. Hint from the all-setups replay: capitulation exit on FAILED_SWEEP_REVERSAL +$52.3/event over 43 events (p 0.013, post-hoc split). C3 = forward-only counted test on that setup, floor 20 events / 10 days. The s
+
+## CAPITULATION_PROTECTED_ARM_PREREG_20261109
+Protected hold: stop to breakeven when the row's own target is reached, then hold to the capitulation (arm P / HP; row 30 amendment A12). PR
+- Looks (1): #238 capitulation_exit_shadow_20261109 (EXPLORE, 2 tests, 2026-11-09)
+- Claims: none recorded against this doc
+
+## CAPITULATION_REPLACE_TARGET_FORWARD_PREREG_20261109
+Capitulation REPLACES the target: FORWARD test F1 (row 30 amendment A11). PRE-REGISTRATION, FROZEN 2026-11-09 night before any forward row i
+- Looks (2): #233 capitulation_exit_shadow_20261109 (FORWARD, 1 tests, 2026-11-09); #235 capitulation_exit_shadow_20261109 (FORWARD, 1 tests, 2026-11-09)
+- Claims (1):
+  - `capitulation_replace_target_forward_20261109` [not_checked / PROVISIONAL]: REGISTERED, forward. Replicates the A10 lead (RTH boundary rows, hold-to-capitulation minus hold-to-expiry with the original stop, +$72.3 per event on 59 events) on rows fired from 2026-11-09 14:30 ET, one counted test F1, floor 2
+
+## CAPITULATION_REPLACES_TARGET_PREREG_20261109
+Capitulation REPLACES the target: hold with the original stop until the capitulation, by entry location (row 30 amendment A10). PRE-REGISTRA
+- Looks (4): #231 capitulation_exit_shadow_20261109 (EXPLORE, 3 tests, 2026-11-09); #232 capitulation_exit_shadow_20261109 (EXPLORE, 0 tests, 2026-11-09); #234 capitulation_exit_shadow_20261109 (EXPLORE, 0 tests, 2026-11-09); #237 capitulation_exit_shadow_20261109 (EXPLORE, 0 tests, 2026-11-09)
+- Claims: none recorded against this doc
+
+## CAPITULATION_REPLACES_TARGET_REPLICATION_PREREG_20261109
+Replication of the A10 lead on the 2023-25 explore BACKFILL level fades (row 30 amendment A10.3). PRE-REGISTRATION, FROZEN 2026-11-09 night 
+- Looks (1): #236 capitulation_exit_shadow_20261109 (EXPLORE, 2 tests, 2026-11-09)
+- Claims: none recorded against this doc
+
 ## DAY_STATE_TELL_GATE_FORWARD_PREREG_20261109
 AMT tell LONG gate on the RTH liquidation day state: FORWARD pre-registration (frozen 2026-11-09, before the gate has ever fired)
 - Looks: none logged against this doc (design/scope, or run under another prereg)
@@ -662,9 +710,161 @@ Flush: skip events whose box is too wide for the day (scale-free). PRE-REGISTRAT
 - Looks (2): #202 flush_box_width_skip (EXPLORE, 3 tests, 2026-11-09); #203 flush_box_width_skip (EXPLORE, 0 tests, 2026-11-09)
 - Claims: none recorded against this doc
 
+## LEVEL_CONFLUENCE_TAGS_PREREG_20261109
+Level confluence as an input to the market setups: TAGGING (register row 33). REGISTERED 2026-11-09 night; tagging BUILT, counted contrasts 
+- Looks (1): #228 level_confluence_tags_20261109 (FORWARD, 0 tests, 2026-11-09)
+- Claims (1):
+  - `level_confluence_tags_20261109` [not_checked / PROVISIONAL]: Row 33 level-confluence tagging BUILT and logging (no outcome read): 117 fires tagged (tell 61 / 9 days, vacuum 47 / 2 days, turn 9 / 1 day). Counted contrasts (3, Holm 0.10, forward days only, binary tags with cutoffs derived fro
+
+## SETUP_LIBRARY_CENSUS_PREREG_20261109
+Setup library census and overlay tests by structural group (row 35). REGISTERED 2026-11-09; NOT BUILT, NOT RUN
+- Looks (1): #222 setup_library_census_20261109 (EXPLORE, 0 tests, 2026-11-09)
+- Claims (1):
+  - `setup_library_census_20261109` [not_checked / PROVISIONAL]: REGISTERED, NOT RUN. Row 35: a descriptive census of the ~106 setup families (N, days, win rate, sum/N, day-blocked CI, rigor, thrust overlap) and counted capitulation-exit / vacuum-entry tests per structural group (flush, defende
+
+## TELL_VS_ROC_COINCIDENCE_PREREG_20261109
+AMT tell fires vs ROC10 thrusts: coincidence, lead/lag, and thrust-present vs thrust-absent (row 31). PRE-REGISTRATION, FROZEN 2026-11-09 be
+- Looks (5): #209 tell_roc_coincidence_20261109 (EXPLORE, 0 tests, 2026-11-09); #211 tell_roc_coincidence_20261109 (EXPLORE, 1 tests, 2026-11-09); #214 tell_roc_coincidence_20261109 (EXPLORE, 0 tests, 2026-11-09); #216 tell_roc_coincidence_20261109 (EXPLORE, 0 tests, 2026-11-09); #218 tell_roc_coincidence_20261109 (EXPLORE, 1 tests, 2026-11-09)
+- Claims (1):
+  - `tell_roc_coincidence_20261109` [not_checked / PROVISIONAL]: REGISTERED, NOT RUN. Row 31: (T1) outcome-blind coincidence lift of tell entries with a causal same-direction ROC10 onset in [t-W, t] (W = 10 x median same-hour bar duration) against random bars matched on date, hour AND pace terc
+
 ## TURN_SIGNAL_SIM_FORWARD_PREREG_20261109
 Turn signal: Sim1 forward test (frozen 2026-11-09 BEFORE any order; user: "I want to see trades fire ... like in Sierra chart")
 - Looks: none logged against this doc (design/scope, or run under another prereg)
+- Claims: none recorded against this doc
+
+## VACUUM_CONTEXT_EXIT_PREREG_20261109
+Vacuum expansion rule: preceding-move context (row 29) and ratchet exit (row 28). PRE-REGISTRATION, FROZEN 2026-11-09 before any outcome of 
+- Looks (5): #207 vacuum_context_exit_20261109 (EXPLORE, 0 tests, 2026-11-09); #210 vacuum_context_exit_20261109 (EXPLORE, 0 tests, 2026-11-09); #213 vacuum_context_exit_20261109 (EXPLORE, 0 tests, 2026-11-09); #215 vacuum_context_exit_20261109 (EXPLORE, 0 tests, 2026-11-09); #217 vacuum_context_exit_20261109 (EXPLORE, 4 tests, 2026-11-09)
+- Claims (1):
+  - `vacuum_context_exit_20261109` [not_checked / PROVISIONAL]: REGISTERED, NOT RUN. Rows 28+29: on the live ROC10 expansion rule, (A) skipping thrusts that follow an extended move (top tercile of 240-trading-minute displacement in ADR20, expanding window) and (B) a ratcheting 2.5 x EMA10(TR) 
+
+## VACUUM_ENTRY_TIMING_PREREG_20261109
+Vacuum thrust as an ENTRY TRIGGER for the system's other setups (row 34). REGISTERED 2026-11-09 (user: "consider starting the trade with a v
+- Looks (2): #221 vacuum_entry_timing_20261109 (EXPLORE, 0 tests, 2026-11-09); #224 vacuum_entry_timing_20261109 (EXPLORE, 0 tests, 2026-11-09)
+- Claims (1):
+  - `vacuum_entry_timing_20261109` [not_checked / PROVISIONAL]: REGISTERED, NOT RUN, NOT BUILT. Row 34: enter a setup row at the next bar open after the first same-direction ROC10 thrust inside its life instead of at its own fire; needs an entry-price-only control, did-it-fill check, no-thrust
+
+## VACUUM_LOCATION_EXTENSION_PREREG_20261109
+Vacuum thrust entries by LOCATION and EXTENSION (explore lead; row 33 historical version and Argon's boundary-exhaustion hypothesis). PRE-RE
+- Looks (1): #239 vacuum_location_extension_20261109 (EXPLORE, 4 tests, 2026-11-09)
+- Claims (1):
+  - `vacuum_boundary_exhaustion_extended_retired_20261109` [not_checked / STALE]: RETIRED under co-025 (two pre-registered nulls, each MDE below 0.015 ADR20): the hypothesis that an EXTENDED vacuum thrust starting at a Tier-1 boundary does worse than other extended thrusts (Argon, 2026-11-09). L1_RTH +1.29 pt (
+
+## CAPITULATION_DEFENDED_REENGAGE_PREREG_20261110
+Capitulation at a defended level: exit, then which re-engagement pays? (row 42). PRE-REGISTRATION, FROZEN 2026-11-10 before any event is cou
+- Looks (3): #252 capitulation_defended_reengage_20261110 (EXPLORE, 0 tests, 2026-11-10); #253 capitulation_defended_reengage_20261110 (EXPLORE, 14 tests, 2026-11-10); #256 capitulation_defended_reengage_20261110 (EXPLORE, 0 tests, 2026-11-10)
+- Claims (2):
+  - `capitulation_defended_reengage_20261110` [not_checked / PROVISIONAL]: NOT SHOWN (2026-11-10). Row 42, explore 2023-04..2025-05: after a live turn-signal capitulation climax (extension in the rolling top tercile), BOUNCE / CONTINUE / RESUME at 30 bars, RTH N 738 and Globex N 200: all net negative or 
+  - `capitulation_reengage_null_mc_20261110` [not_checked / CONFIRMED]: NULL MONTE CARLO PASSED for row 42: 1000 per-day sign-flip iterations over the 14 tests (8 defended-split, mostly parked by the gate, plus 6 all-climax), Holm 0.10, false-pass 0.095 (required <= 0.10).
+
+## CAPITULATION_FAIL_FORK_PREREG_20261110
+Capitulation at a major level: FAIL (it keeps going, little bounce) vs BOUNCE, and the causal fork that trades each (row 43). PRE-REGISTRATI
+- Looks (2): #254 capitulation_fail_fork_20261110 (EXPLORE, 0 tests, 2026-11-10); #255 capitulation_fail_fork_20261110 (EXPLORE, 10 tests, 2026-11-10)
+- Claims (2):
+  - `capitulation_fail_fork_20261110` [not_checked / PROVISIONAL]: NOT SHOWN (2026-11-10). Row 43 (user definition: capitulation at a major level that keeps going with little bounce = FAIL), explore 2023-04..2025-05, causal fork: RTH FAIL-continuation entry net -0.42 (at-level N 106: -2.39), BOUN
+  - `capitulation_fail_null_mc_20261110` [not_checked / CONFIRMED]: NULL MONTE CARLO for row 43: 1000 iterations (per-day sign flips of the entry outcomes, event-level permutation of the at-level label for the share contrast), 10 tests, Holm 0.10: false-pass 0.100, exactly at the required <= 0.10 
+
+## CAPITULATION_SPEED_EXIT_PREREG_20261110
+Extreme bar speed at a capitulation climax as an EXIT signal (row 44). PRE-REGISTRATION, FROZEN 2026-11-10 before any speed-split outcome is
+- Looks (6): #257 capitulation_speed_exit_20261110 (EXPLORE, 0 tests, 2026-11-10); #258 capitulation_speed_exit_20261110 (EXPLORE, 6 tests, 2026-11-10); #259 capitulation_speed_exit_20261110 (EXPLORE, 0 tests, 2026-11-10); #260 capitulation_speed_exit_20261110 (EXPLORE, 0 tests, 2026-11-10); #261 capitulation_speed_exit_20261110 (EXPLORE, 1 tests, 2026-11-10); #266 capitulation_speed_exit_20261110 (SEALED, 1 tests, 2026-11-10)
+- Claims (3):
+  - `capitulation_speed_exit_20261110` [not_checked / PROVISIONAL]: NOT SHOWN in the registered direction; REVERSED in RTH (post-hoc lead) (2026-11-10). Row 44, explore 2023-04..2025-05, RTH N 676 climaxes: extreme bar speed (fastest cluster bar in the lowest rolling tercile of same-hour pace) is 
+  - `capitulation_speed_null_mc_20261110` [not_checked / CONFIRMED]: NULL MONTE CARLO PASSED for row 44: 1000 per-day sign-flip iterations over 6 tests, Holm 0.10, false-pass 0.069 (required <= 0.10).
+  - `capitulation_speed_sealed_20261110` [not_checked / PROVISIONAL]: NOT CONFIRMED (2026-11-10, SEALED look 266 spent): reversed RTH speed lead on the sealed 2025-05-17..2026-06-14 window: 112 extreme-fast / 192 not-fast climaxes (gate met, 83 days). D = +7.91 pt over 30 bars [-2.93, +18.63], one-s
+
+## GLOBEX_BAR_SIZE_PREREG_20261110
+Globex vacuum on 100- and 125-contract bars (Argon's original VB=100 idea), row 39. PRE-REGISTRATION, FROZEN 2026-11-10 before any outcome i
+- Looks (2): #246 globex_barsize_20261110 (EXPLORE, 0 tests, 2026-11-10); #247 globex_barsize_20261110 (EXPLORE, 16 tests, 2026-11-10)
+- Claims (2):
+  - `globex_barsize_20261110` [not_checked / PROVISIONAL]: NOT SHOWN (2026-11-10). Row 39, explore 2023-03..2025-05, 516 Globex sessions per size: ROC onset rule on 100V and 125V bars (ROC 3 and 10, hold 30 bars or contract-matched), 16 one-sided day-blocked tests, Holm 0.10 survivors non
+  - `globex_barsize_null_mc_20261110` [not_checked / CONFIRMED]: NULL MONTE CARLO PASSED for row 39: 200 per-day sign-flip iterations over 16 cells, family-wise false-pass 0.06 (required <= 0.10).
+
+## GLOBEX_BIG_BARS_PREREG_20261110
+Globex vacuum on 1000- and 2000-contract bars (row 41). PRE-REGISTRATION, FROZEN 2026-11-10 before any outcome is read
+- Looks (2): #250 globex_bigbars_20261110 (EXPLORE, 0 tests, 2026-11-10); #251 globex_bigbars_20261110 (EXPLORE, 16 tests, 2026-11-10)
+- Claims (2):
+  - `globex_bigbars_20261110` [not_checked / PROVISIONAL]: NOT SHOWN (2026-11-10). Row 41, explore 2023-03..2025-05, 516 sessions: Globex ROC3/ROC10 onset on 1000V and 2000V bars, hold 30 bars or contract-matched, 16 one-sided day-blocked tests, Holm 0.05 (pre-declared fallback; null 0.04
+  - `globex_bigbars_null_mc_20261110` [not_checked / CONFIRMED]: NULL MONTE CARLO for row 41: 1000 iterations at Holm 0.10 gave 0.103 (> 0.10), so the pre-declared fallback applied (real run at Holm 0.05); re-estimated 1000 iterations seed 785 at Holm 0.05: see null_gate.json, passed.
+
+## GLOBEX_M4_VWAP_FADE_PREREG_20261110
+Globex climax fade toward the overnight VWAP (Argon M4, data-derived), row 38. PRE-REGISTRATION, FROZEN 2026-11-10 before any outcome is rea
+- Looks (2): #244 globex_m4_vwap_fade_20261110 (EXPLORE, 0 tests, 2026-11-10); #245 globex_m4_vwap_fade_20261110 (EXPLORE, 0 tests, 2026-11-10)
+- Claims (1):
+  - `globex_m4_vwap_fade_20261110` [not_checked / PROVISIONAL]: PARKED BY THE POWER GATE (2026-11-10), nothing counted. Row 38, explore 2023-03..2025-05: with the data-derived 0.90 stretch cutoff (median 7.93 EMA10(TR) units) only 91 fade events (65 days) < 100, so M1-M4 were parked outcome-bl
+
+## GLOBEX_ROC_LENGTH_SWEEP_PREREG_20261110
+Globex vacuum: ROC length sweep 1..20 (row 37). PRE-REGISTRATION, FROZEN 2026-11-10 before any sweep outcome is read
+- Looks (2): #242 globex_roc_sweep_20261110 (EXPLORE, 0 tests, 2026-11-10); #243 globex_roc_sweep_20261110 (EXPLORE, 40 tests, 2026-11-10)
+- Claims (2):
+  - `globex_roc_sweep_20261110` [not_checked / PROVISIONAL]: NOT SHOWN (2026-11-10). Row 37: Globex expansion rule at ROC length 1..20 on explore 2023-03..2025-05 (~513 days): 40 one-sided day-blocked tests, Holm 0.10 survivors none. Pre-cost mean signed 30-bar change ranges -1.42 (L8) to +
+  - `globex_roc_sweep_null_mc_20261110` [not_checked / CONFIRMED]: NULL MONTE CARLO PASSED for row 37: 200 per-day sign-flip iterations over 40 cells, family-wise false-pass 0.045 (required <= 0.10).
+
+## GLOBEX_ROC3_VACUUM_PREREG_20261110
+Globex version of the vacuum: ROC3 against ROC10 on the user's ORIGINAL expansion rule (row 36). PRE-REGISTRATION, FROZEN 2026-11-10 before 
+- Looks (2): #240 globex_roc3_vacuum_20261110 (EXPLORE, 0 tests, 2026-11-10); #241 globex_roc3_vacuum_20261110 (EXPLORE, 5 tests, 2026-11-10)
+- Claims (2):
+  - `globex_roc3_vacuum_20261110` [not_checked / PROVISIONAL]: NOT SHOWN (2026-11-10). Row 36, explore 2023-03..2025-05 Globex, ~513 days: ROC3 continuation net -1.59 pt [-3.36, +0.10], reversion -2.41, ROC3 minus ROC10 +0.43 [-1.46, +2.41]; slow-hours +0.14 (N 284), fast-hours -1.96; Holm 0.
+  - `globex_roc3_null_mc_20261110` [not_checked / CONFIRMED]: NULL MONTE CARLO PASSED for row 36: 200 iterations of per-day sign flips (cost 0, 1000 bootstrap draws, same gate and Holm 0.10) gave a family-wise false-pass rate of 0.055 (required <= 0.10).
+
+## GLOBEX_WINDOWS_PREREG_20261110
+Globex clock-window tests: Asian / overnight, London, pre-market (row 40). PRE-REGISTRATION, FROZEN 2026-11-10 before any outcome is read
+- Looks (2): #248 globex_windows_20261110 (EXPLORE, 0 tests, 2026-11-10); #249 globex_windows_20261110 (EXPLORE, 10 tests, 2026-11-10)
+- Claims (2):
+  - `globex_windows_20261110` [not_checked / PROVISIONAL]: NOT SHOWN (2026-11-10). Row 40, explore 2023-03..2025-05, 516 sessions: ASIA fade, LONDON and PRE breakout (ROC3 spike + VWAP side + 20-bar breakout) with a 30-bar HOLD or first-climax-hook exit, 500V and 100V, 10 one-sided day-bl
+  - `globex_windows_null_mc_20261110` [not_checked / CONFIRMED]: NULL MONTE CARLO for row 40: the first estimate FAILED (200 iterations, Holm 0.10: 0.110; 1000 iterations seed 782: 0.112, required <= 0.10). Amendment A1 (before any outcome): the real run uses Holm 0.05; re-estimated 1000 iterat
+
+## TELL_GEOMETRY_NULL_PREREG_20261110
+Does the tell know the direction? Geometry-matched null on the explore tells (pre-registered 2026-11-10 night, BEFORE any outcome of this te
+- Looks (1): #271 tell_geometry_null_20261110 (EXPLORE, 1 tests, 2026-11-10)
+- Claims (1):
+  - `tell_geometry_null_20261110` [day_blocked_bootstrap / PROVISIONAL]: NOT SHOWN on explore (2026-11-10 night, look 271, 1,757 V1 tells on 488 sessions, 3 excluded): the tell touches the range edge before its stop 20.66 percent of the time against 20.57 percent for a direction-blind placebo with the 
+
+## TELL_LIVE_GAP_C1_PREREG_20261110
+C1: Why is the live tell book far below its explore history? (pre-registered 2026-11-10 night, BEFORE any live-vs-explore comparison is comp
+- Looks (1): #267 tell_live_gap_c1_20261110 (EXPLORE, 2 tests, 2026-11-10)
+- Claims (2):
+  - `tell_live_gap_c1_20261110` [not_checked / PROVISIONAL]: C1 (2026-11-10, look 267): live tell V1 model book = 53 closed trades on 9 dates (RTH only), mean -$29.58 per trade, win rate 15.1% vs explore +$1.94, 30.0%. S1 day-blocked luck test: live pooled mean at percentile 0.037 of 9-day 
+  - `tell_live_gap_c1_placebo_20261110` [not_checked / PROVISIONAL]: C1 S3 time placebo + fills audit (2026-11-10, look 267): live window (48 trades, 8 dates): random-time random-direction entries with the tell stop distances average -$8.8/trade (5th-95th -39.4..+28.3, 200 sets); the real tell -$40
+
+## TELL_SCALE_AND_TREND_PREREG_20261110
+C1 follow-up: does the tell's result depend on the stop's size relative to volatility, and on the direction of the prior trend? (pre-registe
+- Looks (1): #268 tell_scale_trend_20261110 (EXPLORE, 2 tests, 2026-11-10)
+- Claims (1):
+  - `tell_scale_trend_20261110` [not_checked / PROVISIONAL]: NOT SHOWN on both counted tests (2026-11-10, look 268, explore 1,750 tell trades): T1 forced scale-free stop: 0.108 x ADR20 -$4.00, 0.069 x ADR20 -$2.10 per trade (unforced +$1.94); paired R_EXP - R_LIVE -$1.90 [-4.83, +1.33] p 0.
+
+## UNIFIED_EXIT_LOCK_PREREG_20261110
+One unified exit family: a profit-gated and capitulation-gated STOP LOCK with the speed split, scored on mean AND on the prop-account race (
+- Looks (2): #263 unified_exit_lock_20261110 (EXPLORE, 0 tests, 2026-11-10); #264 unified_exit_lock_20261110 (EXPLORE, 5 tests, 2026-11-10)
+- Claims (2):
+  - `unified_exit_lock_20261110` [not_checked / PROVISIONAL]: NOT SHOWN; the lock HURTS (2026-11-10). Row 45, explore 2023-25: lock half the open gain once the excursion reaches 0.15 ADR20 on the 1,750 tell entries: -$2.85 per trade [-7.13, +0.92] p 0.923 (typical acted trade +$19 median, wi
+  - `unified_exit_lock_null_mc_20261110` [not_checked / CONFIRMED]: NULL MONTE CARLO PASSED for row 45: 1000 per-day sign-flip iterations over the 5 cells (K expected parked by the gate), Holm 0.10, false-pass 0.082 (required <= 0.10). Parity asserted first: the tell V1 replay reproduces the store
+
+## VACUUM_BAR6_EXIT_PREREG_20261110
+Vacuum: the bar-6 DETERIORATING exit (user 2026-11-10 night: "can we test bar 6 deteriorating exits with the liquidity pull vacuum trade? th
+- Looks (2): #275 vacuum_bar6_exit_20261110 (EXPLORE, 4 tests, 2026-11-10); #276 vacuum_bar6_exit_20261110 (EXPLORE, 0 tests, 2026-11-10)
+- Claims: none recorded against this doc
+
+## VACUUM_LOCATION_PREREG_20261110
+Vacuum: where does the move happen, and does location (open air vs congestion) matter? (pre-registered 2026-11-10 night, BEFORE any outcome 
+- Looks (1): #270 vacuum_location_20261110 (EXPLORE, 4 tests, 2026-11-10)
+- Claims (1):
+  - `vacuum_location_20261110` [not_checked / PROVISIONAL]: NOT SHOWN (2026-11-10 night, look 270, explore 9,116 vacuum trades): drift decomposition: the move is entirely BEFORE the trigger (RTH pre-early +13.28, pre-late +10.92 points) and every post-entry window is ~0 (RTH +0.03 / +0.07 
+
+## VACUUM_ML_STOP_EXIT_PREREG_20261110
+ML for the VACUUM's stop distance and exit (pre-registered 2026-11-10 night, BEFORE any model is fit or any outcome of these tests is read)
+- Looks (1): #269 vacuum_ml_stop_exit_20261110 (EXPLORE, 4 tests, 2026-11-10)
+- Claims (1):
+  - `vacuum_ml_stop_exit_20261110` [not_checked / PROVISIONAL]: NOT SHOWN, NO INFORMATION (2026-11-10 night, explore 9,116 vacuum trades, walk-forward by quarter, LightGBM depth 3): V1 learned stop multiplier {1.5,2.0,2.5,3.5} x EMA10(TR) minus the best train-chosen constant: RTH +0.114 pt/tra
+
+## VACUUM_TAKE_PREREG_20261110
+Vacuum item 1: is there anything to take? Favourable vs adverse run against a direction-blind placebo (pre-registered 2026-11-10 night, BEFO
+- Looks (2): #272 vacuum_take_20261110 (EXPLORE, 0 tests, 2026-11-10); #274 vacuum_take_20261110 (EXPLORE, 0 tests, 2026-11-10)
+- Claims: none recorded against this doc
+
+## VACUUM_THIN_VS_CROWDED_PREREG_20261110
+Vacuum item 2: thin versus crowded (the user's duration idea, candidate B) (pre-registered 2026-11-10 night, BEFORE any outcome of this test
+- Looks (1): #273 vacuum_thin_crowded_20261110 (EXPLORE, 4 tests, 2026-11-10)
 - Claims: none recorded against this doc
 
 ## Looks not tied to a document listed above
@@ -723,3 +923,5 @@ Run under an older prereg, a script-level prereg, or none. Each needs a prereg r
 - #204 2026-11-09 `vacuum_live` (EXPLORE, 0 tests) prereg: none; script: scripts/vacuum_trail_illustration_20261109.mjs; claim: vacuum_trail_illustration_20261109
 - #205 2026-11-09 `vacuum_live` (EXPLORE, 0 tests) prereg: none; script: scripts/vacuum_preceding_move_illustration_20261109.mjs; claim: vacuum_preceding_move_illustration_20261109
 - #206 2026-11-09 `capitulation_exit` (EXPLORE, 0 tests) prereg: none; script: scripts/capitulation_exit_illustration_20261109.mjs; claim: capitulation_exit_illustration_20261109
+- #262 2026-11-10 `exit_profile_mfe_20261110` (EXPLORE, 0 tests) prereg: none; script: scripts/vacuum_sim/exit_profile.py; claim: exit_profile_mfe_20261110_descriptive
+- #265 2026-11-10 `runner_flow_exit_20261110` (EXPLORE, 0 tests) prereg: docs/OPEN_THREADS.md; script: scripts/vacuum_sim/runner_flow_count.py; claim: runner_flow_exit_20261110

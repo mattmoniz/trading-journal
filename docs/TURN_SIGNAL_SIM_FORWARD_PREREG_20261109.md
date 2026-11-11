@@ -19,3 +19,6 @@ Confirm: extend with the trader's exits (ROC hook, zero-cross) and the ratchet a
 
 ## Known limits (stated before data)
 Proxy Ratio live; Stage 1 recall on the trader's seen examples was poor with the v1 spike definition (the cluster variant is the live Stage 1); about one order per three sessions means 20 events take roughly 3 months; one MNQ on a sim account, outcomes are small-sample and heavy-tailed; the 18:19 and 04:36 examples are 11-05 / 11-06 sessions (seen, excluded).
+
+## Amendment A1 (2026-11-09 night, after Argon's follow-up; BEFORE any forward qualified event was judged)
+The Stage-1 cluster definition was shaped while looking at the sessions 2026-11-05, 11-06 and 11-09, all of which had very large ranges, so a threshold shaped there may be implicitly tuned for extreme ADR. Added to the floor: the 20 qualified events on 12 days must span at least 5 sessions with ADR20-normalised range below the median and at least 5 above it (median taken over the prior 20 sessions at each event); until both halves are met the verdict stays CONTINUE. Anything shaped by those three sessions is judged ONLY on forward days from 2026-11-10 and is labelled design sample.

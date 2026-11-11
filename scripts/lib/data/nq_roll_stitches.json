@@ -1,0 +1,201 @@
+{
+ "built_at": "2026-11-10 22:04:07.679444",
+ "symbol": "NQ",
+ "from": "2022-12-01",
+ "to": "2026-11-11",
+ "stitches": [
+  {
+   "ts": "2023-03-03 00:02:00",
+   "prev_ts": "2023-03-02 00:00:00",
+   "from": "NQH24",
+   "to": "NQM23",
+   "step_pts": -445,
+   "hole_min": 1442,
+   "in_calendar_helper": false
+  },
+  {
+   "ts": "2023-06-12 00:00:00",
+   "prev_ts": "2023-06-11 23:59:00",
+   "from": "NQM23",
+   "to": "NQU23",
+   "step_pts": 176.5,
+   "hole_min": 1,
+   "in_calendar_helper": true
+  },
+  {
+   "ts": "2023-09-10 18:00:00",
+   "prev_ts": "2023-09-08 16:59:00",
+   "from": "NQU23",
+   "to": "NQZ23",
+   "step_pts": 188.75,
+   "hole_min": 2941,
+   "in_calendar_helper": false
+  },
+  {
+   "ts": "2023-12-11 00:00:00",
+   "prev_ts": "2023-12-10 23:59:00",
+   "from": "NQZ23",
+   "to": "NQH24",
+   "step_pts": 210,
+   "hole_min": 1,
+   "in_calendar_helper": false
+  },
+  {
+   "ts": "2024-03-11 00:00:00",
+   "prev_ts": "2024-03-10 23:59:00",
+   "from": "NQH24",
+   "to": "NQM24",
+   "step_pts": 247.5,
+   "hole_min": 1,
+   "in_calendar_helper": false
+  },
+  {
+   "ts": "2024-06-16 18:00:00",
+   "prev_ts": "2024-06-14 16:59:00",
+   "from": "NQM24",
+   "to": "NQU24",
+   "step_pts": 258.5,
+   "hole_min": 2941,
+   "in_calendar_helper": true
+  },
+  {
+   "ts": "2024-09-16 00:00:00",
+   "prev_ts": "2024-09-15 23:59:00",
+   "from": "NQU24",
+   "to": "NQZ24",
+   "step_pts": 236.5,
+   "hole_min": 1,
+   "in_calendar_helper": true
+  },
+  {
+   "ts": "2024-12-17 00:00:00",
+   "prev_ts": "2024-12-16 23:59:00",
+   "from": "NQZ24",
+   "to": "NQH25",
+   "step_pts": 300.75,
+   "hole_min": 1,
+   "in_calendar_helper": false
+  },
+  {
+   "ts": "2025-03-18 00:00:00",
+   "prev_ts": "2025-03-17 23:59:00",
+   "from": "NQH25",
+   "to": "NQM25",
+   "step_pts": 208.5,
+   "hole_min": 1,
+   "in_calendar_helper": false
+  },
+  {
+   "ts": "2025-06-16 00:00:00",
+   "prev_ts": "2025-06-15 23:59:00",
+   "from": "NQM25",
+   "to": "NQU25",
+   "step_pts": 216.75,
+   "hole_min": 1,
+   "in_calendar_helper": true
+  },
+  {
+   "ts": "2025-09-28 18:00:00",
+   "prev_ts": "2025-09-19 09:29:00",
+   "from": "NQU25",
+   "to": "NQZ25",
+   "step_pts": 166.5,
+   "hole_min": 13471,
+   "in_calendar_helper": false
+  },
+  {
+   "ts": "2025-12-14 18:00:00",
+   "prev_ts": "2025-12-12 16:59:00",
+   "from": "NQZ25",
+   "to": "NQH26",
+   "step_pts": 260.75,
+   "hole_min": 2941,
+   "in_calendar_helper": true
+  },
+  {
+   "ts": "2026-03-15 18:00:00",
+   "prev_ts": "2026-03-13 16:59:00",
+   "from": "NQH26",
+   "to": "NQM26",
+   "step_pts": 164.75,
+   "hole_min": 2941,
+   "in_calendar_helper": true
+  },
+  {
+   "ts": "2026-06-14 18:00:00",
+   "prev_ts": "2026-06-12 16:59:00",
+   "from": "NQM26",
+   "to": "NQU26",
+   "step_pts": 513.25,
+   "hole_min": 2941,
+   "in_calendar_helper": true
+  },
+  {
+   "ts": "2026-09-14 00:00:00",
+   "prev_ts": "2026-09-13 23:59:00",
+   "from": "NQU26",
+   "to": "NQZ26",
+   "step_pts": 296.25,
+   "hole_min": 1,
+   "in_calendar_helper": true
+  }
+ ],
+ "bad_dates": [
+  {
+   "date": "2023-03-06",
+   "reasons": [
+    "STEP_RATIO"
+   ],
+   "step_ratio": 11
+  },
+  {
+   "date": "2023-03-07",
+   "reasons": [
+    "STEP_RATIO"
+   ],
+   "step_ratio": 5.92
+  },
+  {
+   "date": "2023-03-08",
+   "reasons": [
+    "STEP_RATIO"
+   ],
+   "step_ratio": 5.75
+  },
+  {
+   "date": "2023-03-09",
+   "reasons": [
+    "STEP_RATIO"
+   ],
+   "step_ratio": 1.13
+  },
+  {
+   "date": "2025-06-15",
+   "reasons": [
+    "STEP_RATIO"
+   ],
+   "step_ratio": 1.02
+  },
+  {
+   "date": "2025-09-17",
+   "reasons": [
+    "STEP_RATIO"
+   ],
+   "step_ratio": 1.08
+  },
+  {
+   "date": "2025-09-18",
+   "reasons": [
+    "STEP_RATIO"
+   ],
+   "step_ratio": 1.35
+  },
+  {
+   "date": "2025-11-27",
+   "reasons": [
+    "STEP_RATIO"
+   ],
+   "step_ratio": 1.33
+  }
+ ]
+}

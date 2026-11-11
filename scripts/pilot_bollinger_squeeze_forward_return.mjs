@@ -16,6 +16,7 @@
 import { query } from '../server/db.js';
 import { recordClaim } from './record_claim.mjs';
 import fs from 'fs';
+import { loadNqStitches, crossesStitch, touchesBadDate } from './lib/nqRollStitch.mjs';   // 2026-11-10: events whose window spans a contract stitch or bad-bar date are skipped
 
 const BAR_MIN = 60;
 const N = 20, K = 2;
@@ -75,22 +76,27 @@ async function main() {
   for (const h of horizons) { cond[h] = []; uncond[h] = []; }
 
   const idxOf = new Map(mBars.map((b, i) => [b.ts, i]));
+  const SD = loadNqStitches();
+  let skippedCond = 0, skippedUncond = 0;
+  // true when bars a..b (indices) span a stitch / bad-bar date; the same test is applied to the conditional and the unconditional arm
+  const spans = (a, b) => crossesStitch(SD, mBars[a].ts, mBars[b].ts) || touchesBadDate(SD, mBars[a].ts, mBars[b].ts);
   for (const ev of squeezeEvents) {
     const i = idxOf.get(ev.ts);
     const e = mBars[i].close;
     for (const h of horizons) {
       const ex = mBars[i + h];
-      if (ex) cond[h].push(ex.close - e);
+      if (ex) { if (spans(i - N + 1, i + h)) skippedCond++; else cond[h].push(ex.close - e); }
     }
   }
   for (let i = TRAIL_BARS + N; i < mBars.length; i++) {
     const e = mBars[i].close;
     for (const h of horizons) {
       const ex = mBars[i + h];
-      if (ex) uncond[h].push(ex.close - e);
+      if (ex) { if (spans(i - N + 1, i + h)) skippedUncond++; else uncond[h].push(ex.close - e); }
     }
   }
 
+  console.log(`Skipped (stitch / bad-bar date in window): conditional ${skippedCond}, unconditional ${skippedUncond} event-horizon pairs`);
   const mean = a => a.reduce((s, x) => s + x, 0) / a.length;
   let out = `# Bollinger Squeeze Forward-Return Check (${BAR_MIN}-min, N=${N}, K=${K}, bottom decile bandwidth)\n\n`;
   out += `Squeeze events: ${squeezeEvents.length}\n\n| Horizon | N | Conditional | Unconditional | Edge | t(vs 0) |\n|---|---|---|---|---|---|\n`;
@@ -111,7 +117,7 @@ async function main() {
   let priorDrift = [];
   for (const ev of squeezeEvents) {
     const i = idxOf.get(ev.ts);
-    if (i >= 20) priorDrift.push(mBars[i].close - mBars[i - 20].close);
+    if (i >= 20 && !spans(i - 20, i)) priorDrift.push(mBars[i].close - mBars[i - 20].close);
   }
   const meanPriorDrift = priorDrift.length ? mean(priorDrift) : 0;
   out += `\n## Confound check: net drift over the 20 bars BEFORE each squeeze\n`;

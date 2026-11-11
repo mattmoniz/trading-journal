@@ -1,0 +1,6 @@
+import { logLook } from './lib/look_ledger.mjs';
+import { recordClaim } from './record_claim.mjs';
+const prereg = 'docs/GLOBEX_WINDOWS_PREREG_20261110.md';
+console.log('claim', (await recordClaim({ slug: 'globex_windows_null_mc_20261110', claimText: 'NULL MONTE CARLO for row 40: the first estimate FAILED (200 iterations, Holm 0.10: 0.110; 1000 iterations seed 782: 0.112, required <= 0.10). Amendment A1 (before any outcome): the real run uses Holm 0.05; re-estimated 1000 iterations seed 783: 0.054, PASSED.', sourceFile: prereg, sourceDate: '2026-11-10', rigorStatus: 'not_checked', status: 'CONFIRMED', unblockCondition: null, extra: { first_estimates: [0.110, 0.112], final_alpha: 0.05, final_false_pass: 0.054 } })).slug);
+console.log('look', await logLook({ family: 'globex_windows_20261110', dataWindow: 'explore_2023-03-07..2025-05-16 Globex 500V and 100V bars', kind: 'EXPLORE', tests: 10, label: 'RUN row 40: Globex ASIA / LONDON / PRE windows, HOLD and HOOK exits, 500V and 100V, 10 counted tests, Holm 0.05 (amendment A1)', script: 'scripts/vacuum_sim/globex_windows_test.py', prereg, claimSlug: 'globex_windows_20261110', outcome: 'RUN_STARTED', ref: 'globex_windows_20261110_run1' }));
+process.exit(0);

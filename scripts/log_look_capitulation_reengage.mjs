@@ -1,0 +1,6 @@
+import { logLook } from './lib/look_ledger.mjs';
+import { recordClaim } from './record_claim.mjs';
+const prereg = 'docs/CAPITULATION_DEFENDED_REENGAGE_PREREG_20261110.md';
+console.log('claim', (await recordClaim({ slug: 'capitulation_reengage_null_mc_20261110', claimText: 'NULL MONTE CARLO PASSED for row 42: 1000 per-day sign-flip iterations over the 14 tests (8 defended-split, mostly parked by the gate, plus 6 all-climax), Holm 0.10, false-pass 0.095 (required <= 0.10).', sourceFile: prereg, sourceDate: '2026-11-10', rigorStatus: 'not_checked', status: 'CONFIRMED', unblockCondition: null, extra: { false_pass_rate: 0.095, alpha: 0.10 } })).slug);
+console.log('look', await logLook({ family: 'capitulation_defended_reengage_20261110', dataWindow: 'explore_2023-04..2025-05-16 500V full sessions + 5m pivot timeline', kind: 'EXPLORE', tests: 14, label: 'RUN row 42: capitulation climax BOUNCE / CONTINUE / RESUME, defended split (parked by the gate) and all climaxes, RTH and Globex, 14 tests, Holm 0.10 (amendment A1)', script: 'scripts/vacuum_sim/capitulation_reengage.py', prereg, claimSlug: 'capitulation_defended_reengage_20261110', outcome: 'RUN_STARTED', ref: 'capitulation_defended_reengage_20261110_run1' }));
+process.exit(0);
