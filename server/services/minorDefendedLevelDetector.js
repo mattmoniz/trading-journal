@@ -152,14 +152,15 @@ async function getFullDayATR(dateStr) {
 
 // Re-derives denial events + order-flow signature matches from a bounded recent lookback.
 // Exported for direct verification against the backtest's own known-good output.
-export async function computeMinorDefendedLevelSignals() {
+// window: optional { from, to } ('YYYY-MM-DD', `to` exclusive), added 2026-11-09 night for the capitulation-exit replay (research reads of a fixed historical span, nothing outside it). Default null = unchanged.
+export async function computeMinorDefendedLevelSignals(window = null) {
   const barsRes = await query(`
     SELECT to_char(ts, 'YYYY-MM-DD HH24:MI:SS') as tc, to_char(ts,'YYYY-MM-DD') as d,
            (EXTRACT(hour FROM ts)*60 + EXTRACT(minute FROM ts))::int as mod,
            open::float, high::float, low::float, close::float,
            COALESCE(bid_volume,0)::float as bid_volume, COALESCE(ask_volume,0)::float as ask_volume
     FROM price_bars_primary
-    WHERE symbol = 'NQ' AND ts >= NOW() - INTERVAL '${LOOKBACK_DAYS} days' AND ts <= NOW()
+    WHERE symbol = 'NQ' AND ${window ? `ts >= '${window.from}'::date AND ts < '${window.to}'::date` : `ts >= NOW() - INTERVAL '${LOOKBACK_DAYS} days' AND ts <= NOW()`}
     ORDER BY ts ASC
   `);
   const bars1m = barsRes.rows;
@@ -397,3 +398,6 @@ export async function computeMinorDefendedLevelSignal(todayET, etMin) {
     return inserted.length ? inserted : null;
   } catch (_) { return null; /* new detector, never block the response */ }
 }
+
+// Research access (2026-11-09 night, additive): the live exit config and stop floor, exported so the capitulation-exit replay uses the REAL values (hr-022), never a copy.
+export { CONFIG as MINOR_DEFENDED_CONFIG, MIN_STOP_ATR_FRAC as MINOR_DEFENDED_MIN_STOP_ATR_FRAC };

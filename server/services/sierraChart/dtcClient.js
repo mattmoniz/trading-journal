@@ -303,8 +303,14 @@ export class DtcClient extends EventEmitter {
 
   _startHeartbeat() {
     if (this._heartbeatTimer) clearInterval(this._heartbeatTimer);
+    let lastBeatAt = Date.now();
     this._heartbeatTimer = setInterval(() => {
-      this._send({ Type: MSG_TYPE.HEARTBEAT, CurrentDateTime: Math.floor(Date.now() / 1000) });
+      // F14 (Fable audit, 2026-11-10): this timer shares the Node event loop with everything else, so a blocked loop delays the heartbeat and Sierra's
+      // tolerance for a late one is unknown. Record every gap more than 5 s past the interval so a freeze that endangers the link is visible.
+      const now = Date.now(), lateMs = now - lastBeatAt - this._heartbeatIntervalSec * 1000;
+      if (lateMs > 5000) console.error(`[dtcClient] heartbeat sent ${Math.round(lateMs / 1000)} s late (event loop blocked); interval ${this._heartbeatIntervalSec} s`);
+      lastBeatAt = now;
+      this._send({ Type: MSG_TYPE.HEARTBEAT, CurrentDateTime: Math.floor(now / 1000) });
     }, this._heartbeatIntervalSec * 1000);
   }
 

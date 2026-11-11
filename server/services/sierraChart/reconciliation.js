@@ -72,6 +72,26 @@ const ORDER_STATUS_NAME = {
   9: 'REJECTED', 10: 'PARTIALLY_FILLED',
 };
 
+/**
+ * The status an ORDER_UPDATE really means (F02, Fable audit 2026-11-10). The status word alone is not the truth about a fill: on 2026-11-09 a
+ * cancel-REJECT for an order that had already filled (OrderStatus 8, OrderUpdateReason 9 "Order cancellation failed ... does not exist")
+ * carried FilledQuantity 1, RemainingQuantity 0, AverageFillPrice 27950.75. It was stored as CANCELED, position_open stayed TRUE, no stop was
+ * placed for ~15 min, isBusy() blocked three strategies and 211 exits were refused. Rule: a CANCELED/REJECTED word on an update whose
+ * quantities say the order is completely filled is a FILLED order. A partial fill that was then cancelled keeps its word (the filled
+ * quantity is still recorded, and the protection sweep covers its stop). The terminal-state lattice (shouldApplyStatus) is unchanged and
+ * still decides whether the result is applied. Pure; exported for the unit test.
+ */
+export function effectiveIncomingStatus(msg, rowQuantity = null) {
+  const named = ORDER_STATUS_NAME[msg.OrderStatus] || null;
+  if (named !== 'CANCELED' && named !== 'REJECTED') return named;
+  const filled = realNumberOrNull(msg.FilledQuantity);
+  if (!(filled > 0)) return named;
+  const remaining = realNumberOrNull(msg.RemainingQuantity);
+  const orderQty = realNumberOrNull(msg.OrderQuantity) ?? (Number.isFinite(rowQuantity) ? rowQuantity : null);
+  const fullyFilled = remaining === 0 || (remaining == null && orderQty != null && filled >= orderQty);
+  return fullyFilled ? 'FILLED' : named;
+}
+
 // Multi-position-stacking build (2026-10-13, DeepSeek-reviewed plan, user cap override to 10 --
 // see docs/OPEN_THREADS.md's 2026-10-13 entry for the full design/review). Replaces the prior
 // strict 0-or-1-position-ever singleton (the original idx_order_placements_one_open_position)
@@ -369,10 +389,12 @@ const OPPOSITE_SIDE = { BUY: 'SELL', SELL: 'BUY' };
  * Returns { id, clientOrderId } on success, or null if a STOP order for this setupId
  * already exists (the idempotency short-circuit -- NOT an error).
  */
-export async function placeStopOrder(dtcClient, { setupId, stopPrice, entrySide, filledQuantity, symbol, exchange, tradeAccount, environmentService }) {
+export async function placeStopOrder(dtcClient, { setupId, stopPrice, entrySide, filledQuantity, symbol, exchange, tradeAccount, environmentService, clientOrderId: clientOrderIdOverride }) {
   if (!Number.isFinite(stopPrice)) throw new Error('placeStopOrder(): stopPrice is required.');
   if (!OPPOSITE_SIDE[entrySide]) throw new Error(`placeStopOrder(): invalid entrySide "${entrySide}"`);
-  const clientOrderId = stopClientOrderId(setupId);
+  // `clientOrderId` is only passed by protection.js for a REPLACEMENT stop (S<id>R<n>) after the first one died (F04/F05, 2026-11-10);
+  // the live-stop unique index still allows at most one working stop per setup.
+  const clientOrderId = clientOrderIdOverride || stopClientOrderId(setupId);
   const fullParams = {
     setupId, symbol, exchange, tradeAccount, environmentService,
     side: OPPOSITE_SIDE[entrySide], orderType: 'STOP', quantity: filledQuantity, price1: stopPrice,
@@ -484,7 +506,7 @@ async function cancelRestingStop(dtcClient, setupId, stopStatus, context) { retu
 
 // A working/pending EXIT order already exists (idempotency guard against a double-flatten
 // under two overlapping polls).
-const EXIT_LIVE_STATUSES = ['PENDING_SUBMIT', 'SUBMITTED', 'ORDER_SENT', 'PENDING_OPEN', 'OPEN', 'PARTIALLY_FILLED', 'PENDING_CANCEL', 'PENDING_CANCEL_REPLACE', 'FILLED'];
+export const EXIT_LIVE_STATUSES = ['PENDING_SUBMIT', 'SUBMITTED', 'ORDER_SENT', 'PENDING_OPEN', 'OPEN', 'PARTIALLY_FILLED', 'PENDING_CANCEL', 'PENDING_CANCEL_REPLACE', 'FILLED'];
 
 // App-expected net position on `symbol`: signed sum of filled quantity over real broker orders (those
 // carrying a server_order_id) since the latest invariant baseline. Shared by checkPositionInvariant()
@@ -505,7 +527,7 @@ async function getAppExpectedNet(symbol, tradeAccount = null) {
 }
 
 // Queryable record of why a real exit did not go out (previously console-only, lost on restart).
-async function persistExitGate(setupId, gateName, reason) {
+export async function persistExitGate(setupId, gateName, reason) {
   await query(`
     INSERT INTO gated_candidates (trade_date, setup_type, gate_name, gate_reason)
     SELECT CURRENT_DATE, a.setup_type, $2::varchar, $3::text FROM active_setups a WHERE a.id = $1
@@ -756,6 +778,20 @@ export function handleOrderUpdate(msg, dtcClient) {
   return runSerializedByKey(key, () => applyOrderUpdate(msg, dtcClient));
 }
 
+// Shared by the fill handler (F05) and the rejected-exit handler (F04). Lazy imports: protection.js imports this file (cycle), and
+// the kill switch / phone alert modules should not load until a repair is actually needed. Never throws into the order-update handler.
+async function repairProtection(dtcClient, setupId, reason, opts) {
+  try {
+    const [{ ensureProtected }, { killSwitch }, { sendAlert }] = await Promise.all([import('./protection.js'), import('./orderEligibility.js'), import('../alertNotifier.js')]);
+    const r = await ensureProtected(dtcClient, setupId, { killSwitch, sendAlert, reason, ...opts });
+    console.log(`[sierraChart.reconciliation] setup_id=${setupId}: protection repair (${reason}) -> ${JSON.stringify(r)}`);
+    return r;
+  } catch (err) {
+    console.error(`[sierraChart.reconciliation] setup_id=${setupId}: protection repair (${reason}) threw -- the periodic protection sweep will retry:`, err);
+    return null;
+  }
+}
+
 async function applyOrderUpdate(msg, dtcClient) {
   const clientOrderId = msg.ClientOrderID;
   if (!clientOrderId) {
@@ -775,7 +811,7 @@ async function applyOrderUpdate(msg, dtcClient) {
   ).catch((err) => console.error('[sierraChart.reconciliation] failed to log order update (main row processing continues):', err.message));
 
   const existingQ = await query(
-    `SELECT id, setup_id, purpose, symbol, exchange, side, status, filled_quantity, latest_transaction_time,
+    `SELECT id, setup_id, purpose, symbol, exchange, side, status, quantity, filled_quantity, latest_transaction_time,
        trade_account, environment_service, order_type, price1::float AS price1
      FROM order_placements WHERE client_order_id = $1`,
     [clientOrderId]
@@ -798,7 +834,7 @@ async function applyOrderUpdate(msg, dtcClient) {
       .catch((e) => console.error('[sierraChart.reconciliation] could not persist ACCOUNT_LABEL_MISMATCH gate row:', e.message));
   }
 
-  const incomingStatus = ORDER_STATUS_NAME[msg.OrderStatus] || null;
+  const incomingStatus = effectiveIncomingStatus(msg, row.quantity);
   const incomingTs = Number.isFinite(msg.LatestTransactionDateTime) ? msg.LatestTransactionDateTime : null;
   const applyStatus = shouldApplyStatus(row.status, incomingStatus, row.latest_transaction_time, incomingTs);
 
@@ -905,6 +941,7 @@ async function applyOrderUpdate(msg, dtcClient) {
   // FILLED message for an already-filled row.
   if (row.purpose === 'ENTRY' && applyStatus && newStatus === 'FILLED') {
     const effectiveFilledQuantity = Math.max(row.filled_quantity || 0, roundedIncomingFilled || 0);
+    let stopInPlace = false;
     try {
       // Skip if this ENTRY was submitted as a native-OCO bracket parent (placeBracketEntryOrder,
       // 2026-10-07 OCO build) -- its STOP/TARGET children were already submitted alongside the
@@ -913,41 +950,50 @@ async function applyOrderUpdate(msg, dtcClient) {
       const existingStop = await getStopStatus(row.setup_id);
       if (existingStop) {
         console.log(`[sierraChart.reconciliation] setup_id=${row.setup_id}: ENTRY filled, STOP row already exists (bracket child) -- skipping standalone STOP placement.`);
+        stopInPlace = true;
       } else {
         const stopQ = await query(`SELECT stop_level, entry_zone_low FROM active_setups WHERE id = $1`, [row.setup_id]);
-        let stopLevel = stopQ.rows[0]?.stop_level != null ? Number(stopQ.rows[0].stop_level) : null;
         // Gap guard (DeepSeek review finding 7): a MARKET entry can fill past the pre-computed stop level
         // (stop_level was derived from the detection price). Placing it as-is puts a marketable stop on the
         // wrong side of the fill, which stops the position out instantly. If so, keep the calibrated RISK
         // DISTANCE (|entry_zone_low - stop_level|) but measure it from the real fill price instead.
+        // The arithmetic lives in protection.js resolveStopPrice() so this path and the repair path cannot disagree.
         const fillQ = await query(`SELECT avg_fill_price FROM order_placements WHERE id = $1`, [row.id]);
-        const fillPx = fillQ.rows[0]?.avg_fill_price != null ? Number(fillQ.rows[0].avg_fill_price) : null;
-        const entryLevel = stopQ.rows[0]?.entry_zone_low != null ? Number(stopQ.rows[0].entry_zone_low) : null;
-        if (stopLevel != null && Number.isFinite(fillPx) && Number.isFinite(entryLevel)) {
-          const isLong = row.side === 'BUY';
-          const inverted = isLong ? stopLevel >= fillPx : stopLevel <= fillPx;
-          if (inverted) {
-            const dist = Math.abs(entryLevel - stopLevel);
-            const adjusted = isLong ? fillPx - dist : fillPx + dist;
-            console.error(`[sierraChart.reconciliation] setup_id=${row.setup_id}: entry filled at ${fillPx}, past the planned stop ${stopLevel} -- placing the stop at ${adjusted} (same ${dist}pt risk distance from the real fill) instead of an instantly-triggering one.`);
-            await persistExitGate(row.setup_id, 'SIERRA_STOP_ADJUSTED', `fill ${fillPx} past planned stop ${stopLevel}; stop placed at ${adjusted} (risk distance ${dist}pt kept)`);
-            stopLevel = adjusted;
-          }
+        const { resolveStopPrice } = await import('./protection.js');
+        const resolved = resolveStopPrice({
+          entrySide: row.side,
+          stopLevel: stopQ.rows[0]?.stop_level != null ? Number(stopQ.rows[0].stop_level) : null,
+          entryLevel: stopQ.rows[0]?.entry_zone_low != null ? Number(stopQ.rows[0].entry_zone_low) : null,
+          fillPx: fillQ.rows[0]?.avg_fill_price != null ? Number(fillQ.rows[0].avg_fill_price) : null,
+        });
+        if (resolved.adjusted) {
+          console.error(`[sierraChart.reconciliation] setup_id=${row.setup_id}: entry filled at ${resolved.fillPx}, past the planned stop ${resolved.plannedStop} -- placing the stop at ${resolved.stopPrice} (same ${resolved.dist}pt risk distance from the real fill) instead of an instantly-triggering one.`);
+          await persistExitGate(row.setup_id, 'SIERRA_STOP_ADJUSTED', `fill ${resolved.fillPx} past planned stop ${resolved.plannedStop}; stop placed at ${resolved.stopPrice} (risk distance ${resolved.dist}pt kept)`);
         }
-        if (stopLevel == null) {
-          console.error(`[sierraChart.reconciliation] setup_id=${row.setup_id}: ENTRY filled but active_setups.stop_level is null -- NO real broker-side stop placed. Position is UNPROTECTED at the broker; this app's own internal exit logic is the only remaining protection. Investigate directly.`);
+        if (resolved.stopPrice == null) {
+          console.error(`[sierraChart.reconciliation] setup_id=${row.setup_id}: ENTRY filled but active_setups.stop_level is null -- NO real broker-side stop placed. Escalating to the protection path (flatten + halt).`);
         } else {
           const stopResult = await placeStopOrder(dtcClient, {
-            setupId: row.setup_id, stopPrice: stopLevel, entrySide: row.side,
+            setupId: row.setup_id, stopPrice: resolved.stopPrice, entrySide: row.side,
             filledQuantity: effectiveFilledQuantity, symbol: row.symbol, exchange: row.exchange,
             tradeAccount: row.trade_account, environmentService: row.environment_service,
           });
-          if (stopResult) console.log(`[sierraChart.reconciliation] placed real STOP for setup_id=${row.setup_id} at ${stopLevel}: ${JSON.stringify(stopResult)}`);
+          if (stopResult) console.log(`[sierraChart.reconciliation] placed real STOP for setup_id=${row.setup_id} at ${resolved.stopPrice}: ${JSON.stringify(stopResult)}`);
+          stopInPlace = true; // placed now, or null = a stop row for this setup already exists (idempotent short-circuit)
         }
       }
     } catch (err) {
-      console.error(`[sierraChart.reconciliation] setup_id=${row.setup_id}: failed to place real broker-side stop after ENTRY fill -- position may be UNPROTECTED at the broker, investigate directly:`, err);
+      console.error(`[sierraChart.reconciliation] setup_id=${row.setup_id}: failed to place real broker-side stop after ENTRY fill -- retrying through the protection path:`, err);
     }
+    // F05 (Fable audit 2026-11-10): a missing stop level or a failed submit used to be a console line only. Now it retries, writes an
+    // alarm row + phone alert, and flattens + halts when the position stays unprotected past the deadline (protection.js).
+    if (!stopInPlace) await repairProtection(dtcClient, row.setup_id, 'entry-fill', { skipBrokerCheck: true });
+  }
+
+  // F04 (Fable audit 2026-11-10): placeExitOrder cancels the resting stop BEFORE the exit is accepted. If the broker then rejects (or
+  // cancels) that exit with no fill, the position is open with no stop. Put the stop back immediately, verified against the broker.
+  if (row.purpose === 'EXIT' && applyStatus && (newStatus === 'REJECTED' || newStatus === 'CANCELED') && (row.filled_quantity || 0) <= 0 && !(roundedIncomingFilled > 0)) {
+    await repairProtection(dtcClient, row.setup_id, `exit-${newStatus.toLowerCase()}`, {});
   }
 
   return applyStatus && TERMINAL_STATUSES.has(newStatus) && row.status !== newStatus;

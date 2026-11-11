@@ -24,7 +24,8 @@
 // for the Setup Reference page), never read here for the actual live stop.
 import { tagRotation65ptGateShadow } from './rotation65ptGateShadow.js';
 import { query } from '../db.js';
-import { dropToTimeline, computeFireTags, FIRE_TAG_COLS, fireTagValues } from '../routes/acd.js';
+import { dropToTimeline } from './acdShared.js';
+import { computeFireTags, FIRE_TAG_COLS, fireTagValues } from './fireTags.js';  // F33 (2026-11-11): from the defining modules, not the route file (broke a services -> route import cycle)
 import { isInRthOpenDeadZone } from './acdShared.js';
 import { getBetClass } from '../config/setupTypes.js';
 import { computeBalanceAndResolution } from './flushMechanics.js';

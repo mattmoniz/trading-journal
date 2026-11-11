@@ -10,18 +10,13 @@
 //
 // Safety: VACUUM_EXP_ORDERS.enabled is the kill switch; the service pauses ITSELF in memory (and for the day, via amt_tell_alarms kinds VAC_*) on any misfire (stuck ACTIVE row, generic mark-to-market resolution, double entry,
 // unflattened position). An event is entered only while FRESH (age since the signal bar closed <= maxAgeSec), never on a restart/catch-up replay. Naive ET timestamp strings straight from the database, never JS Date-parsed.
-import { query } from '../db.js';
-import { computeFireTags, FIRE_TAG_COLS, fireTagValues } from './fireTags.js';
-import { dropToTimeline } from './acdShared.js';
+import { FIRE_TAG_COLS, fireTagValues } from './fireTags.js';
+import { createStrategyService, isBusyAcrossFamilies, RESOLVE_SQL } from './strategyOrderCore.js';
 import { getBetClass } from '../config/setupTypes.js';
 import { LIVE_INSTRUMENT } from '../config/instruments.js';
-import { killSwitch } from './sierraChart/orderEligibility.js';
 import { getEarlyCloseMinute } from './marketCalendar.js';
 
 export const VACUUM_EXP_ORDERS = { enabled: true, pollMs: 5000, stopMult: 2.5, t1PlaceholderDist: 5000, maxAgeSec: 150, tracks: { GBX: true, RTH: true } };
-const state = { lastRunAt: null, lastError: null, selfPaused: null, runs: 0, linked: 0, skipped: 0, resolved: 0, problem: null };
-const alarmSeen = new Map();
-const etMinOf = (ts) => Number(String(ts).slice(11, 13)) * 60 + Number(String(ts).slice(14, 16));
 
 /** Pure: the protective stop of an event: the signal close -/+ stopMult x EMA10(TR) (the detector's V0 stop, measured from the entry, which is the next open ~ the signal close). */
 export const stopOf = (e, mult = VACUUM_EXP_ORDERS.stopMult) => Number(e.signal_close) - Number(e.direction) * mult * Number(e.etr);
@@ -60,8 +55,7 @@ export function buildInsert(e, fireTags = null, cfg = VACUUM_EXP_ORDERS) {
   const params = [e.trade_date, setupType, e.fired_at, expiresAt, entry, stop, t1, 'NO_TARGET (30-bar hold / hard flat written by vacuumLiveOrders.js)', ...fireTagValues(fireTags || {}), getBetClass(setupType)];
   return { sql, params, setupType, entryAt: e.fired_at, expiresAt, t1, stop };
 }
-export const RESOLVE_SQL = `UPDATE active_setups SET status = 'RESOLVED', resolution = $2, resolution_method = $3, actual_pnl = $4, price_at_resolution = $5, resolved_at = $6, updated_at = NOW()
-                           WHERE id = $1 AND status = 'ACTIVE' AND resolved_at IS NULL RETURNING id`;
+export { RESOLVE_SQL };   // shared (strategyOrderCore.js)
 
 /** Pure: how to resolve the row of a finished event. orders = { entryFilled, avgFill, stopFilled } from order_placements (broker truth). Values fit resolution VARCHAR(20) / resolution_method VARCHAR(20); none is MARK_TO_MARKET. */
 export function decideExit(e, orders) {
@@ -77,96 +71,22 @@ export function decideExit(e, orders) {
   return { resolution: stopped ? 'STOP_HIT' : 'TIME_EXPIRED', method: stopped ? 'VAC_STOP' : (flat ? 'VAC_FLAT' : 'VAC_HOLD30'), pnl, exitPx: Number.isFinite(exitPx) ? exitPx : null };
 }
 
-async function isBusy() {
-  const a = await query(`SELECT 1 FROM active_setups WHERE (setup_type LIKE 'VACUUM\\_EXP\\_%' OR setup_type LIKE 'AMT\\_TELL\\_%') AND status = 'ACTIVE' LIMIT 1`);
-  if (a.rows.length) return true;
-  const o = await query(`SELECT 1 FROM order_placements WHERE position_open = TRUE LIMIT 1`);   // any open broker position on the account (a resolved row whose flatten is still in flight, or another setup)
-  return o.rows.length > 0;
-}
-async function lastNqClose() {
-  const r = await query(`SELECT close::float AS c FROM price_bars_primary WHERE symbol='NQ' AND ts >= NOW()::timestamp - interval '10 minutes' AND ts <= NOW()::timestamp ORDER BY ts DESC LIMIT 1`);
-  return r.rows[0]?.c ?? null;
-}
-async function raiseAlarm(kind, detail, pause) {
-  const key = kind + JSON.stringify(detail);
-  if (!alarmSeen.has(key)) {
-    alarmSeen.set(key, Date.now());
-    console.error(`[vacuumLiveOrders] ALARM ${kind}`, detail);
-    await query(`INSERT INTO amt_tell_alarms (at, kind, detail) VALUES (NOW()::timestamp, $1, $2)`, [kind.slice(0, 30), JSON.stringify(detail)]).catch(() => {});   // shared alarm table; kinds VAC_* are this service's
-  }
-  state.problem = `${kind} ${JSON.stringify(detail)}`;
-  if (pause && !state.selfPaused) { state.selfPaused = `${kind} at ${new Date().toISOString()}`; console.error(`[vacuumLiveOrders] SELF-PAUSED (no new entries; exits keep being managed): ${state.selfPaused}`); }
-}
+const svc = createStrategyService({ logName: 'vacuumLiveOrders', cfg: VACUUM_EXP_ORDERS, pauseKindSql: "kind LIKE 'VAC\\_%'", statusExtra: () => ({ tracks: VACUUM_EXP_ORDERS.tracks }) });
 
-async function considerEntries() {
-  const rows = (await query(`
-    SELECT id, trade_date::text AS trade_date, track, direction, taken, fired_at::text AS fired_at, signal_close::float AS signal_close, entry_open::float AS entry_open, etr::float AS etr, outcome_at, (EXTRACT(EPOCH FROM (NOW()::timestamp - fired_at)))::float AS age_sec
-    FROM vacuum_live_events WHERE taken AND active_setup_id IS NULL AND order_state IS NULL AND trade_date >= CURRENT_DATE - 1 ORDER BY fired_at, id`)).rows;
-  for (const e of rows) {
-    const existing = (await query(`SELECT id FROM active_setups WHERE trade_date = $1 AND fired_at = $2 AND setup_type IN ('VACUUM_EXP_LONG', 'VACUUM_EXP_SHORT')`, [e.trade_date, e.fired_at])).rows[0];
-    if (existing) { await query(`UPDATE vacuum_live_events SET active_setup_id = $2, order_state = 'LINKED' WHERE id = $1 AND active_setup_id IS NULL`, [e.id, existing.id]); state.linked++; continue; }   // a crash between insert and link: re-link, never duplicate
-    const off = state.selfPaused || !VACUUM_EXP_ORDERS.enabled;
-    const decision = off ? { action: 'SKIP', state: 'SKIPPED_DISABLED' }
-      : decideEntry(e, { ageSec: e.age_sec, busy: await isBusy(), lastClose: await lastNqClose(), armed: killSwitch.isArmed() });
-    if (decision.action === 'SKIP') { await query(`UPDATE vacuum_live_events SET order_state = $2 WHERE id = $1 AND order_state IS NULL`, [e.id, decision.state]); state.skipped++; continue; }
-    const fireTags = await computeFireTags(e.trade_date, e.track === 'RTH' ? 'RTH' : 'GLOBEX', etMinOf(e.fired_at));
-    const { sql, params, setupType, entryAt, stop, t1 } = buildInsert(e, fireTags);
-    const ins = await query(sql, params);
-    const id = ins.rows[0]?.id ?? (await query(`SELECT id FROM active_setups WHERE trade_date = $1 AND setup_type = $2 AND fired_at = $3`, [e.trade_date, setupType, entryAt])).rows[0]?.id;
-    if (!id) { await query(`UPDATE vacuum_live_events SET order_state = 'SKIPPED_DUP' WHERE id = $1`, [e.id]); continue; }
-    await query(`UPDATE vacuum_live_events SET active_setup_id = $2, order_state = 'LINKED' WHERE id = $1 AND active_setup_id IS NULL`, [e.id, id]);
-    state.linked++; console.log(`[vacuumLiveOrders] ${setupType} setup_id=${id} ${e.track} entry ~${e.signal_close} stop ${stop} (event #${e.id}, age ${Math.round(e.age_sec)} s)`);
-    try { await dropToTimeline({ id, trade_date: e.trade_date, setup_type: setupType, fired_at: entryAt, entry_zone_low: e.signal_close, stop_level: stop, t1_level: t1, t1_label: 'NO_TARGET', resolution: null, historical_win_rate: null }); } catch { /* timeline is display only */ }
-  }
-}
-
-async function syncExits() {
-  // Every ACTIVE row linked to an event whose outcome the detector has written (the 30th bar after the entry exists, or the hard flat passed).
-  const rows = (await query(`
-    SELECT e.id, e.direction, e.entry_open::float AS entry_open, e.fwd30::float AS fwd30, e.net_nostop::float AS net_nostop, e.net_stop25::float AS net_stop25, e.exit_note, e.outcome_at::text AS outcome_at, a.id AS setup_id
-    FROM vacuum_live_events e JOIN active_setups a ON a.id = e.active_setup_id
-    WHERE a.status = 'ACTIVE' AND a.resolved_at IS NULL AND e.outcome_at IS NOT NULL`)).rows;
-  for (const e of rows) {
-    const o = (await query(`SELECT purpose, status, filled_quantity, avg_fill_price::float AS avg_fill_price FROM order_placements WHERE setup_id = $1 AND purpose IN ('ENTRY','STOP')`, [e.setup_id])).rows;
-    const entryRow = o.find((x) => x.purpose === 'ENTRY' && Number(x.filled_quantity) > 0);
-    const d = decideExit(e, { entryFilled: !!entryRow, avgFill: entryRow?.avg_fill_price ?? null, stopFilled: o.some((x) => x.purpose === 'STOP' && x.status === 'FILLED') });
-    const r = await query(RESOLVE_SQL, [e.setup_id, d.resolution, d.method, d.pnl, d.exitPx, e.outcome_at]);   // TOCTOU-safe: the resolver backstop may have got there first
-    if (r.rows.length) { state.resolved++; console.log(`[vacuumLiveOrders] resolved setup_id=${e.setup_id} ${d.resolution}/${d.method} pnl ${d.pnl}`); }
-  }
-}
+// Fable audit F26 (2026-11-11): the state/alarm/pause/runner/status skeleton and the event-table entry and exit loops live in strategyOrderCore.js; only the strategy stays here.
+async function considerEntries() { return svc.considerEventEntries({ eventTable: 'vacuum_live_events', extraWhere: "", setupTypes: ['VACUUM_EXP_LONG', 'VACUUM_EXP_SHORT'], decideEntry, buildInsert, isBusy: isBusyAcrossFamilies }); }
+async function syncExits() { return svc.syncEventExits('vacuum_live_events', decideExit); }
 
 async function reconcile() {
-  state.problem = null;
-  const stuck = (await query(`SELECT a.id FROM active_setups a JOIN vacuum_live_events e ON e.active_setup_id = a.id WHERE a.status = 'ACTIVE' AND e.outcome_at IS NOT NULL AND e.outcome_at < NOW()::timestamp - interval '3 minutes'`)).rows;
-  for (const r of stuck) await raiseAlarm('VAC_STUCK_ACTIVE', { setup_id: r.id }, true);
-  const generic = (await query(`SELECT id, resolution, resolution_method FROM active_setups WHERE setup_type LIKE 'VACUUM\\_EXP\\_%' AND trade_date >= CURRENT_DATE - 1 AND status IN ('RESOLVED','EXPIRED','INVALIDATED')
-                                AND (resolution_method IN ('MARK_TO_MARKET','RECOVERY_MTM') OR resolution = 'INVALIDATED')`)).rows;
-  for (const r of generic) await raiseAlarm('VAC_GENERIC_RESOLUTION', { setup_id: r.id, resolution: r.resolution, method: r.resolution_method }, true);
-  const unflat = (await query(`SELECT a.id FROM active_setups a JOIN order_placements o ON o.setup_id = a.id AND o.purpose = 'ENTRY' WHERE a.setup_type LIKE 'VACUUM\\_EXP\\_%' AND a.status IN ('RESOLVED','EXPIRED')
-                                AND o.position_open = TRUE AND a.resolved_at < NOW()::timestamp - interval '3 minutes'`)).rows;   // resolved, entry filled, but the broker position is still open: the flatten never went out
-  for (const r of unflat) await raiseAlarm('VAC_UNFLATTENED', { setup_id: r.id }, true);
-  const act = (await query(`SELECT count(*)::int AS n FROM active_setups WHERE setup_type LIKE 'VACUUM\\_EXP\\_%' AND status = 'ACTIVE'`)).rows[0].n;
-  if (act > 1) await raiseAlarm('VAC_DOUBLE_ENTRY', { active_rows: act }, true);
-  if (state.selfPaused && !state.problem) state.problem = `self-paused: ${state.selfPaused}`;
+  svc.state.problem = null;
+  await svc.checkStuckActive('vacuum_live_events', 'VAC_STUCK_ACTIVE');
+  await svc.checkGenericResolution('VACUUM\\_EXP\\_%', 'VAC_GENERIC_RESOLUTION');
+  await svc.checkUnflattened('VACUUM\\_EXP\\_%', 'VAC_UNFLATTENED');
+  await svc.checkDoubleEntry('VACUUM\\_EXP\\_%', 'VAC_DOUBLE_ENTRY');
+  if (svc.state.selfPaused && !svc.state.problem) svc.state.problem = `self-paused: ${svc.state.selfPaused}`;
 }
 
-// The self-pause survives a restart: any pausing alarm raised today (ET) re-pauses the service until the next trading day (clear it deliberately by deleting today's VAC_* alarm rows).
-async function loadPause() {
-  if (state.selfPaused) return;
-  const r = (await query(`SELECT kind FROM amt_tell_alarms WHERE kind LIKE 'VAC\\_%' AND at >= CURRENT_DATE::timestamp ORDER BY at DESC LIMIT 1`)).rows[0];
-  if (r) { state.selfPaused = `${r.kind} (restored from today's alarms)`; console.error(`[vacuumLiveOrders] SELF-PAUSED on start: ${state.selfPaused}`); }
-}
-
-let timer = null, running = false;
-export async function runVacuumLiveOrdersOnce() {
-  if (running) return; running = true;
-  try { await loadPause(); await reconcile(); await syncExits(); await considerEntries(); state.lastError = null; }       // reconcile first: a fresh misfire must pause BEFORE any new entry is considered
-  catch (e) { state.lastError = e.message; console.error('[vacuumLiveOrders]', e); }
-  finally { running = false; state.lastRunAt = Date.now(); state.runs++; }
-}
-export function startVacuumLiveOrders() { if (!timer) timer = setInterval(runVacuumLiveOrdersOnce, VACUUM_EXP_ORDERS.pollMs); }
-export function stopVacuumLiveOrders() { if (timer) { clearInterval(timer); timer = null; } }
-export function getVacuumLiveOrdersStatus() {
-  return { enabled: !!VACUUM_EXP_ORDERS.enabled && !state.selfPaused, configuredEnabled: !!VACUUM_EXP_ORDERS.enabled, tracks: VACUUM_EXP_ORDERS.tracks, selfPaused: state.selfPaused, problem: state.problem || (state.lastError ? `orders service error: ${state.lastError}` : null),
-           lastRunAgeSec: state.lastRunAt ? Math.round((Date.now() - state.lastRunAt) / 1000) : null, linked: state.linked, skipped: state.skipped, resolved: state.resolved };
-}
+export async function runVacuumLiveOrdersOnce() { return svc.runOnce({ reconcile, syncExits, considerEntries }); }
+export function startVacuumLiveOrders() { svc.start(runVacuumLiveOrdersOnce); }
+export function stopVacuumLiveOrders() { svc.stop(); }
+export function getVacuumLiveOrdersStatus() { return svc.status(); }

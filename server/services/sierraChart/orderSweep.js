@@ -250,7 +250,10 @@ async function sweepEntries(dtcClient) {
   for (const row of rows.rows) {
     try {
       const direction = resolveDirection(row);
-      const tradeAccount = selectTradeAccount({ isRth: row.is_rth, rthAccount: dtcClient.tradeAccount, globexAccount: process.env.DTC_GLOBEX_TRADE_ACCOUNT || 'Sim2' });
+      // F09 (Fable audit, 2026-11-10): no literal account fallback. An unset DTC_GLOBEX_TRADE_ACCOUNT used to route Globex orders to
+      // the invented account 'Sim2'; now an unresolved account means no order, with a queryable skip row (fail closed).
+      const tradeAccount = selectTradeAccount({ isRth: row.is_rth, rthAccount: dtcClient.tradeAccount, globexAccount: process.env.DTC_GLOBEX_TRADE_ACCOUNT || null });
+      if (!tradeAccount) { console.error(`[sierraChart.orderSweep] setup_id=${row.id} (${row.setup_type}): trade account unresolved (${row.is_rth === false ? 'DTC_GLOBEX_TRADE_ACCOUNT unset' : 'the DTC client has no logon account'}) -- no order sent.`); await recordEntrySkip(row, 'trade account unresolved (no order sent)'); continue; }
       if (!direction) { console.error(`[sierraChart.orderSweep] setup_id=${row.id} (${row.setup_type}): direction unresolvable (name/price disagreement or missing levels) -- skipping entry, not guessing.`); await recordEntrySkip(row, 'direction unresolvable'); continue; }
       const side = DIRECTION_TO_SIDE[direction]; // computed early -- needed by checkEntryGates() below
       const elig = await isOrderEligible(row.setup_type, row.id);

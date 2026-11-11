@@ -5,9 +5,12 @@ import DayContextSection from '../components/dashboard/DayContextSection.jsx';
 import NextSteps from '../components/dashboard/NextSteps.jsx';
 import ArgonShadowSection from '../components/dashboard/ArgonShadowSection.jsx';
 import VacuumLiveSection from '../components/dashboard/VacuumLiveSection.jsx';
+import CapitulationShadowSection from '../components/dashboard/CapitulationShadowSection.jsx';
+import LevelConfluenceSection from '../components/dashboard/LevelConfluenceSection.jsx';
 import OvnArmsSection from '../components/dashboard/OvnArmsSection.jsx';
 import TellContextSection from '../components/dashboard/TellContextSection.jsx';
 import TellShadowSection from '../components/dashboard/TellShadowSection.jsx';
+import JobHealthSection from '../components/dashboard/JobHealthSection.jsx';
 
 // Learning Monitor (2026-11-03). Read-only. Shows what the system fires and what it skips, how each arm of the pre-registered roster scoreboard and the
 // (log-only) meta-labeler are doing, how much REAL broker evidence exists, the signal-to-order delay, and a virtual prop-account pass race that resets
@@ -124,9 +127,12 @@ export default function LearningMonitorView() {
         </div>
       </Card>
 
+      <JobHealthSection board={ms?.jobHealth} />
       <DayContextSection board={ms?.dayContext} next={ms?.nextSteps?.dayContext} />
       <OvnArmsSection board={ms?.ovnArms} />
       <VacuumLiveSection board={data.vacuumLive} />
+      <CapitulationShadowSection board={data.capitulationShadow} />
+      <LevelConfluenceSection board={data.levelConfluence} />
       <ArgonShadowSection board={data.argonShadow} />
       <TellContextSection board={ms?.tellContext} next={ms?.nextSteps?.tellContext} />
       <TellShadowSection board={ms?.tellContext} next={ms?.nextSteps?.tellShadow} />

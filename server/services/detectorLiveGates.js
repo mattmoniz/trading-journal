@@ -40,7 +40,7 @@
 // isOppositeDirectionOpen. Force-SHADOW, never skip -- same "keep the row, degrade its
 // status" convention every other live gate in this codebase uses, so real outcome data
 // keeps accumulating on exactly what's held back.
-import { isOppositeDirectionOpen } from '../routes/acd.js';
+import { isOppositeDirectionOpen } from './acdRiskGates.js'; // F33 (2026-11-11): from the defining module, not the route file
 import { CAPITAL_EXPOSURE_OVERRIDE, checkLiveRoster } from './setupEligibility.js';
 import { isOpeningDriveCounterTrade, OPENING_DRIVE_GATE } from './openingDriveGate.js';
 

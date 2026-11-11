@@ -59,7 +59,7 @@ async function getMorningBars(d) {
   const { rows: barRows } = await query(`
     SELECT DISTINCT ON (ts) (EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts))::int as et_min,
       open::float, high::float, low::float, close::float
-    FROM price_bars_primary WHERE symbol='NQ' AND ts::date=$1
+    FROM price_bars_primary WHERE symbol='NQ' AND ts >= $1::date AND ts < $1::date + 1
       AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN ${RTH_START_MIN} AND ${MORNING_END_MIN}
     ORDER BY ts, id DESC
   `, [d]);
@@ -70,11 +70,20 @@ async function run() {
   const { rows: today } = await query(`SELECT CURRENT_DATE::text as d`);
   console.log(`Running as of ${today[0].d}${FULL ? ' (--full rebuild)' : ' (incremental)'}`);
 
+  // F07 (Fable audit, 2026-11-10): this job failed every weekday with ETIMEDOUT at its 60 s cap. Cause: the date list below scanned the ENTIRE bar history
+  // (a DISTINCT over every RTH bar, ~1.3M rows) every night, and each day's bars were read with `ts::date = $1` (a full scan per day). Incremental mode only needs
+  // the recheck window plus anything newer than the last classified day, so the scan now starts there (both bounds, cv-009); --full still reads everything.
+  let scanFrom = null;
+  if (!FULL) {
+    const { rows: lastDoneRows } = await query(`SELECT MAX(signal_name) AS d FROM performance_audit WHERE signal_type='VOL_REGIME_HIST'`);
+    if (lastDoneRows[0]?.d) scanFrom = lastDoneRows[0].d;
+  }
   const { rows: dateRows } = await query(`
     SELECT DISTINCT ts::date::text as d FROM price_bars_primary
     WHERE symbol='NQ' AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN ${RTH_START_MIN} AND 959
+      AND ts >= ${scanFrom ? `($1::date - 45)` : `'2000-01-01'::date`} AND ts < (CURRENT_DATE + 2)
     ORDER BY d
-  `);
+  `, scanFrom ? [scanFrom] : []);
   const allTradingDates = dateRows.map(r => r.d);
   let allDates = allTradingDates;
 

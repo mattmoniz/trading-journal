@@ -1,5 +1,5 @@
 // Tests for the LIVE_ROSTER gate (2026-10-21): pure roster-building logic + the gate against the real DB row + fail-closed paths.
-import { oppositeOf, evaluateType, buildRoster, MIN_DAYS } from './calibrate_live_roster.mjs';
+import { oppositeOf, evaluateType, buildRoster, MIN_DAYS, excludeMonitorOnly, MONITOR_ONLY_BET_CLASSES } from './calibrate_live_roster.mjs';
 import { computeSuppressionSets, isLiveEligible, getCanonicalLiveStatus, checkLiveRoster, getLiveRoster, __setLiveRosterForTest, LIVE_ROSTER_GATE } from '../server/services/setupEligibility.js';
 import { checkStandardLiveGates } from '../server/services/detectorLiveGates.js';
 let fails = 0; const ok = (c, m) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${m}`); if (!c) fails++; };
@@ -18,6 +18,9 @@ r = buildRoster(new Map([['A_FADE_LONG', ev(true, false)], ['B_FADE_LONG', ev(tr
 ok(r.has('A_FADE_LONG') && r.has('B_FADE_LONG'), 'previous member stays on base rule; new member passing leave-best-day-out is promoted');
 r = buildRoster(new Map([['B_FADE_LONG', ev(true, false)]]), new Set(['A_FADE_LONG']), known);
 ok(r.size === 0, 'new promotion failing leave-best-day-out is held back; previous member that no longer passes is demoted instantly');
+{ const roles = new Map([['LEVEL_X_FADE_LONG', { role: 'passing' }], ['MKT_Y', { role: 'passing' }]]); const bc = (x) => (x === 'LEVEL_X_FADE_LONG' ? 'VALUE_FADE' : 'UNCLASSIFIED'); const { kept, dropped } = excludeMonitorOnly(roles, bc);
+  ok(!kept.has('LEVEL_X_FADE_LONG') && kept.has('MKT_Y') && dropped.length === 1 && dropped[0] === 'LEVEL_X_FADE_LONG', 'level-based (VALUE_FADE) roster member is dropped to monitor-only, a market setup stays');
+  ok(MONITOR_ONLY_BET_CLASSES.has('GLOBEX_LEVEL') && MONITOR_ONLY_BET_CLASSES.has('VALUE_FADE') && !MONITOR_ONLY_BET_CLASSES.has('CONTINUATION_LEGACY'), 'monitor-only classes are the two level-based classes only'); }
 const t = (d, p) => ({ date: d, pnl: p, cluster_touch_id: null });
 ok(evaluateType([t('2026-08-01', 5)], 'x').thin === true, 'evaluateType: too few days => thin');
 const mk = (n, f) => Array.from({ length: n }, (_, i) => t('2026-08-' + String(i + 1).padStart(2, '0'), f(i)));
@@ -28,9 +31,13 @@ const aboveFloor = evaluateType(mk(MIN_DAYS + 3, (i) => 10 + (i % 3)), 'x');
 ok(aboveFloor.pass === true && aboveFloor.passLeaveBestDayOut === true, 'evaluateType: a clearly positive, steady type with MIN_DAYS+3 days passes both tests');
 // live DB row
 const roster = await getLiveRoster();
-ok(roster.state === 'OK' && roster.types.size >= 1, `real roster row loads (state ${roster.state}, ${roster.types.size} types, run ${roster.runDate})`);
+// Since 2026-11-09 level-based families are monitor-only, so a FRESH real roster may legitimately be EMPTY (no level fade fires). The row must still load fresh; if it has no member, inject a synthetic one so the gate paths below are still exercised.
+ok(roster.state === 'OK' || (roster.state === 'EMPTY' && roster.ageDays <= 1), `real roster row loads fresh (state ${roster.state}, ${roster.types.size} types, run ${roster.runDate})`);
+const sets0 = await computeSuppressionSets(1);
+let live = roster;
+if (roster.types.size === 0) { live = { state: 'OK', types: new Set([[...sets0.knownTypes][0]]), runDate: roster.runDate, ageDays: roster.ageDays }; __setLiveRosterForTest(live); }
 const sets = await computeSuppressionSets(1);
-const on = [...roster.types][0], offType = [...sets.knownTypes].find((x) => !roster.types.has(x));
+const on = [...live.types][0], offType = [...sets.knownTypes].find((x) => !live.types.has(x));
 ok(sets.rosterBlocked.has(offType) && sets.suppressedSetups.has(offType), `off-roster known type ${offType} lands in suppressedSetups + rosterBlocked`);
 ok(!sets.rosterBlocked.has(on), `roster type ${on} is not roster-blocked`);
 ok(!sets.rosterBlocked.size || !sets.knownTypes.size ? false : [...sets.rosterBlocked].every((x) => sets.knownTypes.has(x)), 'rosterBlocked only contains known types');

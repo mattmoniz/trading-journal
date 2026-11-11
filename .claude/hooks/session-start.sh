@@ -440,6 +440,8 @@ if [ -f "$REPO/scratch/daily_calibration.log" ]; then
 fi
 
 node - <<'JSEOF'
+// Fable audit F36 (2026-11-10): the long lists below printed 172 KB and the harness cut the output to a 2 KB preview, hiding the system status. Each list now shows its first N lines plus a count; the full list is one command away.
+const cap = (lines, n, hint) => (lines.length <= n ? lines : lines.slice(0, n).concat([`  ... +${lines.length - n} more (full list: ${hint})`])).join('\n');
 const s = process.env.SERVER_STATUS || 'unknown';
 const portPid = process.env.SERVER_PORT_PID || '';
 const mainPid = process.env.SERVER_MAIN_PID || '';
@@ -536,11 +538,12 @@ const openDecisions = openDecisionsParsed.map(d =>
 // display issue) -- see HIGH_QUEUE_CAP below.
 const HIGH_QUEUE_CAP = 8; // matches the threshold already used in flag_decision.mjs's own nudge
 const MED_LOW_DISPLAY_CAP = 5;
+const clipDecision = (t) => (t.length > 700 ? t.slice(0, 700) + ` ... (+${t.length - 700} chars; full text: node scripts/flag_decision.mjs --list)` : t);   // Fable audit F36: HIGH umbrellas are up to 4 KB each; the slug and the first 700 chars keep them visible, the list command gives the rest
 const highDecisions = openDecisionsParsed.filter(d => d.priority === 'HIGH');
 const medLowDecisions = openDecisionsParsed.filter(d => d.priority !== 'HIGH');
 const openDecisionsCapped = [
-  ...highDecisions.map(d => `  [${d.priority}] [${d.ageDays}d] ${d.slug}\n      ${d.decisionText}`),
-  ...medLowDecisions.slice(0, MED_LOW_DISPLAY_CAP).map(d => `  [${d.priority}] [${d.ageDays}d] ${d.slug}\n      ${d.decisionText}`),
+  ...highDecisions.map(d => `  [${d.priority}] [${d.ageDays}d] ${d.slug}\n      ${clipDecision(d.decisionText)}`),
+  ...medLowDecisions.slice(0, MED_LOW_DISPLAY_CAP).map(d => `  [${d.priority}] [${d.ageDays}d] ${d.slug}\n      ${clipDecision(d.decisionText)}`),
   ...(medLowDecisions.length > MED_LOW_DISPLAY_CAP
     ? [`  ... and ${medLowDecisions.length - MED_LOW_DISPLAY_CAP} more MEDIUM/LOW pending -- node scripts/flag_decision.mjs --list for the full set`]
     : []),
@@ -648,7 +651,7 @@ const lines = [
     : '✅ Pipeline coverage: all active setup types have fresh SETUP_STATUS rows',
   '',
   overdueClaims.length > 0
-    ? `🔴 RESEARCH_CLAIM LEDGER — ${overdueClaims.length} claim(s) past their recheck date:\n${overdueClaims.join('\n')}\n  ACTION: re-verify each against its source, then node scripts/record_claim.mjs --add '{...}' with the refreshed numbers`
+    ? `🔴 RESEARCH_CLAIM LEDGER — ${overdueClaims.length} claim(s) past their recheck date:\n${cap(overdueClaims, 12, 'node scripts/record_claim.mjs --list')}\n  ACTION: re-verify each against its source, then node scripts/record_claim.mjs --add '{...}' with the refreshed numbers`
     : '✅ RESEARCH_CLAIM ledger: no claims currently overdue for recheck',
   '',
   pipelineFreshnessLine,
@@ -700,11 +703,11 @@ const lines = [
     : '',
   '',
   optstopClusterLines.length > 0
-    ? `⚠️ OPTIMAL_STOP CLUSTERING WATCH — live setup_type(s) whose REAL calibration sample is concentrated in a handful of dates (invisible to DAY_TYPE_MANAGED WATCH above, which only sees the blended population):\n${optstopClusterLines.join('\n')}\n  A "stable" live stop/target here may just mean a circuit breaker is freezing it, not that the calibration is actually trustworthy at this breadth. Re-read before trusting; found 2026-08-30 (OPEN_DECISION optstop_sweep_implausible_rr_thin_samples).`
+    ? `⚠️ OPTIMAL_STOP CLUSTERING WATCH — live setup_type(s) whose REAL calibration sample is concentrated in a handful of dates (invisible to DAY_TYPE_MANAGED WATCH above, which only sees the blended population):\n${cap(optstopClusterLines, 10, 'the OPTIMAL_STOP rows in performance_audit')}\n  A "stable" live stop/target here may just mean a circuit breaker is freezing it, not that the calibration is actually trustworthy at this breadth. Re-read before trusting; found 2026-08-30 (OPEN_DECISION optstop_sweep_implausible_rr_thin_samples).`
     : '',
   '',
   shadowValLines.length > 0
-    ? `${shadowDisagree > 0 ? '🔴' : '📊'} SHADOW VALIDATION — real forward outcomes for currently-suppressed setup_types (the actual closed loop, built 2026-07-17):\n${shadowValLines.join('\n')}${shadowDisagree > 0 ? `\n  ${shadowDisagree} type(s) DISAGREE with their own suppression — forward SHADOW data at N≥20 shows positive EV. Re-examine before trusting the SUPPRESS label.` : shadowAgree > 0 ? `\n  ${shadowAgree} type(s) confirmed by forward data (N≥20, EV<-$5) — suppression is validated, not just asserted.` : ''}`
+    ? `${shadowDisagree > 0 ? '🔴' : '📊'} SHADOW VALIDATION — real forward outcomes for currently-suppressed setup_types (the actual closed loop, built 2026-07-17):\n${cap(shadowValLines, 20, 'the SHADOW_VALIDATION block of scripts/backtest_setup_status.mjs output')}${shadowDisagree > 0 ? `\n  ${shadowDisagree} type(s) DISAGREE with their own suppression — forward SHADOW data at N≥20 shows positive EV. Re-examine before trusting the SUPPRESS label.` : shadowAgree > 0 ? `\n  ${shadowAgree} type(s) confirmed by forward data (N≥20, EV<-$5) — suppression is validated, not just asserted.` : ''}`
     : '📊 SHADOW VALIDATION: no forward SHADOW trades yet (origin_status tracking only started 2026-07-17) — nothing to validate yet, check back as data accumulates.',
   '',
   tmLines.length > 0
@@ -712,7 +715,7 @@ const lines = [
     : '📈 TARGET METHOD WATCH: no setup_type currently uses the corrected-resim methodology (or update_optimal_stops.mjs hasn\'t run since it was wired in 2026-07-19).',
   '',
   csLines.length > 0
-    ? `${csBlocked > 0 ? '🔴' : '⚠️ '} CORRECTED-TARGET-BUT-SUPPRESSED WATCH — setups with a validated new target still blocked by pre-correction suppression history (built 2026-07-19):\n${csLines.join('\n')}${csBlocked > 0 ? `\n  ${csBlocked} fully blocked, ${csBorderline} borderline. Self-heals via SHADOW trades accumulating under the new target (see SHADOW VALIDATION above) -- do not manually override, N>=15 recovery floor is deliberate. Just don't be surprised these setups look "unprofitable" — check here first.` : `\n  ${csBorderline} borderline ACTIVE type(s) at real risk of flipping SUPPRESS on stale history despite a validated new target.`}`
+    ? `${csBlocked > 0 ? '🔴' : '⚠️ '} CORRECTED-TARGET-BUT-SUPPRESSED WATCH — setups with a validated new target still blocked by pre-correction suppression history (built 2026-07-19):\n${cap(csLines, 12, 'SETUP_STATUS rows with a corrected target')}${csBlocked > 0 ? `\n  ${csBlocked} fully blocked, ${csBorderline} borderline. Self-heals via SHADOW trades accumulating under the new target (see SHADOW VALIDATION above) -- do not manually override, N>=15 recovery floor is deliberate. Just don't be surprised these setups look "unprofitable" — check here first.` : `\n  ${csBorderline} borderline ACTIVE type(s) at real risk of flipping SUPPRESS on stale history despite a validated new target.`}`
     : '✅ CORRECTED-TARGET-BUT-SUPPRESSED WATCH: no corrected-target setup is currently blocked or borderline in SETUP_STATUS.',
   '',
   feedbackWithSetupId >= 20
@@ -724,7 +727,7 @@ const lines = [
     : '✅ No untracked instruments — every symbol root in trades matches a known INSTRUMENTS entry.',
   '',
   invariantFailures.length > 0
-    ? `🔴 test_invariants.mjs FAILED in the most recent daily calibration run:\n${invariantFailures.join('\n')}\n  ACTION: run node scripts/test_invariants.mjs directly to see full context, then fix the underlying drift.`
+    ? `🔴 test_invariants.mjs FAILED in the most recent daily calibration run:\n${cap(invariantFailures, 15, 'node scripts/test_invariants.mjs')}\n  ACTION: run node scripts/test_invariants.mjs directly to see full context, then fix the underlying drift.`
     : '✅ test_invariants.mjs: no FAILs in the most recent daily calibration run.',
   '',
   docSizeLines.length > 0

@@ -9,7 +9,7 @@ const pt = (v) => (v == null ? 'n/a' : `${v >= 0 ? '+' : ''}${Number(v).toFixed(
 const Row = ({ k, children }) => <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, fontSize: 13, padding: '2px 0' }}><span style={{ color: '#94a3b8' }}>{k}</span><span style={{ textAlign: 'right' }}>{children}</span></div>;
 
 export default function VacuumLiveSection({ board }) {
-  const head = <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 4 }}>Expansion rule, live (the original idea, orders on Sim1)</div>;
+  const head = <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 4 }}>Liquidity pull, live (orders on Sim1)</div>;
   if (!board) return <div style={box}>{head}<div style={{ ...small, color: '#f59e0b' }}>learning_monitor.json has no live-rule data yet.</div></div>;
   if (board.state !== 'OK') return <div style={box}>{head}<div style={{ ...small, color: '#f59e0b' }}>Unavailable: {board.error || board.state}</div></div>;
   const dm = board.daemon; const age = board.generatedAt ? Math.max(0, Math.round((Date.now() - Date.parse(board.generatedAt)) / 1000)) : 0;
@@ -36,6 +36,9 @@ export default function VacuumLiveSection({ board }) {
             <b>{r.status === 'ACTIVE' ? 'OPEN' : `${r.resolution || r.status}${r.pnl == null ? '' : ` ${r.pnl >= 0 ? '+$' : '-$'}${Math.abs(r.pnl).toFixed(2)}`}`}</b>
           </div>))}
       </> : <div style={{ ...small, color: '#f59e0b' }}>Order status unavailable.</div>}
+      <div style={{ ...small, margin: '8px 0 2px' }}>Bar-6 flag (forward, informational, gates nothing; judge at 30 deteriorating taken trades per track)</div>
+      {(board.bar6 || []).length === 0 ? <div style={small}>No flagged trade yet.</div> : board.bar6.map((r) => (
+        <div key={`${r.track}${r.src}${r.st}`} style={{ fontSize: 13, padding: '2px 0' }}><b>{r.track === 'GBX' ? 'Globex' : 'RTH'}</b> {String(r.st).toLowerCase()} ({r.src === 'LIVE' ? 'live flag' : 'flagged afterwards'}): {r.n} taken on {r.days} days · live exit {pt(r.net_a)} pt · cutting at bar 6 would change it by {pt(r.b_minus_a)} pt</div>))}
       <div style={{ ...small, margin: '8px 0 2px' }}>Latest fires</div>
       {(board.recent || []).length === 0 ? <div style={small}>No event logged yet.</div> : board.recent.map((r, i) => (
         <div key={i} style={{ fontSize: 13, display: 'flex', gap: 10, flexWrap: 'wrap', padding: '2px 0' }}>

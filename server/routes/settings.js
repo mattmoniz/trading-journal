@@ -345,8 +345,8 @@ router.get('/settings/process-health', async (req, res) => {
     // literal node process's own PID, no forking/PID-file indirection to account for.
     let managedProcessMismatch = null;
     try {
-      const { execSync } = await import('child_process');
-      const mainPidOut = execSync('systemctl --user show trading-journal-server.service -p MainPID --value', { timeout: 3000 }).toString().trim();
+      const { execAsync } = await import('../lib/execAsync.js');
+      const mainPidOut = (await execAsync('systemctl --user show trading-journal-server.service -p MainPID --value', { timeout: 3000 })).trim();
       const managedPid = parseInt(mainPidOut, 10);
       if (managedPid && managedPid !== process.pid) {
         managedProcessMismatch = {

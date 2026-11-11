@@ -99,6 +99,8 @@ import { sweepRealOrders } from '../services/sierraChart/orderSweep.js';
 import { autoResolveMissingOrders, autoResolveDeadCanceledEntries } from '../services/missingOrderAutoResolve.js';
 import { closeOnRotationFlip } from '../services/rotationFlipClose.js';
 import { getClient as getSierraChartClient } from '../services/sierraChart/connectionManager.js';
+import { etToday, etDateOf, shiftDays } from '../lib/dateMath.js';
+import { persistShadowCandidates as persistShadowCandidatesImpl } from '../services/shadowPersister.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -1166,7 +1168,8 @@ async function getPriorFiveBracketRows(todayET) {
       GROUP BY ts::date
       ORDER BY trade_date DESC
     `, [todayET]);
-  return setCached(todayET, 'priorFiveBrackets', r);
+  // F17 (2026-11-10): an empty result (a failed or not-yet-loaded read) must not be frozen for 12 h; return it uncached so the next poll retries.
+  return r.rows.length > 0 ? setCached(todayET, 'priorFiveBrackets', r) : r;
 }
 
 // Fetches the 10 parallel data-source queries plus the 5 day-cached derived values
@@ -1241,7 +1244,9 @@ async function fetchDetectionInputs(todayET) {
 
   // Prior day value area — cached (changes only between days)
   let pdVAH = null, pdVAL = null, pdPOC = null;
-  const cachedPdVA = getCached(todayET, 'pdVA');
+  // F10/F17 (2026-11-10): prior-day VA is day-stable (strictly prior days) so it takes the day TTL instead of re-running every 60 s; an all-null result (developing_value_log not yet written) is a miss, never a frozen value.
+  const _pdVaRaw = getCached(todayET, 'pdVA', DAY_CACHE_TTL);
+  const cachedPdVA = _pdVaRaw && _pdVaRaw.pdVAH != null ? _pdVaRaw : null;
   if (cachedPdVA) {
     ({ pdVAH, pdVAL, pdPOC } = cachedPdVA);
   } else {
@@ -1272,7 +1277,7 @@ async function fetchDetectionInputs(todayET) {
 
   // Floor pivots from prior day VA — cached
   let floorP = null, floorR1 = null, floorS1 = null;
-  const cachedFloor = getCached(todayET, 'floorPivots');
+  const cachedFloor = getCached(todayET, 'floorPivots', DAY_CACHE_TTL); // F10 (2026-11-10): derived from the day-stable prior-day VA; only ever stored when complete
   if (cachedFloor) {
     ({ floorP, floorR1, floorS1 } = cachedFloor);
   } else if (pdVAH && pdVAL && pdPOC) {
@@ -1288,7 +1293,8 @@ async function fetchDetectionInputs(todayET) {
 
   // PD-2 VA levels (2-day-prior value area) — strong confluence filter
   let pd2VAH = null, pd2VAL = null;
-  const cachedPD2 = getCached(todayET, 'pd2VA');
+  const _pd2Raw = getCached(todayET, 'pd2VA', DAY_CACHE_TTL); // F10/F17 (2026-11-10): day TTL, all-null is a miss
+  const cachedPD2 = _pd2Raw && _pd2Raw.pd2VAH != null ? _pd2Raw : null;
   if (cachedPD2) {
     ({ pd2VAH, pd2VAL } = cachedPD2);
   } else {
@@ -1486,7 +1492,7 @@ export default function createACDRouter(io) {
 
       const priceQ = await query(`
         SELECT close::float as price FROM price_bars_primary
-        WHERE symbol='NQ' AND ts::date = $1
+        WHERE symbol='NQ' AND ts >= $1::date AND ts < $1::date + 1
         ORDER BY ts DESC LIMIT 1
       `, [todayET]);
       const currentPrice = priceQ.rows[0]?.price ?? null;
@@ -1911,7 +1917,7 @@ export default function createACDRouter(io) {
     const csvPath  = req.file ? req.file.path : null;
     const useDB    = !csvPath;
     const days     = req.body?.days ? parseInt(req.body.days) : null;
-    const startDate = days ? new Date(Date.now() - days * 86400000).toISOString().split('T')[0] : null;
+    const startDate = days ? shiftDays(etToday(), -days) : null; // F35 (2026-11-10): ET calendar date, not the UTC date
 
     acdJob = { status: 'running', progress: { done: 0, total: 360, source: useDB ? 'db' : 'csv', days: days || 'all' }, result: null, error: null };
     res.json({ message: `Backtest started from ${useDB ? 'price bar database' : 'CSV'}${days ? ` (last ${days} days)` : ''}`, status: 'running' });
@@ -1980,7 +1986,7 @@ export default function createACDRouter(io) {
       const bars = await query(`
         SELECT high::float, low::float, volume::bigint
         FROM price_bars_primary
-        WHERE symbol='NQ' AND ts::date = $1
+        WHERE symbol='NQ' AND ts >= $1::date AND ts < $1::date + 1
           AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16
         ORDER BY ts
       `, [prevDate]);
@@ -2119,7 +2125,7 @@ export default function createACDRouter(io) {
 
             const bars = await query(`
               SELECT ts, high::float, low::float, close::float
-              FROM price_bars_primary WHERE symbol='NQ' AND ts::date=$1
+              FROM price_bars_primary WHERE symbol='NQ' AND ts >= $1::date AND ts < $1::date + 1
                 AND EXTRACT(hour FROM ts)*60 + EXTRACT(minute FROM ts) BETWEEN 575 AND 959
               ORDER BY ts
             `, [date]);
@@ -2949,7 +2955,7 @@ export default function createACDRouter(io) {
           // session (getCached checks the shared per-request cache map regardless of key
           // namespace, so a cache hit here is free even on first call if the RTH path ran
           // first in the same poll).
-          const pd2 = getCached(todayET, 'pd2VA') || await (async () => {
+          const pd2 = (x => (x && x.pd2VAH != null ? x : null))(getCached(todayET, 'pd2VA', DAY_CACHE_TTL)) || await (async () => {
             const pd2Q = await query(`
               SELECT vah::float, val::float FROM developing_value_log
               WHERE trade_date < (SELECT MAX(trade_date) FROM developing_value_log WHERE trade_date < $1)
@@ -2960,7 +2966,7 @@ export default function createACDRouter(io) {
           })();
           if (pd2.pd2VAH != null) map.PD2_VAH = pd2.pd2VAH;
           if (pd2.pd2VAL != null) map.PD2_VAL = pd2.pd2VAL;
-          const cached2DPOC = getCached(todayET, '2dPOC');
+          const cached2DPOC = getCached(todayET, '2dPOC', DAY_CACHE_TTL); // F10 (2026-11-10): strictly prior days, day-stable (a null result is a miss)
           // Fixed 2026-09-05 (finding #0, see getGlobalCalib's header) -- getCached returns
           // null on a miss, never undefined, so `!== undefined` always took this branch and
           // never ran the real query. `!= null` correctly treats a miss as a miss.
@@ -2976,7 +2982,8 @@ export default function createACDRouter(io) {
             return setCached(todayET, '2dPOC', profile ? profile.poc : null);
           })();
           if (twoDayPOC != null) map['2D_POC'] = twoDayPOC;
-          return setCached(todayET, 'stackVolLevels', map);
+          // F17 (2026-11-10): `{}` is truthy, so an empty level map (level_prices not written yet) was served all day; cache only a non-empty map.
+          return Object.keys(map).length > 0 ? setCached(todayET, 'stackVolLevels', map) : map;
         })();
         const svLevels = { ...svLevelsRaw };
         if (bar.tod < 630) { delete svLevels.IB_HIGH; delete svLevels.IB_LOW; delete svLevels.IB_MID; }
@@ -3246,7 +3253,9 @@ export default function createACDRouter(io) {
     return stackVolSignal;
   }
 
-  const runSetupDetection = async (req, res) => {
+  // F32 step 2 (Fable audit, 2026-11-11): the detection pass is now a plain function that RETURNS { status, body } instead of writing to a response object (it never read req). The route handler below
+  // and the golden replay (scripts/replay/) call it directly. Verified decision-identical by replaying recorded passes before and after (docs/FABLE_AUDIT_REVIEW_20261110.md).
+  const runDetectionCycle = async () => {
     try {
       const todayET = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
       const nowET   = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
@@ -3367,7 +3376,7 @@ export default function createACDRouter(io) {
         // open SHADOW position survives this hard-close gap untouched, so the card needs to
         // keep showing it here too, not just outside the 5-6PM window.
         const openStandalonePosition = await getOpenStandalonePosition();
-        return res.json({ setup: null, sessionClosed: true, openStandalonePosition });
+        return { status: 200, body: { setup: null, sessionClosed: true, openStandalonePosition } };
       }
 
       // Globex window: 6 PM–9:30 AM ET — fire level fades against PD VAH/VAL/POC only.
@@ -3421,7 +3430,7 @@ export default function createACDRouter(io) {
         // silently disappeared from quick-check.html's standalone card the moment the route
         // crossed into Globex mode at 6PM, even though the position was still genuinely open.
         const openStandalonePosition = await getOpenStandalonePosition();
-        return res.json({ setup: globexSetup, sessionClosed: false, globexMode: true, stackVolSignal, majorPivotDefendedBreakSignal, openStandalonePosition });
+        return { status: 200, body: { setup: globexSetup, sessionClosed: false, globexMode: true, stackVolSignal, majorPivotDefendedBreakSignal, openStandalonePosition } };
       }
 
       // Was a hardcoded `false` (never wired to anything — confirmed zero frontend consumers
@@ -3761,7 +3770,7 @@ export default function createACDRouter(io) {
             return (etMinNow >= minEt && r?.rows?.length) ? setCached(todayET, 'stable:' + name, r) : r;
           };
           const cachedLP = getCached(todayET, 'lpAll');
-          const cached2DPOC = getCached(todayET, '2dPOC');
+          const cached2DPOC = getCached(todayET, '2dPOC', DAY_CACHE_TTL);
           const [or5Q, pdIbQ, pdOrQ, ib10Q, ibTodayQ, or10Q, or15Q, or30Q, lpQ, poc2Q] = await Promise.all([
             query(`SELECT MAX(orh) as hi, MIN(orl) as lo FROM (SELECT or_high::float as orh, or_low::float as orl FROM acd_daily_log WHERE trade_date < $1 AND or_high IS NOT NULL ORDER BY trade_date DESC LIMIT 5) t`, [todayET]).catch(() => ({ rows: [] })),
             // Bounded lower end (2026-07-15, matches the same fix applied elsewhere this
@@ -3800,7 +3809,7 @@ export default function createACDRouter(io) {
             etMinNow >= 630 ? stableOfDay('ibTodayQ', () => query(`
               SELECT MAX(high)::float as ibh, MIN(low)::float as ibl
               FROM price_bars_primary
-              WHERE symbol='NQ' AND ts::date = $1
+              WHERE symbol='NQ' AND ts >= $1::date AND ts < $1::date + 1
                 AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 629
             `, [todayET]).catch(() => ({ rows: [] })), 632) : Promise.resolve({ rows: [] }),
             // Today's OR10/OR15/OR30 high/low, each self-gated to its own formation window
@@ -3811,19 +3820,19 @@ export default function createACDRouter(io) {
             etMinNow >= 580 ? stableOfDay('or10Q', () => query(`
               SELECT MAX(high)::float as orh, MIN(low)::float as orl
               FROM price_bars_primary
-              WHERE symbol='NQ' AND ts::date = $1
+              WHERE symbol='NQ' AND ts >= $1::date AND ts < $1::date + 1
                 AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 579
             `, [todayET]).catch(() => ({ rows: [] })), 582) : Promise.resolve({ rows: [] }),
             etMinNow >= 585 ? stableOfDay('or15Q', () => query(`
               SELECT MAX(high)::float as orh, MIN(low)::float as orl
               FROM price_bars_primary
-              WHERE symbol='NQ' AND ts::date = $1
+              WHERE symbol='NQ' AND ts >= $1::date AND ts < $1::date + 1
                 AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 584
             `, [todayET]).catch(() => ({ rows: [] })), 587) : Promise.resolve({ rows: [] }),
             etMinNow >= 600 ? stableOfDay('or30Q', () => query(`
               SELECT MAX(high)::float as orh, MIN(low)::float as orl
               FROM price_bars_primary
-              WHERE symbol='NQ' AND ts::date = $1
+              WHERE symbol='NQ' AND ts >= $1::date AND ts < $1::date + 1
                 AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 599
             `, [todayET]).catch(() => ({ rows: [] })), 602) : Promise.resolve({ rows: [] }),
             // All static levels from level_prices — single batch query, cached daily.
@@ -5666,6 +5675,8 @@ export default function createACDRouter(io) {
       // not just this brand-new SHADOW-only one. A local failure here should cost Setup B's
       // own fire for this poll, nothing more.
       let failedSweepReversalSetup = null;
+      // PROBE 2026-11-10 (decision rth_shadow_families_silent_since_1023_20261109, DeepSeek audit): one throttled log line (once per 5 minutes) of the inputs of the sweep / stop-sweep cluster and the A/C letter state. try/catch so it can never break the handler. REMOVE after the diagnosis.
+      try { if (!globalThis.__silentProbeAt || Date.now() - globalThis.__silentProbeAt > 300000) { globalThis.__silentProbeAt = Date.now(); console.error('[probe-silent]', JSON.stringify({ todayET, etMin, currentPrice, nBars: allRthBarsRow.rows.length, pdPOC, pdVAH, pdVAL, floorP, floorR1, floorS1, ibLow, ibHigh, cachedPdVA: getCached(todayET, 'pdVA'), cachedFloor: getCached(todayET, 'floorPivots'), aUpFired: typeof aUpFired !== 'undefined' ? aUpFired : 'n/a', nTimelineEvents: typeof timelineEvents !== 'undefined' && timelineEvents ? timelineEvents.length : 'n/a' })); } } catch (probeErr) { console.error('[probe-silent] error', probeErr.message); }
       try {
       if (currentPrice && allRthBarsRow.rows.length >= 30) {
         const fsrLevels = [
@@ -6345,12 +6356,6 @@ export default function createACDRouter(io) {
       // own header (acdShared.js) for why this didn't already exist.
       const openStandalonePosition = await getOpenStandalonePosition();
 
-      if (!active) return res.json({ setup: null, noNewEntries: !!noNewEntries, bigMoveSignal, sigmaContinuation, stackVolSignal, momentumChaseSignal, majorPivotDefendedBreakSignal, stallDefendedLevelSignal, minorDefendedLevelSignal, openStandalonePosition });
-
-      // ── Persist first-detection to active_setups (source of truth) ───────────
-      // fired_at = latest bar ts at first detection (bar-accurate, not poll wall-clock).
-      // price_bars.ts stores ET times as TIMESTAMP WITHOUT TIME ZONE — pg returns them
-      // as JS Dates where UTC fields equal the ET hours/minutes.
       const latestBarTs = latestBarRow.rows[0]?.ts; // ET time stored as UTC by pg driver
       const firedAtTs = latestBarTs
         ? latestBarTs.toISOString().replace('T', ' ').slice(0, 19)
@@ -6429,6 +6434,19 @@ export default function createACDRouter(io) {
         const byWindow = windowMins ? new Date(etNow.getTime() + windowMins * 60000) : sessionEndET;
         return fmtETStr(byWindow < sessionEndET ? byWindow : sessionEndET);
       };
+
+      // Shadow-candidate persister (Fable audit F06 + F32, 2026-11-11): the body now lives in server/services/shadowPersister.js (a verbatim move, golden-replay verified). This closure only hands it
+      // this poll's own values at call time. It sits ABOVE the `if (!active)` early return so a poll with no ACTIVE candidate still persists shadow candidates (forceShadow = SHADOW only, no live order).
+      const persistShadowCandidates = (opts) => persistShadowCandidatesImpl({ todayET, firedAtTs, firedEtMin, etMin, liveStats, active, shadowCandidates, computeExpiry, STOP_SWEEP_PAUSED }, opts);
+
+      if (!active && shadowCandidates.length > 0) persistShadowCandidates({ forceShadow: true }).catch((e) => console.error('[setup-detection] shadow persistence (no active slot) failed:', e.message));
+      if (!active) return { status: 200, body: { setup: null, noNewEntries: !!noNewEntries, bigMoveSignal, sigmaContinuation, stackVolSignal, momentumChaseSignal, majorPivotDefendedBreakSignal, stallDefendedLevelSignal, minorDefendedLevelSignal, openStandalonePosition } };
+
+      // ── Persist first-detection to active_setups (source of truth) ───────────
+      // fired_at = latest bar ts at first detection (bar-accurate, not poll wall-clock).
+      // price_bars.ts stores ET times as TIMESTAMP WITHOUT TIME ZONE — pg returns them
+      // as JS Dates where UTC fields equal the ET hours/minutes.
+      // (latestBarTs .. computeExpiry moved above the `if (!active)` early return 2026-11-11, F06: the shadow persister below needs them on that path too)
 
       // status filter is load-bearing, not cosmetic: without it, this picks up ANY row
       // for the setup_type today by fired_at DESC — including one already
@@ -6911,249 +6929,8 @@ export default function createACDRouter(io) {
            return parseInt(new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hour: 'numeric', hour12: false }).format(d), 10);
          } catch { return null; }
        })();
-      // Persist shadow setups (fire-and-forget, don't block response)
-      if (shadowCandidates.length > 0) {
-        (async () => {
-          // Cluster tagging (2026-09-08, found via a same-day self-check on cluster-tagging
-          // coverage, not the specific OR15/OR30_MID example that motivated it -- that one
-          // turned out to be the early-touch-backfill path instead, see that fix's own comment).
-          // This loop is the file's own-documented "5th active_setups INSERT" (see the
-          // vol_building_signal comment a few lines below) and, like the other 2 real gaps found
-          // the same day, never had any cluster-tagging at all. Multiple shadowCandidates entries
-          // can legitimately share the exact same entry price within one poll -- most often two
-          // different OR-length windows whose underlying high/low hadn't moved between them, so
-          // their computed MID/HIGH/LOW levels are numerically identical. Uses the shared
-          // tagClusterBatch() (server/services/acdShared.js) grouped by entry price, within THIS
-          // poll's batch only -- same no-EV-ranking-available convention as the backfill loop.
-          // Primary/sibling status is claimed via claimClusterRole() AFTER each row's own INSERT
-          // actually succeeds (see acdShared.js's header comment on both functions for the
-          // gated-out-position-0 bug this ordering fixes) -- not decided upfront from raw array
-          // position, which is why this pre-loop step only produces per-key touchIds now.
-          const shadowClusterTouchIds = tagClusterBatch(shadowCandidates, s => s?.entry ?? null);
-          const shadowClusterAssigned = new Set();
-
-          const vaMap = await getValueAreaRegimeMap(todayET).catch(() => ({}));
-          const shadowFireTags = await computeFireTags(todayET, 'RTH', etMin);
-          for (const shadow of shadowCandidates) {
-            if (!shadow || shadow.type === active?.type) continue;
-            const isLongS = shadow.direction === 'LONG';
-            const riskOk = shadow.stop == null || (isLongS ? shadow.stop < shadow.entry : shadow.stop > shadow.entry);
-            if (!riskOk) {
-              logGatedCandidate({ tradeDate: todayET, setupType: shadow.type, gateName: 'RISK_CHECK_SHADOW', gateReason: `non-positive risk: stop ${shadow.stop} vs entry ${shadow.entry} (${shadow.direction})`, entry: shadow.entry, stop: shadow.stop, target: shadow.target });
-              continue;
-            }
-            // Found 2026-08-19 (live "everything says expired" report): this loop -- where
-            // IB_BEARISH/STOP_SWEEP_LONG/C_PAIRED_SHORT actually fire from in practice, not
-            // the `active` slot above -- never checked REFIRE_COOLDOWN_MINUTES at all, so
-            // that map was structurally dead for anything reaching active_setups via
-            // shadowCandidates rather than winning the single `active` pick. Confirmed live:
-            // IB_BEARISH/STOP_SWEEP_LONG/C_PAIRED_SHORT each fired 60+ times in the trailing
-            // 7 days, ~93% TIME_EXPIRED, often one fresh row per ~15s-1min poll cycle with no
-            // gap at all. See isInRefireCooldown()/REFIRE_COOLDOWN_MINUTES at module scope
-            // (~line 192) for the full history.
-            if (await isInRefireCooldown(todayET, shadow.type)) {
-              logGatedCandidate({ tradeDate: todayET, setupType: shadow.type, gateName: 'REFIRE_COOLDOWN_SHADOW', gateReason: `resolved within the last ${REFIRE_COOLDOWN_MINUTES[shadow.type]}min`, entry: shadow.entry, stop: shadow.stop, target: shadow.target });
-              continue;
-            }
-            // 4-6PM no-new-entries dead zone (2026-09-16, user request). CORRECTED 2026-09-25:
-            // this comment used to claim this loop is "real-time" (unlike the early-touch-backfill
-            // loop above) and so the outer/current inNewEntryDeadZone/inRthOpenDeadZone was the
-            // correct flag -- that was wrong. The INSERT below (~line 7317) uses firedAtTs, the
-            // exact same triggering-BAR timestamp the main active-slot path uses, not NOW() -- so
-            // this loop has the identical staleness risk the main path had (see the firedEtMin
-            // comment ~line 6700 for the full incident: a touch whose bar fell inside 9:30-9:35
-            // could still slip through if the poll processing it ran a few minutes late). Switched
-            // to firedEtMin-derived flags, matching the main active-slot fix.
-            const shadowInNewEntryDeadZone = isInNewEntryDeadZone(firedEtMin);
-            const shadowInRthOpenDeadZone = isInRthOpenDeadZone(firedEtMin);
-            if (shadowInNewEntryDeadZone || shadowInRthOpenDeadZone) {
-              logGatedCandidate({ tradeDate: todayET, setupType: shadow.type, gateName: 'POST_RTH_DEAD_ZONE_SHADOW', gateReason: shadowInRthOpenDeadZone ? '9:30-9:35 ET no-new-entries window' : '4-6PM ET no-new-entries window', entry: shadow.entry, stop: shadow.stop, target: shadow.target });
-              continue;
-            }
-            let sT1 = shadow.target;
-            if (sT1 != null && ((isLongS && sT1 <= shadow.entry) || (!isLongS && sT1 >= shadow.entry))) sT1 = null;
-            // FIXED 2026-08-16 (promotion-pipeline structural fix, Layer 1/F3): shadowCandidates
-            // used to hardcode 'SHADOW','SHADOW' with no promotion path (the "promoted after 30+
-            // forward trades" comment was never implemented) -- see
-            // docs/PROMOTION_PIPELINE_STRUCTURAL_FIX_SPEC.md. A type the SETUP_STATUS pipeline has
-            // promoted to ACTIVE (not suppressed, not DOW-suppressed today, and has a real
-            // SETUP_STATUS row at all -- isLiveEligible defaults to ineligible for an unknown
-            // type, per the fail-open hole DeepSeek's QA caught same session) now fires live via
-            // the same suppression sets (liveStats._suppressedSetups/_dowSuppressToday) the main
-            // candidates path reads directly -- and, as of 2026-09-02 (base-eligibility divergence
-            // fix, docs/UNIFIED_LIVE_GATE_CHECKPOINT_SPEC.md sequencing item 2), the main
-            // candidates path ALSO calls isLiveEligible() now (was fail-open on an unknown type
-            // via a raw `_suppressedSetups?.has()` read for over 2 weeks after this comment was
-            // first corrected to say otherwise -- see that fix's own comment, ~line 10089, for the
-            // full writeup). Both sites now share the same function, not just the same underlying
-            // data. STOP_SWEEP_LONG/SHORT
-            // stay SHADOW-only regardless (OPEN_DECISION stop_sweep_long_calibrated_target_pause_or_keep,
-            // resolved to PAUSED 2026-08-05 pending target re-calibration; remove this exclusion
-            // once unpaused). `?.` matches every other liveStats._suppressedSetups consumer in
-            // this file -- defensive only, getCached always has a value here in practice (setCached
-            // at ~6384 runs before this IIFE is ever constructed in the same request).
-            const shadowIsLive = !STOP_SWEEP_PAUSED.has(shadow.type)
-              && isLiveEligible(shadow.type, {
-                   suppressedSetups: liveStats?._suppressedSetups ?? new Set(),
-                   dowSuppressToday: liveStats?._dowSuppressToday ?? new Set(),
-                   knownTypes: liveStats?._knownSetupTypes ?? new Set(),
-                 });
-            // Cross-direction fast-flip gate (2026-09-02) -- see isCrossDirectionFastFlip()
-            // header (~line 292). User-flagged live gap: this loop is where most level-fade
-            // candidates that DON'T win the single `active` slot actually fire from, so a
-            // same-family opposite-direction touch reaching here bypassed this gate entirely --
-            // same structural shape as the sibling-reversal gap just below, fixed the same way.
-            const shadowLevelBase = shadow.type.replace(/_(LONG|SHORT)$/, '');
-            const shadowCrossDirectionCooldownMin = shadow.direction && await isCrossDirectionFastFlip(todayET, shadowLevelBase, shadow.direction);
-            // Sibling-reversal gate (2026-09-02) -- see isPostWinOppositeFamilyBlocked() header
-            // (~line 356). This loop (STOP_SWEEP/VWAP_MAGNET/C_PAIRED/C_REVERSAL/TRT/
-            // BRACKET_BREAKOUT etc, per the comment at ~10256) was the headline coverage gap
-            // DeepSeek's code review found in the initial (RTH-active-slot + Globex only) wiring
-            // -- this is the one insert site that can actually fire ACTIVE from this loop.
-            const shadowPostWinBlocked = !shadowCrossDirectionCooldownMin && shadow.direction && await isPostWinOppositeFamilyBlocked(todayET, postWinFamilyOf(shadow.type), shadow.direction);
-            // Directional-conflict gate (2026-09-03) -- see isOppositeDirectionOpen() header
-            // (~line 443). Fourth and last insert site wired (docs/SINGLE_FIRING_DIRECTIONAL_
-            // CONFLICT_SPEC.md) -- this loop is where most level-fade candidates that don't win
-            // the single `active` slot actually fire ACTIVE from (per the comment above), so it
-            // needs the same coverage the other 3 sites already have. Short-circuited the same
-            // way as the two checks just above.
-            const shadowOppositeDirectionOpen = !shadowCrossDirectionCooldownMin && !shadowPostWinBlocked
-              && shadow.direction && await isOppositeDirectionOpen(shadow.direction);
-            // Same-type refire gate (2026-09-13) -- see isSameSetupRefireBlocked() header
-            // (~line 367). Fourth insert site wired (Globex, STACK_VOL_BREAK_LIVE, RTH main are
-            // the other 3) -- no direction required (unlike the 3 checks just above), same
-            // short-circuit pattern.
-            const shadowSameTypeRefireBlocked = !shadowCrossDirectionCooldownMin && !shadowPostWinBlocked && !shadowOppositeDirectionOpen
-              && await isSameSetupRefireBlocked(todayET, shadow.type, 'RTH');
-            // Opening-drive counter-trade gate (2026-09-25) -- see openingDriveGate.js header.
-            // Only evaluated when this row would otherwise go ACTIVE (it can't change a SHADOW row).
-            const shadowOpeningDriveCounter = shadowIsLive && !shadowCrossDirectionCooldownMin && !shadowPostWinBlocked && !shadowOppositeDirectionOpen && !shadowSameTypeRefireBlocked
-              && shadow.direction && (await isOpeningDriveCounterTrade(shadow.direction)).blocked;
-            // 65pt rotation-direction gate (2026-10-11) -- see isRotationDirectionConflict()
-            // header (acdRiskGates.js). Fifth insert site wired (Globex, STACK_VOL_BREAK_LIVE,
-            // RTH main, cluster-sibling are the other 4) -- this loop is where most level-fade
-            // candidates that don't win the single `active` slot actually fire ACTIVE from, same
-            // reasoning that drove every other gate's coverage here.
-            const shadowRotationDirectionConflict = shadowIsLive && !shadowCrossDirectionCooldownMin && !shadowPostWinBlocked
-              && !shadowOppositeDirectionOpen && !shadowSameTypeRefireBlocked && !shadowOpeningDriveCounter
-              && shadow.direction && await isRotationDirectionConflict(shadow.direction, shadow.type);
-            // FIXED 2026-09-25 (OPEN_DECISION live_time_window_blocked_etmin_staleness_20260925) --
-            // same firedEtMin fix as the main active-slot site above; this loop's INSERT also
-            // stamps fired_at from firedAtTs (the triggering bar's time), not NOW().
-            const shadowLiveTimeWindowBlocked = isLiveTimeWindowBlocked(shadow.type, firedEtMin);
-            // ML meta-labeling VETO gate (2026-09-29) -- see mlLiveVetoGate.js's header.
-            // Fourth and last RTH insert site wired (Globex, STACK_VOL_BREAK_LIVE, RTH main
-            // are the other 3). Same "only run if this would otherwise go ACTIVE, and only
-            // inside the approved window" short-circuit as every other site. confluenceScore
-            // is null here -- this loop has no equivalent of the main path's confluenceCount
-            // (it processes one shadow candidate at a time, not a same-instant touch cluster).
-            // minutesFromOpen uses etMin, not firedEtMin -- FIXED 2026-09-29 (DeepSeek RTH-wiring
-            // review), same reasoning as the main active-slot site above: this loop's own
-            // fireTags call a few lines below uses wall-clock etMin, so the gate must match that,
-            // not the (also real, but different) bar-derived firedEtMin.
-            let shadowMlGateResult = null;
-            const shadowMlVetoBlocked = shadowIsLive && !shadowCrossDirectionCooldownMin && !shadowPostWinBlocked
-              && !shadowOppositeDirectionOpen && !shadowSameTypeRefireBlocked && !shadowOpeningDriveCounter
-              && !shadowRotationDirectionConflict
-              && !shadowLiveTimeWindowBlocked && isInMlVetoGateWindow(firedEtMin)
-              ? (shadowMlGateResult = await scoreMlVetoGate({
-                  entry: shadow.entry, tradeDate: todayET, confluenceScore: null, isRth: true,
-                  minutesFromOpen: minutesFromSessionOpen(etMin, 'RTH'),
-                })).shadow
-              : false;
-            const st = (shadowIsLive && !shadowCrossDirectionCooldownMin && !shadowPostWinBlocked && !shadowOppositeDirectionOpen && !shadowSameTypeRefireBlocked && !shadowOpeningDriveCounter && !shadowRotationDirectionConflict && !shadowLiveTimeWindowBlocked && !shadowMlVetoBlocked) ? 'ACTIVE' : 'SHADOW';
-            const regimeStamp = computeRegimeStamp(shadow.entry, vaMap);
-            const shadowVaOverlapStreak = await getVaOverlapStreak(todayET).catch(() => null);
-            // Volume-building signal (2026-08-29, informational only -- see touchQuality.js's
-            // computeVolumeBuildingMeasures/classifyVolumeBuilding header comment). Found missing
-            // from this insert site entirely (a 5th active_setups INSERT this file has, distinct
-            // from the 4 wired 2026-08-28) while checking whether STOP_SWEEP -- which fires via
-            // shadowCandidates, not the main candidates array -- was being tracked. It wasn't;
-            // fixed here for every setup_type that fires through this loop (STOP_SWEEP_LONG/SHORT,
-            // IB_BEARISH, C_PAIRED_SHORT, etc.), not just STOP_SWEEP specifically.
-            const shadowVbSessionBars = await getSessionBarsSinceOpen(570);
-            const shadowVolBuildingSignal = await computeLiveVolumeBuildingSignal(todayET, shadowVbSessionBars);
-            const shadowIns = await query(`
-              INSERT INTO active_setups (trade_date, setup_type, fired_at, expires_at,
-                entry_zone_low, entry_zone_high, stop_level, t1_level, t1_label,
-                status, origin_status, ${REGIME_STAMP_COLS.join(', ')}, ${FIRE_TAG_COLS.join(', ')}, bet_class, wider_target_mult, vol_building_signal, va_overlap_streak,
-                breakeven_stop_eligible)
-              VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$10, ${REGIME_STAMP_COLS.map((_, i) => `$${11 + i}`).join(', ')},
-                ${FIRE_TAG_COLS.map((_, i) => `$${11 + REGIME_STAMP_COLS.length + i}`).join(', ')},
-                $${11 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length}, $${11 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length + 1},
-                $${11 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length + 2}, $${11 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length + 3},
-                $${11 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length + 4})
-              ON CONFLICT DO NOTHING
-              RETURNING id
-            `, [
-              todayET, shadow.type, firedAtTs, computeExpiry(shadow.type),
-              shadow.entry, shadow.entry, shadow.stop, sT1, shadow.targetLabel || null,
-              st,
-              ...regimeStampValues(regimeStamp),
-              ...fireTagValues(shadowFireTags),
-              getBetClass(shadow.type),
-              // Wider-target-on-fast-resolving-trades (docs/OPEN_THREADS.md 2026-08-17,
-              // WIRED LIVE TO ACTIVE 2026-08-24 -- see the twin site ~9091 for the full
-              // decision rationale, same change applied here for consistency across both
-              // real insert paths). ABSORPTION_LONG/COIL_SURGE mirror the resolver's own
-              // needsBars exclusion (acd.js ~505) -- they have their own custom resolution
-              // and never reach the wider-target branch, so tagging them would be dead
-              // value. CONDITIONAL_VARIANTS[...]?.trailSignalName exclusion (added
-              // 2026-08-18, C1) preserves the "no row sets more than one exit-mechanism
-              // flag" invariant against trail variants.
-              (shadow.type !== 'ABSORPTION_LONG' && !shadow.type.startsWith('COIL_SURGE')
-                && CONDITIONAL_VARIANTS[shadow.type]?.trailSignalName == null) ? WIDER_TARGET_MULT : null,
-              JSON.stringify(shadowVolBuildingSignal),
-              shadowVaOverlapStreak,
-              isBreakevenStopEligible(shadow.type),
-            ]).catch(() => ({ rows: [] }));
-            if (shadowIns.rows[0]) {
-              // Cause for a SHADOW row (2026-10-19): this INSERT has no suppression_reason column, so a row gated here
-              // was indistinguishable from "no reason" -- 190 such rows 10-09..10-16. Recorded in gated_candidates
-              // (SHADOW_CAUSE), NOT in suppression_reason: calibration (EDGE_ATTRIBUTABLE_TRADE_FILTER) and the
-              // recent-fire check near line 6469 treat a NULL reason as meaningful, so labeling the column would
-              // silently change them. First matching reason only (labeling, never gating).
-              if (st === 'SHADOW') {
-                const shadowCause = STOP_SWEEP_PAUSED.has(shadow.type) ? 'STOP_SWEEP_PAUSED'
-                  : !shadowIsLive ? 'NOT_LIVE_ELIGIBLE (setup_status suppress/thin/unknown/manual list)'
-                  : shadowCrossDirectionCooldownMin ? `CROSS_DIRECTION_FAST_FLIP_${shadowCrossDirectionCooldownMin}min`
-                  : shadowPostWinBlocked ? 'POST_WIN_OPP_FAMILY_REV'
-                  : shadowOppositeDirectionOpen ? 'OPPOSITE_DIRECTION_OPEN'
-                  : shadowSameTypeRefireBlocked ? 'SAME_TYPE_REFIRE'
-                  : shadowOpeningDriveCounter ? 'OPENING_DRIVE_COUNTER_TRADE'
-                  : shadowRotationDirectionConflict ? 'ROTATION_DIRECTION_CONFLICT'
-                  : shadowLiveTimeWindowBlocked ? 'LIVE_TIME_WINDOW'
-                  : shadowMlVetoBlocked ? (shadowMlGateResult?.reason || 'ML_VETO_GATE')
-                  : 'UNKNOWN_SHOULD_NOT_HAPPEN';
-                logGatedCandidate({ tradeDate: todayET, setupType: shadow.type, gateName: 'SHADOW_CAUSE',
-                  gateReason: `setup_id=${shadowIns.rows[0].id} ${shadowCause}`, entry: shadow.entry, stop: shadow.stop, target: sT1 });
-              }
-              await tagDirectionGateShadow(shadowIns.rows[0].id, shadow.direction);
-              await tagMomentumAgainstFadeShadow(shadowIns.rows[0].id, shadow.direction);
-              await tagTouchOrderflowPressureShadow(shadowIns.rows[0].id, { direction: shadow.direction, firedAt: firedAtTs });
-              await tagRotation65ptGateShadow(shadowIns.rows[0].id, shadow.direction);
-              tagEntryOrderFlowShadow(shadowIns.rows[0].id, { direction: shadow.direction, setupType: shadow.type, entryPrice: shadow.entry }).catch(() => {}); // fire-and-forget -- see the first call site comment (line 1630) for why
-              if (shadowMlGateResult) persistGateVerdict(shadowIns.rows[0].id, shadowMlGateResult).catch(() => {});
-              // Cluster role claimed HERE, after the insert actually succeeded -- not before
-              // gating -- so a candidate that got risk-checked/cooldown/eligibility-gated out
-              // can never consume the primary slot for a group it was never actually written
-              // into. See acdShared.js's claimClusterRole() header for the bug this ordering
-              // fixes (found via code review 2026-09-08, same day as the rest of this fix).
-              const shadowClusterKey = shadow.entry ?? null;
-              const shadowTouchId = shadowClusterKey != null ? shadowClusterTouchIds.get(shadowClusterKey) : null;
-              if (shadowTouchId) {
-                const { isPrimary } = claimClusterRole(shadowClusterAssigned, shadowClusterKey);
-                await query(
-                  isPrimary
-                    ? `UPDATE active_setups SET cluster_touch_id=$2 WHERE id=$1`
-                    : `UPDATE active_setups SET is_cluster_primary=false, cluster_touch_id=$2 WHERE id=$1`,
-                  [shadowIns.rows[0].id, shadowTouchId]
-                ).catch(() => {});
-              }
-            }
-          }
-        })();
-      }
+      // Persist shadow setups (fire-and-forget, don't block response). The persister itself is defined above the `if (!active)` early return (F06).
+      if (shadowCandidates.length > 0) persistShadowCandidates().catch((e) => console.error('[setup-detection] shadow persistence failed:', e.message));
 
       // bigMoveSignal/sigmaContinuation/stackVolSignal computation MOVED from here to before
       // the `if (!active) return` early return above (2026-08-04) — see that block for why.
@@ -7175,7 +6952,7 @@ export default function createACDRouter(io) {
         ? await query(`SELECT origin_status, suppression_reason FROM active_setups WHERE id=$1`, [setupId]).catch(() => ({ rows: [] }))
         : { rows: [] };
 
-      res.json({
+      return { status: 200, body: {
         setup: {
           ...active,
           entry: persistedLevels.entry,
@@ -7194,8 +6971,8 @@ export default function createACDRouter(io) {
         sigmaContinuation,
         stackVolSignal,
         openStandalonePosition,
-      });
-    } catch(e) { console.error('setup-detection error:', e); res.status(500).json({ error: e.message }); }
+      } };
+    } catch(e) { console.error('setup-detection error:', e); return { status: 500, body: { error: e.message } }; }
   };
 
   // Short-lived (20s) full-response cache, on top of the in-flight coalescing lock
@@ -7220,20 +6997,15 @@ export default function createACDRouter(io) {
       const result = await setupDetectionInFlight;
       return res.status(result.status).json(result.body);
     }
-    let capturedStatus = 200, capturedBody = null;
-    const fakeRes = {
-      status(code) { capturedStatus = code; return this; },
-      json(body) { capturedBody = body; return this; },
-    };
-    setupDetectionInFlight = runSetupDetection(req, fakeRes)
-      .then(async () => {
+    setupDetectionInFlight = runDetectionCycle()
+      .then(async (cycle) => {
         // End-of-pass order sweep (2026-10-19, DeepSeek design review scratch/deepseek_response_sweep_decoupling_design_20261019.md): the
         // sweep inside runSetupDetection runs at the START of a pass, before candidates are built and inserted, so a row inserted during
         // pass N waited for pass N+1's sweep to get its order (measured median 25-36 s, max 64 s). This second call runs after the pass has
         // inserted its rows. It is deliberately NOT a timer: it is sequential inside the single-flight pass, so there is no overlap with the
         // start-of-pass sweep, and the resolve/expire/flip-close passes still run first in the NEXT pass exactly as before. Never throws.
         await sweepRealOrders(getSierraChartClient()).catch((err) => console.error('[sierraChart] end-of-pass sweepRealOrders threw unexpectedly:', err));
-        return { status: capturedStatus, body: capturedBody };
+        return { status: cycle.status, body: cycle.body };
       });
     try {
       const result = await setupDetectionInFlight;
@@ -7535,7 +7307,7 @@ export default function createACDRouter(io) {
       // the original query's bar lookup was always anchored to fired_at::date, not
       // trade_date. Verified byte-for-byte against the original LATERAL query (0 mismatches
       // across today's 35 setups, including this exact overnight edge case) before wiring in.
-      const firedDates = [...new Set(setupsRes.rows.filter(s => s.fired_at).map(s => new Date(s.fired_at).toISOString().slice(0, 10)))];
+      const firedDates = [...new Set(setupsRes.rows.filter(s => s.fired_at).map(s => etDateOf(s.fired_at)))]; // F35 (2026-11-10): fired_at is an ET wall-clock timestamp; its UTC date is the next day for evening fires
       const barByMinute = new Map();
       if (firedDates.length) {
         const barsRes = await query(`
@@ -9001,17 +8773,14 @@ export default function createACDRouter(io) {
       const { direction, entryPrice, note, attributed_setups, outcome, pnl_pts } = req.body;
       if (!direction || !entryPrice) return res.status(400).json({ error: 'direction and entryPrice required' });
 
-      const now = new Date();
-      const etOffset = -4;
-      const etNow = new Date(now.getTime() + etOffset * 3600000);
-      const todayET = etNow.toISOString().split('T')[0];
+      const todayET = etToday(); // F35 (2026-11-10): was now-4h (wrong in winter: EST is -5) sliced as a UTC date
 
       // Auto-attach market context
       const [barQ, levelQ, dayTypeQ] = await Promise.all([
         query(`SELECT close::float, open::float, high::float, low::float,
                  COALESCE(ask_volume,0)::int as ask_vol, COALESCE(bid_volume,0)::int as bid_vol,
                  EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) as et_min
-               FROM price_bars_primary WHERE symbol='NQ' AND ts::date=$1
+               FROM price_bars_primary WHERE symbol='NQ' AND ts >= $1::date AND ts < $1::date + 1
                AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 959
                ORDER BY ts DESC LIMIT 1`, [todayET]),
         query(`SELECT level_name, price::float as level_value FROM level_prices
@@ -9035,7 +8804,7 @@ export default function createACDRouter(io) {
       // Cumulative delta to this point
       const deltaQ = await query(`
         SELECT SUM(COALESCE(ask_volume,0)-COALESCE(bid_volume,0))::int as cum_delta
-        FROM price_bars_primary WHERE symbol='NQ' AND ts::date=$1
+        FROM price_bars_primary WHERE symbol='NQ' AND ts >= $1::date AND ts < $1::date + 1
         AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND $2`,
         [todayET, etMinAtEntry ?? 959]);
       const cumDelta = deltaQ.rows[0]?.cum_delta ?? 0;

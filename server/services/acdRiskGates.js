@@ -23,6 +23,8 @@
 // import these names via `from '../routes/acd.js'` (ibLowPnrDetector.js, detectorLiveGates.js,
 // entryOrderFlowShadow.js, sessionVolumeMonitor.js, antigravityEdges.js) — those import paths
 // were deliberately left unchanged rather than touching 5 more files in the same pass.
+// UPDATE 2026-11-11 (Fable audit F33): ibLowPnrDetector, detectorLiveGates and sessionVolumeMonitor (and the fire-tag/dropToTimeline importers) now import from the defining modules;
+// acd.js still re-exports these names for any remaining consumer (entryOrderFlowShadow.js, antigravityEdges.js, scripts).
 
 import { isRotationGateExempt } from '../config/rotationGateExemptions.js';
 import { query } from '../db.js';
@@ -123,7 +125,8 @@ async function getCrossDirectionFlipCalib(tradeDate) {
     if (row.recommendation !== 'GATE') continue;
     try { map[row.signal_name] = JSON.parse(row.notes).cooldownMinutes; } catch (_) {}
   }
-  return setCached(tradeDate, 'crossDirectionFlipCalib', map);
+  // F17 (2026-11-10): an empty map means no GATE row was read (query returned nothing); do not freeze that for 12 h, the next call re-reads.
+  return Object.keys(map).length > 0 ? setCached(tradeDate, 'crossDirectionFlipCalib', map) : map;
 }
 
 export async function isCrossDirectionFastFlip(tradeDate, levelBase, dir) {
@@ -414,7 +417,7 @@ async function getSameTypeRefireGateCalib(tradeDate) {
   `);
   const gated = new Set();
   for (const row of r.rows) if (row.recommendation === 'GATE') gated.add(row.signal_name);
-  return setCached(tradeDate, 'sameTypeRefireGateCalib', gated);
+  return gated.size > 0 ? setCached(tradeDate, 'sameTypeRefireGateCalib', gated) : gated; // F17 (2026-11-10): never freeze an empty set for 12 h
 }
 
 // Same real_trades population scripts/backtest_same_setup_refire_gate.mjs's CTE requires --

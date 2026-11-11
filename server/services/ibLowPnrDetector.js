@@ -43,10 +43,9 @@ import { cacheGet, cacheSet } from '../lib/cache.js';
 import { getCumulativeDeltaBaseline, IB_CLOSE_MOD } from './touchQuality.js';
 import { getMarketStatus, getEarlyCloseMinute } from './marketCalendar.js';
 import { getCanonicalLiveStatus } from './setupEligibility.js';
-import {
-  dropToTimeline, computeFireTags, FIRE_TAG_COLS, fireTagValues,
-  isCrossDirectionFastFlip, isPostWinOppositeFamilyBlocked,
-} from '../routes/acd.js';
+import { dropToTimeline } from './acdShared.js';
+import { computeFireTags, FIRE_TAG_COLS, fireTagValues } from './fireTags.js';
+import { isCrossDirectionFastFlip, isPostWinOppositeFamilyBlocked } from './acdRiskGates.js'; // F33 (2026-11-11): from the defining modules, not the route file
 import { getBetClass } from '../config/setupTypes.js';
 
 const SETUP_TYPE = 'IB_LOW_PNR_SHORT';

@@ -18,7 +18,7 @@ cd "$REPO_ROOT"
 # of that a second time as a nested subprocess, which would fight its own parent's trap/
 # monitor. SERVER_GUARD_PARENT_MANAGED is exported by start.sh right before `npm start`.
 if [ -n "$SERVER_GUARD_PARENT_MANAGED" ]; then
-  exec nodemon server/index.js
+  exec node server/index.js   # NO nodemon since 2026-11-09 (a saved server file restarted the LIVE server mid-trade, disarming the Sierra switch): apply server edits with ./restart.sh, deliberately, while flat
 fi
 
 # shellcheck source=lib/server-lifecycle.sh
@@ -32,4 +32,4 @@ trap handback_on_exit EXIT INT TERM
 start_health_monitor &
 HEALTH_MONITOR_PID=$!
 
-nodemon server/index.js
+node server/index.js      # no auto-restart on save (see the note above); ./restart.sh to apply a server edit

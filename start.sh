@@ -29,6 +29,9 @@ fi
 # Argon liquidity-vacuum LIVE SHADOW daemon (docs/ARGON_VACUUM_LIVE_SHADOW_DESIGN_20261108.md): watch only, places no orders, single instance (flock), detached, so it outlives this script. Idempotent: a no-op when already running.
 "$REPO_ROOT/scripts/argon_vacuum_live/run.sh" start >/dev/null 2>&1 || true
 
+# Liquidity pull (formerly vacuum) LIVE detector (scripts/vacuum_live/shadow.py; its taken fires become Sim1 orders through server/services/vacuumLiveOrders.js): single instance (flock), detached, idempotent. Added 2026-11-10 night: it was NOT started here before (Fable audit F20 verified), so a reboot left the orders silently off until someone started it by hand.
+"$REPO_ROOT/scripts/vacuum_live/run.sh" start >/dev/null 2>&1 || true
+
 echo "Frontend:  http://localhost:5173"
 echo "Backend:   http://localhost:3002/api"
 echo "Press Ctrl+C to stop"

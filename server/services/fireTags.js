@@ -61,6 +61,7 @@ export async function getVolBucketAtFire(tradeDate) {
   // is actually cached instead of re-querying on every call.
   const cached = getCached(tradeDate, 'volBucketAtFire', DAY_CACHE_TTL);
   if (cached !== null) return cached === 'NONE' ? null : cached;
+  let readFailed = false; // F17 (2026-11-10): a transient read error used to be cached as 'NONE' for 12 h, indistinguishable from "too little history"
   const rows = await query(`
     WITH daily AS (
       SELECT ts::date AS d, AVG(high - low) AS rng
@@ -74,8 +75,8 @@ export async function getVolBucketAtFire(tradeDate) {
       FROM daily
     )
     SELECT d, roll30::float FROM rolled WHERE n_in_window >= 30 ORDER BY d DESC LIMIT 251
-  `, [tradeDate]).catch(() => ({ rows: [] }));
-  if (rows.rows.length < 51) { setCached(tradeDate, 'volBucketAtFire', 'NONE'); return null; } // too little history to bucket meaningfully
+  `, [tradeDate]).catch(() => { readFailed = true; return { rows: [] }; });
+  if (rows.rows.length < 51) { if (!readFailed) setCached(tradeDate, 'volBucketAtFire', 'NONE'); return null; } // too little history to bucket meaningfully
   const [today, ...hist] = rows.rows;
   const histVals = hist.map(r => r.roll30).sort((a, b) => a - b);
   const rank = histVals.filter(v => v <= today.roll30).length / histVals.length;

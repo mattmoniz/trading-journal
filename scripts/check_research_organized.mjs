@@ -22,6 +22,9 @@ for (const f of await readdir(R + 'docs')) {
 
 // (2) every card on the phone Monitor tab needs a written next-step tree (CLAUDE.md co-022) or an explicit "covered by" line
 const COVERED = { // card id -> the nextSteps key that renders on it, or the reason it needs none
+  'cs-box': 'capitulationShadow (the card renders its own Next lines from the capitulationShadow payload, scripts/lib/capitulationShadowSummary.mjs; improvement register row 30 and docs/CAPITULATION_EXIT_SHADOW_PREREG_20261109.md hold the same tree)',
+  'lc-box': 'levelConfluence (the card renders its own Next lines from the levelConfluence payload, scripts/lib/levelConfluenceSummary.mjs; improvement register row 33 and docs/LEVEL_CONFLUENCE_TAGS_PREREG_20261109.md)',
+  'jh-box': 'jobHealth (the card renders its own Next lines from the jobHealth payload, server/services/jobHealth.js nextSteps; docs/FABLE_AUDIT_REVIEW_20261110.md BUILD LOG holds the same tree)',
   'vl-box': 'vacuumLive (the card renders its own Next lines from the vacuumLive payload, scripts/lib/vacuumLiveSummary.mjs; candidate queue Q4-5 holds the same tree)',
   'av-box': 'argonShadow (the card renders its own Next lines from the argonShadow payload, scripts/lib/argonShadowSummary.mjs; improvement register row 19 and CANDIDATE_QUEUE Q4-4 hold the same tree)', 'av-explore': 'details of av-box',
   'sm-box': 'structureModel (the card renders its own Next lines from the structureModel payload, public/structure_model.json; the same tree is registered in monitorNextSteps.js)',

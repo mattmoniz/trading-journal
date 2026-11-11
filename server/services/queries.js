@@ -447,7 +447,7 @@ export async function getTrailing24hrVwapDists(date, days = 30) {
     WHERE symbol='NQ' AND EXTRACT(hour FROM pb.ts)*60+EXTRACT(minute FROM pb.ts) BETWEEN 570 AND 959
     GROUP BY d
     ORDER BY d`, [date, days]).catch(() => ({ rows: [] }));
-  if (result.rows.length < 5) return cacheSet(ck, [], DAY_CACHE_TTL);
+  if (result.rows.length < 5) return cacheSet(ck, [], 60_000); // F17 (2026-11-10): too little data (or a failed read) is retried in a minute, not frozen for 12 h
 
   const days_arr = result.rows.map(r => r.d);
   const minD = days_arr[0], maxD = days_arr[days_arr.length - 1];

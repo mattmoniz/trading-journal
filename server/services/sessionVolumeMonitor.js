@@ -9,7 +9,7 @@
 // "isolate non-trading features" convention (matches volatilityRegime.js/pulseReading.js).
 import { query } from '../db.js';
 import { getVolumeBaseline } from './touchQuality.js';
-import { getSessionBarsSinceOpen } from '../routes/acd.js';
+import { getSessionBarsSinceOpen } from './acdRiskGates.js'; // F33 (2026-11-11): from the defining module, not the route file
 
 export async function getSessionVolumeElevation() {
   const nowET = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));

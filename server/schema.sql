@@ -150,6 +150,62 @@ CREATE TABLE public.acd_daily_log (
 
 
 --
+-- Name: acd_daily_log_barfix1_backup_20261110; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.acd_daily_log_barfix1_backup_20261110 (
+    id integer,
+    trade_date date,
+    or_high numeric,
+    or_low numeric,
+    a_multiplier numeric,
+    a_up_level numeric,
+    a_down_level numeric,
+    a_up_fired boolean,
+    a_up_time time without time zone,
+    a_down_fired boolean,
+    a_down_time time without time zone,
+    c_up_confirmed boolean,
+    c_down_confirmed boolean,
+    daily_score integer,
+    session_close numeric,
+    notes text,
+    created_at timestamp without time zone,
+    close_position character varying(10),
+    day_type character varying(30),
+    profile_shape character varying(20)
+);
+
+
+--
+-- Name: acd_daily_log_barfix2_backup_20261110; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.acd_daily_log_barfix2_backup_20261110 (
+    id integer,
+    trade_date date,
+    or_high numeric,
+    or_low numeric,
+    a_multiplier numeric,
+    a_up_level numeric,
+    a_down_level numeric,
+    a_up_fired boolean,
+    a_up_time time without time zone,
+    a_down_fired boolean,
+    a_down_time time without time zone,
+    c_up_confirmed boolean,
+    c_down_confirmed boolean,
+    daily_score integer,
+    session_close numeric,
+    notes text,
+    created_at timestamp without time zone,
+    close_position character varying(10),
+    day_type character varying(30),
+    profile_shape character varying(20)
+);
+
+
+--
 -- Name: acd_daily_log_fired_repair_backup_20261027; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -2712,6 +2768,18 @@ CREATE TABLE public.active_setups_pre20260720_timeexpired_repair_backup_20260819
 
 
 --
+-- Name: active_setups_rawfix_flag_backup_20261110; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.active_setups_rawfix_flag_backup_20261110 (
+    id integer,
+    old_bad_bars_basis boolean,
+    origin_status character varying(12),
+    fired_at timestamp without time zone
+);
+
+
+--
 -- Name: active_setups_remaining_window_backup_20260714; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -4887,6 +4955,66 @@ ALTER SEQUENCE public.auction_reads_id_seq OWNED BY public.auction_reads.id;
 
 
 --
+-- Name: capitulation_exit_shadow; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.capitulation_exit_shadow (
+    setup_id integer NOT NULL,
+    setup_type character varying(60) NOT NULL,
+    side smallint NOT NULL,
+    bet_class character varying(24),
+    origin_status character varying(12),
+    session_track character varying(4),
+    fired_at timestamp without time zone NOT NULL,
+    resolved_at timestamp without time zone,
+    entry_px numeric(10,2),
+    actual_pnl numeric(10,2),
+    forward boolean NOT NULL,
+    at_boundary boolean,
+    boundary_name character varying(12),
+    boundary_dist_adr numeric(7,4),
+    adr20 numeric(9,2),
+    pivot_live boolean,
+    pivot_tests integer,
+    pivot_dist numeric(9,2),
+    sig_event_id bigint,
+    sig_fired_at timestamp without time zone,
+    sig_ext numeric(8,4),
+    sig_cutoff numeric(8,4),
+    sig_exit_px numeric(10,2),
+    virt_pnl numeric(10,2),
+    delta_pnl numeric(10,2),
+    state character varying(12) NOT NULL,
+    code_version character varying(16) NOT NULL,
+    computed_at timestamp without time zone DEFAULT now() NOT NULL,
+    tags_at timestamp without time zone DEFAULT now() NOT NULL,
+    near_boundary_stopw boolean,
+    boundary_dist_stopw numeric(9,3),
+    stop_width numeric(9,2),
+    sig80_event_id bigint,
+    sig80_fired_at timestamp without time zone,
+    sig80_ext numeric(8,4),
+    sig80_exit_px numeric(10,2),
+    sig80_virt_pnl numeric(10,2),
+    sig80_delta numeric(10,2),
+    stop_px numeric(10,2),
+    expires_at timestamp without time zone,
+    c0_state character varying(8),
+    c0_exit_at timestamp without time zone,
+    c0_exit_px numeric(10,2),
+    c0_pnl numeric(10,2),
+    h_state character varying(8),
+    h_exit_at timestamp without time zone,
+    h_exit_px numeric(10,2),
+    h_pnl numeric(10,2),
+    h_sig_event_id bigint,
+    hc0_delta numeric(10,2),
+    ha_delta numeric(10,2),
+    hold_arms_at timestamp without time zone
+);
+
+
+--
 -- Name: combo_stats; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -5491,6 +5619,48 @@ CREATE TABLE public.developing_value_log (
 
 
 --
+-- Name: developing_value_log_barfix1_backup_20261110; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.developing_value_log_barfix1_backup_20261110 (
+    id integer,
+    trade_date date,
+    poc numeric(10,2),
+    vah numeric(10,2),
+    val numeric(10,2),
+    session_high numeric(10,2),
+    session_low numeric(10,2),
+    session_close numeric(10,2),
+    poc_delta_vs_prior numeric(10,2),
+    va_overlap_pct_vs_prior numeric(6,4),
+    migration_dir_vs_prior text,
+    hold_or_reject_vs_prior text,
+    computed_at timestamp without time zone
+);
+
+
+--
+-- Name: developing_value_log_barfix2_backup_20261110; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.developing_value_log_barfix2_backup_20261110 (
+    id integer,
+    trade_date date,
+    poc numeric(10,2),
+    vah numeric(10,2),
+    val numeric(10,2),
+    session_high numeric(10,2),
+    session_low numeric(10,2),
+    session_close numeric(10,2),
+    poc_delta_vs_prior numeric(10,2),
+    va_overlap_pct_vs_prior numeric(6,4),
+    migration_dir_vs_prior text,
+    hold_or_reject_vs_prior text,
+    computed_at timestamp without time zone
+);
+
+
+--
 -- Name: developing_value_log_halfday_backup_20261027; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -5924,6 +6094,41 @@ ALTER SEQUENCE public.learning_digest_events_id_seq OWNED BY public.learning_dig
 
 
 --
+-- Name: level_confluence_tags; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.level_confluence_tags (
+    setup character varying(8) NOT NULL,
+    source_id bigint NOT NULL,
+    fired_at timestamp without time zone NOT NULL,
+    trade_date date NOT NULL,
+    track character varying(4),
+    direction smallint NOT NULL,
+    price numeric(10,2) NOT NULL,
+    adr20 numeric(9,2),
+    n_levels smallint,
+    ahead_name character varying(12),
+    ahead_price numeric(10,2),
+    ahead_dist_adr numeric(8,4),
+    ahead_defended boolean,
+    behind_name character varying(12),
+    behind_price numeric(10,2),
+    behind_dist_adr numeric(8,4),
+    behind_cross_min numeric(6,1),
+    any_name character varying(12),
+    any_price numeric(10,2),
+    any_dist_adr numeric(8,4),
+    any_side smallint,
+    any_defended boolean,
+    pivot_hi_live boolean,
+    pivot_lo_live boolean,
+    extra jsonb,
+    code_version character varying(16) NOT NULL,
+    computed_at timestamp without time zone DEFAULT now() NOT NULL
+);
+
+
+--
 -- Name: level_prices; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -5941,6 +6146,32 @@ CREATE TABLE public.level_prices (
 --
 
 CREATE TABLE public.level_prices_3m_va_lookahead_backup_20260719 (
+    trade_date date,
+    level_name text,
+    price numeric(12,4),
+    category text,
+    computed_at timestamp with time zone
+);
+
+
+--
+-- Name: level_prices_barfix1_backup_20261110; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.level_prices_barfix1_backup_20261110 (
+    trade_date date,
+    level_name text,
+    price numeric(12,4),
+    category text,
+    computed_at timestamp with time zone
+);
+
+
+--
+-- Name: level_prices_barfix2_backup_20261110; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.level_prices_barfix2_backup_20261110 (
     trade_date date,
     level_name text,
     price numeric(12,4),
@@ -7272,6 +7503,44 @@ CREATE SEQUENCE public.performance_audit_id_seq
 --
 
 ALTER SEQUENCE public.performance_audit_id_seq OWNED BY public.performance_audit.id;
+
+
+--
+-- Name: performance_audit_latest; Type: VIEW; Schema: public; Owner: -
+--
+
+CREATE VIEW public.performance_audit_latest AS
+ SELECT DISTINCT ON (signal_type, signal_name) id,
+    run_date,
+    window_days,
+    signal_type,
+    signal_name,
+    sample_size,
+    win_rate,
+    ev_per_trade,
+    total_pnl,
+    avg_mfe,
+    p50_mfe,
+    p75_mfe,
+    avg_mae,
+    p50_mae,
+    p75_mae,
+    p90_mae,
+    avg_duration_min,
+    current_stop,
+    current_target,
+    optimal_stop,
+    optimal_target,
+    optimal_ev,
+    stop_blowthrough_pct,
+    t1_overshoot_avg,
+    mfe_range_pct,
+    mae_range_pct,
+    recommendation,
+    notes,
+    created_at
+   FROM public.performance_audit
+  ORDER BY signal_type, signal_name, run_date DESC, id DESC;
 
 
 --
@@ -9023,6 +9292,27 @@ CREATE TABLE public.price_bars_nq_history_rebuild_backup_20261019 (
 
 
 --
+-- Name: price_bars_nq_rawfix_backup_20261110; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.price_bars_nq_rawfix_backup_20261110 (
+    id bigint,
+    symbol text,
+    contract text,
+    ts timestamp without time zone,
+    open numeric(12,4),
+    high numeric(12,4),
+    low numeric(12,4),
+    close numeric(12,4),
+    volume integer,
+    num_trades integer,
+    bid_volume integer,
+    ask_volume integer,
+    fix_action text
+);
+
+
+--
 -- Name: price_bars_nqh26_sep_nov2025_backup_20261005; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -9192,6 +9482,248 @@ CREATE SEQUENCE public.profit_lock_events_id_seq
 --
 
 ALTER SEQUENCE public.profit_lock_events_id_seq OWNED BY public.profit_lock_events.id;
+
+
+--
+-- Name: real_setups; Type: VIEW; Schema: public; Owner: -
+--
+
+CREATE VIEW public.real_setups AS
+ SELECT id,
+    trade_date,
+    setup_type,
+    fired_at,
+    expires_at,
+    resolved_at,
+    status,
+    resolution,
+    entry_zone_low,
+    entry_zone_high,
+    stop_level,
+    t1_level,
+    t1_label,
+    structural_level_touched,
+    structural_level_type,
+    price_at_detection,
+    price_at_resolution,
+    historical_win_rate,
+    historical_sessions,
+    historical_avg_pnl,
+    historical_t1_hit_rate,
+    historical_source,
+    nl30_at_detection,
+    structural_state_at_detection,
+    confluence_score_at_detection,
+    actual_outcome,
+    actual_pnl,
+    created_at,
+    updated_at,
+    invalidation_timing,
+    resolution_method,
+    overnight_bias,
+    mae_points,
+    mfe_points,
+    bars_to_resolution,
+    resolution_bar_time,
+    replay_resolution,
+    size_multiplier,
+    suppression_reason,
+    touch_quality,
+    touch_quality_vol_z,
+    origin_status,
+    is_rth,
+    runner_trail_width,
+    breakeven_armed_at,
+    runner_peak_price,
+    runner_trail_price,
+    confluence_levels_at_detection,
+    exhaustion_signal_at_detection,
+    bar6_checkpoint,
+    bar6_exit_recommended,
+    extend_target_level,
+    extend_decision,
+    delta_confirmation_state,
+    cluster_attributed_setups,
+    hivol_lopace_at_detection,
+    regime_pos_10d,
+    regime_label_10d,
+    regime_pos_20d,
+    regime_label_20d,
+    regime_pos_30d,
+    regime_label_30d,
+    regime_pos_45d,
+    regime_label_45d,
+    regime_pos_60d,
+    regime_label_60d,
+    regime_pos_90d,
+    regime_label_90d,
+    regime_pos_180d,
+    regime_label_180d,
+    va_width_pctile_60d,
+    va_overlap_streak,
+    ib_range_pctile_60d,
+    selected_over,
+    day_type_at_fire,
+    vol_bucket_at_fire,
+    session,
+    minutes_from_open,
+    bet_class,
+    wider_target_mult,
+    ib_window_stale_basis,
+    size_factors_at_detection,
+    vol_building_signal,
+    or_range_at_detection,
+    rvol_20d_at_detection,
+    slow_deep_exit_speed,
+    slow_deep_exit_recommended,
+    post_entry_exit_signals,
+    step_trail_shadow,
+    pitch_catch_shadow,
+    direction_gate_shadow,
+    momentum_against_fade_shadow,
+    cluster_touch_id,
+    is_cluster_primary,
+    stale_entry_price_basis,
+    breakeven_stop_shadow,
+    entry_orderflow_shadow,
+    ml_extended_label,
+    ml_pd_features,
+    ml_intraday_features,
+    ml_extended_label_5x,
+    ml_extended_label_10x,
+    breakeven_stop_eligible,
+    breakeven_stop_live,
+    t1_floor_runner_shadow,
+    late_fill_past_expiry_basis,
+    touch_orderflow_pressure_shadow,
+    bad_bars_basis,
+    pnl_source,
+    broker_pnl,
+    rotation_65pt_gate_shadow,
+    stale_levels_basis
+   FROM public.active_setups
+  WHERE (((origin_status)::text = ANY ((ARRAY['ACTIVE'::character varying, 'SHADOW'::character varying])::text[])) AND ((resolution_method IS NULL) OR ((resolution_method)::text <> ALL ((ARRAY['MARK_TO_MARKET'::character varying, 'RECOVERY_MTM'::character varying])::text[]))) AND (ib_window_stale_basis IS NOT TRUE) AND (stale_entry_price_basis IS NOT TRUE) AND (late_fill_past_expiry_basis IS NOT TRUE) AND (bad_bars_basis IS NOT TRUE) AND (stale_levels_basis IS NOT TRUE));
+
+
+--
+-- Name: real_primary_setups; Type: VIEW; Schema: public; Owner: -
+--
+
+CREATE VIEW public.real_primary_setups AS
+ SELECT id,
+    trade_date,
+    setup_type,
+    fired_at,
+    expires_at,
+    resolved_at,
+    status,
+    resolution,
+    entry_zone_low,
+    entry_zone_high,
+    stop_level,
+    t1_level,
+    t1_label,
+    structural_level_touched,
+    structural_level_type,
+    price_at_detection,
+    price_at_resolution,
+    historical_win_rate,
+    historical_sessions,
+    historical_avg_pnl,
+    historical_t1_hit_rate,
+    historical_source,
+    nl30_at_detection,
+    structural_state_at_detection,
+    confluence_score_at_detection,
+    actual_outcome,
+    actual_pnl,
+    created_at,
+    updated_at,
+    invalidation_timing,
+    resolution_method,
+    overnight_bias,
+    mae_points,
+    mfe_points,
+    bars_to_resolution,
+    resolution_bar_time,
+    replay_resolution,
+    size_multiplier,
+    suppression_reason,
+    touch_quality,
+    touch_quality_vol_z,
+    origin_status,
+    is_rth,
+    runner_trail_width,
+    breakeven_armed_at,
+    runner_peak_price,
+    runner_trail_price,
+    confluence_levels_at_detection,
+    exhaustion_signal_at_detection,
+    bar6_checkpoint,
+    bar6_exit_recommended,
+    extend_target_level,
+    extend_decision,
+    delta_confirmation_state,
+    cluster_attributed_setups,
+    hivol_lopace_at_detection,
+    regime_pos_10d,
+    regime_label_10d,
+    regime_pos_20d,
+    regime_label_20d,
+    regime_pos_30d,
+    regime_label_30d,
+    regime_pos_45d,
+    regime_label_45d,
+    regime_pos_60d,
+    regime_label_60d,
+    regime_pos_90d,
+    regime_label_90d,
+    regime_pos_180d,
+    regime_label_180d,
+    va_width_pctile_60d,
+    va_overlap_streak,
+    ib_range_pctile_60d,
+    selected_over,
+    day_type_at_fire,
+    vol_bucket_at_fire,
+    session,
+    minutes_from_open,
+    bet_class,
+    wider_target_mult,
+    ib_window_stale_basis,
+    size_factors_at_detection,
+    vol_building_signal,
+    or_range_at_detection,
+    rvol_20d_at_detection,
+    slow_deep_exit_speed,
+    slow_deep_exit_recommended,
+    post_entry_exit_signals,
+    step_trail_shadow,
+    pitch_catch_shadow,
+    direction_gate_shadow,
+    momentum_against_fade_shadow,
+    cluster_touch_id,
+    is_cluster_primary,
+    stale_entry_price_basis,
+    breakeven_stop_shadow,
+    entry_orderflow_shadow,
+    ml_extended_label,
+    ml_pd_features,
+    ml_intraday_features,
+    ml_extended_label_5x,
+    ml_extended_label_10x,
+    breakeven_stop_eligible,
+    breakeven_stop_live,
+    t1_floor_runner_shadow,
+    late_fill_past_expiry_basis,
+    touch_orderflow_pressure_shadow,
+    bad_bars_basis,
+    pnl_source,
+    broker_pnl,
+    rotation_65pt_gate_shadow,
+    stale_levels_basis
+   FROM public.real_setups
+  WHERE (is_cluster_primary IS TRUE);
 
 
 --
@@ -10509,6 +11041,115 @@ ALTER SEQUENCE public.tripwire_events_id_seq OWNED BY public.tripwire_events.id;
 
 
 --
+-- Name: turn_signal_events; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.turn_signal_events (
+    id bigint NOT NULL,
+    trade_date date NOT NULL,
+    track character varying(4) NOT NULL,
+    bar_idx integer NOT NULL,
+    kind character varying(14) NOT NULL,
+    direction smallint NOT NULL,
+    fired_at timestamp without time zone NOT NULL,
+    bar_end_sec double precision,
+    signal_close numeric,
+    etr numeric,
+    ext_adr numeric,
+    nfast smallint,
+    zroc numeric,
+    zr_proxy numeric,
+    strict boolean,
+    hook_delay integer,
+    linked_kind character varying(14),
+    linked_bar integer,
+    linked_delay integer,
+    held boolean,
+    linked_ext numeric,
+    qualified boolean DEFAULT false NOT NULL,
+    ext_cut numeric,
+    taken boolean DEFAULT false NOT NULL,
+    decision_hash character varying(20),
+    detected_at timestamp without time zone,
+    late_min numeric,
+    entry_open numeric,
+    fwd30 numeric,
+    net_nostop numeric,
+    net_stop25 numeric,
+    mfe30 numeric,
+    mae30 numeric,
+    outcome_at timestamp without time zone,
+    exit_note character varying(40),
+    active_setup_id bigint,
+    order_state character varying(16)
+);
+
+
+--
+-- Name: turn_signal_events_backup_20261109; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.turn_signal_events_backup_20261109 (
+    id bigint,
+    trade_date date,
+    track character varying(4),
+    bar_idx integer,
+    kind character varying(14),
+    direction smallint,
+    fired_at timestamp without time zone,
+    bar_end_sec double precision,
+    signal_close numeric,
+    etr numeric,
+    ext_adr numeric,
+    nfast smallint,
+    zroc numeric,
+    zr_proxy numeric,
+    strict boolean,
+    hook_delay integer,
+    linked_kind character varying(14),
+    linked_bar integer,
+    linked_delay integer,
+    held boolean,
+    linked_ext numeric,
+    qualified boolean,
+    ext_cut numeric,
+    taken boolean,
+    decision_hash character varying(20),
+    detected_at timestamp without time zone,
+    late_min numeric,
+    entry_open numeric,
+    fwd30 numeric,
+    net_nostop numeric,
+    net_stop25 numeric,
+    mfe30 numeric,
+    mae30 numeric,
+    outcome_at timestamp without time zone,
+    exit_note character varying(40),
+    active_setup_id bigint,
+    order_state character varying(16)
+);
+
+
+--
+-- Name: turn_signal_events_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.turn_signal_events_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: turn_signal_events_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.turn_signal_events_id_seq OWNED BY public.turn_signal_events.id;
+
+
+--
 -- Name: vacuum_live_events; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -10540,6 +11181,49 @@ CREATE TABLE public.vacuum_live_events (
     ctx jsonb,
     exit_note character varying(24),
     active_setup_id integer,
+    order_state character varying(24),
+    b6_status character varying(14),
+    b6_close numeric(10,2),
+    b6_net_a numeric(9,2),
+    b6_net_b numeric(9,2),
+    b6_net_c numeric(9,2),
+    b6_src character varying(8),
+    b6_at timestamp without time zone
+);
+
+
+--
+-- Name: vacuum_live_events_backup_20261109; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.vacuum_live_events_backup_20261109 (
+    id bigint,
+    trade_date date,
+    track character varying(4),
+    bar_idx integer,
+    direction smallint,
+    fired_at timestamp without time zone,
+    bar_end_sec numeric(10,3),
+    signal_close numeric(10,2),
+    entry_open numeric(10,2),
+    zroc numeric(7,3),
+    roc10 numeric(9,2),
+    etr numeric(8,2),
+    dur numeric(9,2),
+    zr_proxy numeric(7,3),
+    taken boolean,
+    decision_hash character varying(16),
+    detected_at timestamp without time zone,
+    late_min numeric(8,1),
+    fwd30 numeric(9,2),
+    net_nostop numeric(9,2),
+    net_stop25 numeric(9,2),
+    mfe30 numeric(9,2),
+    mae30 numeric(9,2),
+    outcome_at timestamp without time zone,
+    ctx jsonb,
+    exit_note character varying(24),
+    active_setup_id integer,
     order_state character varying(24)
 );
 
@@ -10561,6 +11245,59 @@ CREATE SEQUENCE public.vacuum_live_events_id_seq
 --
 
 ALTER SEQUENCE public.vacuum_live_events_id_seq OWNED BY public.vacuum_live_events.id;
+
+
+--
+-- Name: vacuum_roc3_events; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.vacuum_roc3_events (
+    id bigint NOT NULL,
+    trade_date date NOT NULL,
+    track character varying(4) NOT NULL,
+    bar_idx integer NOT NULL,
+    direction smallint NOT NULL,
+    fired_at timestamp without time zone NOT NULL,
+    bar_end_sec numeric(10,3),
+    signal_close numeric(10,2) NOT NULL,
+    entry_open numeric(10,2),
+    zroc numeric(7,3),
+    roc3 numeric(9,2),
+    etr numeric(8,2),
+    dur numeric(9,2),
+    zr_proxy numeric(7,3),
+    taken boolean NOT NULL,
+    decision_hash character varying(16) NOT NULL,
+    detected_at timestamp without time zone NOT NULL,
+    late_min numeric(8,1),
+    fwd30 numeric(9,2),
+    net_nostop numeric(9,2),
+    net_stop25 numeric(9,2),
+    mfe30 numeric(9,2),
+    mae30 numeric(9,2),
+    outcome_at timestamp without time zone,
+    exit_note character varying(24),
+    ctx jsonb
+);
+
+
+--
+-- Name: vacuum_roc3_events_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.vacuum_roc3_events_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: vacuum_roc3_events_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.vacuum_roc3_events_id_seq OWNED BY public.vacuum_roc3_events.id;
 
 
 --
@@ -11727,10 +12464,24 @@ ALTER TABLE ONLY public.tripwire_events ALTER COLUMN id SET DEFAULT nextval('pub
 
 
 --
+-- Name: turn_signal_events id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.turn_signal_events ALTER COLUMN id SET DEFAULT nextval('public.turn_signal_events_id_seq'::regclass);
+
+
+--
 -- Name: vacuum_live_events id; Type: DEFAULT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.vacuum_live_events ALTER COLUMN id SET DEFAULT nextval('public.vacuum_live_events_id_seq'::regclass);
+
+
+--
+-- Name: vacuum_roc3_events id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.vacuum_roc3_events ALTER COLUMN id SET DEFAULT nextval('public.vacuum_roc3_events_id_seq'::regclass);
 
 
 --
@@ -12018,6 +12769,14 @@ ALTER TABLE ONLY public.auction_reads
 
 
 --
+-- Name: capitulation_exit_shadow capitulation_exit_shadow_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.capitulation_exit_shadow
+    ADD CONSTRAINT capitulation_exit_shadow_pkey PRIMARY KEY (setup_id);
+
+
+--
 -- Name: combo_stats combo_stats_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -12295,6 +13054,14 @@ ALTER TABLE ONLY public.job_timings
 
 ALTER TABLE ONLY public.learning_digest_events
     ADD CONSTRAINT learning_digest_events_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: level_confluence_tags level_confluence_tags_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.level_confluence_tags
+    ADD CONSTRAINT level_confluence_tags_pkey PRIMARY KEY (setup, source_id);
 
 
 --
@@ -13394,6 +14161,22 @@ ALTER TABLE ONLY public.tripwire_events
 
 
 --
+-- Name: turn_signal_events turn_signal_events_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.turn_signal_events
+    ADD CONSTRAINT turn_signal_events_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: turn_signal_events turn_signal_events_uq; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.turn_signal_events
+    ADD CONSTRAINT turn_signal_events_uq UNIQUE (trade_date, track, bar_idx, kind, direction);
+
+
+--
 -- Name: dynamic_edges_mining uniq_edge_run; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -13415,6 +14198,22 @@ ALTER TABLE ONLY public.vacuum_live_events
 
 ALTER TABLE ONLY public.vacuum_live_events
     ADD CONSTRAINT vacuum_live_events_trade_date_track_bar_idx_direction_key UNIQUE (trade_date, track, bar_idx, direction);
+
+
+--
+-- Name: vacuum_roc3_events vacuum_roc3_events_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.vacuum_roc3_events
+    ADD CONSTRAINT vacuum_roc3_events_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: vacuum_roc3_events vacuum_roc3_events_trade_date_track_bar_idx_direction_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.vacuum_roc3_events
+    ADD CONSTRAINT vacuum_roc3_events_trade_date_track_bar_idx_direction_key UNIQUE (trade_date, track, bar_idx, direction);
 
 
 --
@@ -13725,6 +14524,13 @@ CREATE INDEX idx_avs_date ON public.argon_vacuum_shadow USING btree (trade_date,
 
 
 --
+-- Name: idx_ces_fired; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_ces_fired ON public.capitulation_exit_shadow USING btree (fired_at);
+
+
+--
 -- Name: idx_cm_last_seen; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -13823,6 +14629,13 @@ CREATE INDEX idx_job_timings_step ON public.job_timings USING btree (job, step, 
 
 
 --
+-- Name: idx_lct_fired; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_lct_fired ON public.level_confluence_tags USING btree (fired_at);
+
+
+--
 -- Name: idx_learning_digest_created; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -13893,10 +14706,10 @@ CREATE UNIQUE INDEX idx_order_placements_one_live_exit_per_setup ON public.order
 
 
 --
--- Name: idx_order_placements_one_stop_per_setup; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_order_placements_one_live_stop_per_setup; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE UNIQUE INDEX idx_order_placements_one_stop_per_setup ON public.order_placements USING btree (setup_id) WHERE ((purpose)::text = 'STOP'::text);
+CREATE UNIQUE INDEX idx_order_placements_one_live_stop_per_setup ON public.order_placements USING btree (setup_id) WHERE (((purpose)::text = 'STOP'::text) AND ((status)::text <> ALL ((ARRAY['CANCELED'::character varying, 'REJECTED'::character varying, 'ERROR'::character varying])::text[])));
 
 
 --
@@ -13932,6 +14745,13 @@ CREATE INDEX idx_order_placements_setup_id ON public.order_placements USING btre
 --
 
 CREATE INDEX idx_order_placements_updates_client_order_id ON public.order_placements_updates USING btree (client_order_id);
+
+
+--
+-- Name: idx_pa_type_name_run_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_pa_type_name_run_id ON public.performance_audit USING btree (signal_type, signal_name, run_date DESC, id DESC);
 
 
 --
@@ -14243,6 +15063,13 @@ CREATE INDEX idx_trades_symbol ON public.trades USING btree (symbol);
 
 
 --
+-- Name: idx_tse_date; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_tse_date ON public.turn_signal_events USING btree (trade_date);
+
+
+--
 -- Name: idx_tst_trade_date; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -14275,6 +15102,13 @@ CREATE INDEX idx_vars_date ON public.value_area_regime_snapshots USING btree (sn
 --
 
 CREATE INDEX idx_vle_date ON public.vacuum_live_events USING btree (trade_date, track);
+
+
+--
+-- Name: idx_vr3_date; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_vr3_date ON public.vacuum_roc3_events USING btree (trade_date, track);
 
 
 --

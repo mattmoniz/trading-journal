@@ -1,6 +1,7 @@
 // Read-only monitor summary (2026-10-25) behind GET /api/setups/monitor-summary and the quick-check "Monitor" tab (hamburger menu).
 // Collects, in one place, the scheduled research gates so they can be watched from the phone / Home Assistant page: roster scoreboard,
 // ML unseen-trade scorecard, the forward tests that are still collecting data (forecast, regime gauge, tell Stage 2) and the on/off state of the live research gates. Reads only; changes nothing.
+import { getJobHealth } from './jobHealth.js';
 import { readFile } from 'fs/promises';
 import { fileURLToPath } from 'url';
 import { query } from '../db.js';
@@ -63,11 +64,12 @@ async function gates() {
 }
 
 export async function getMonitorSummary() {
-  const [sb, un, fw, gt, lm, tc, dc, oa] = await Promise.all([safe('scoreboard', scoreboard), safe('mlUnseen', mlUnseen), safe('forwardTests', forwardTests), safe('gates', gates), learning(), safe('tellContext', getTellContextBoard), safe('dayContext', getDayContextBoard), safe('ovnArms', getOvnArmsBoard)]);
+  const [sb, un, fw, gt, lm, tc, dc, oa, jh] = await Promise.all([safe('scoreboard', scoreboard), safe('mlUnseen', mlUnseen), safe('forwardTests', forwardTests), safe('gates', gates), learning(), safe('tellContext', getTellContextBoard), safe('dayContext', getDayContextBoard), safe('ovnArms', getOvnArmsBoard), safe('jobHealth', getJobHealth)]);
   const L = [];
   L.push(sb.state === 'OK' ? `Roster scoreboard: ${sb.daysSoFar}/${sb.firstLookDays} days to first look; roster ${money(sb.arms?.ROSTER_LIVE?.perTrade)}/trade vs take-all ${money(sb.arms?.TAKE_ALL?.perTrade)}/trade (${sb.verdict})` : `Roster scoreboard: ${sb.state}`);
   L.push(un.state === 'OK' ? `ML unseen scorecard: ${un.latest.unseenDays}/${un.daysNeeded} unseen days, policy-minus-random ${money(un.latest.policyMinusRandom)}, pass=${un.latest.pass}` : `ML unseen scorecard: ${un.state}`);
   L.push(fw.state === 'ERROR' ? 'Forward tests: ERROR' : `Forward tests: forecast ${fw.forecast.days}/${fw.forecast.daysNeeded} days, regime ${fw.regime.realized}/${fw.regime.needed} realized outlooks, tell ${fw.tell.trades}/${fw.tell.floor} trades (${money(fw.tell.pnl)})`);
   if (gt.liveRoster) L.push(`Live roster ${gt.liveRoster.state}: ${gt.liveRoster.types.join(', ') || 'none'}; ML veto ${gt.mlVeto.enforce ? 'ENFORCING' : 'log-only'}; breakeven stop ${gt.breakevenStopLive ? 'ON' : 'off'}`);
-  return { generatedAt: new Date().toISOString(), scoreboard: sb, mlUnseen: un, forwardTests: fw, gates: gt, learning: lm, tellContext: tc, dayContext: dc, ovnArms: oa, nextSteps: buildNextSteps({ sb, un, fw, lm }), summary_text: L.join('\n') };
+  L.push(jh.state === 'OK' ? `Scheduled jobs: ${jh.failing.length} failing${jh.failing.length ? ' (' + jh.failing.map((j) => `${j.name} x${j.consecutiveFailures}`).join(', ') + ')' : ''}, ${jh.stuck.length} stuck, ${jh.healthy} healthy` : `Scheduled jobs: ${jh.state}`);
+  return { generatedAt: new Date().toISOString(), jobHealth: jh, scoreboard: sb, mlUnseen: un, forwardTests: fw, gates: gt, learning: lm, tellContext: tc, dayContext: dc, ovnArms: oa, nextSteps: buildNextSteps({ sb, un, fw, lm }), summary_text: L.join('\n') };
 }

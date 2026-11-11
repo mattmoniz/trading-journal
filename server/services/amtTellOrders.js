@@ -15,13 +15,16 @@ import { dropToTimeline } from './acdShared.js';
 import { getBetClass } from '../config/setupTypes.js';
 import { LIVE_INSTRUMENT } from '../config/instruments.js';
 import { killSwitch } from './sierraChart/orderEligibility.js';
+import { createStrategyService, RESOLVE_SQL, etMinOf, lastNqClose } from './strategyOrderCore.js';
 import { getTellContextStatus } from './tellContextServiceManager.js';
 import { getRthLiquidation, startDayStateRefresher } from './dayStateService.js';
 
 // override (2026-11-03, docs/TELL_OVERRIDE_LIVE_DESIGN_20261103.md): for fires the context overlay marks AGAINST the order goes the OTHER way (book C: flipped direction, stop just beyond the value edge it defends);
 // edgeStop (book B, same direction with the value-edge stop) is built but OFF. enabled:false restores the pure tell. Fail-closed to the TELL, never to a skip: if the context is not ready while the fire is still fresh the tell's
 // own order goes out. maxFlipsPerDay and the parity check are automatic stops; the first 5 live flips are a checkpoint for the user (docs/OPEN_THREADS.md).
-export const AMT_TELL_ORDERS = { enabled: true, barRule: 'split', book: 'V1', pollMs: 5000, t1PlaceholderDist: 5000, expiresAtET: '15:57:00',
+// PAUSED UNTIL FURTHER NOTICE (user, 2026-11-10 ~11:40 ET: "pause it until further notice"): enabled:false = the kill switch, no new tell orders; the detector, the shadow books and the exit management of any open row keep running. To resume: set true,
+// delete the manual-pause row in amt_tell_alarms (kind AMT_STUCK_ACTIVE, detail manual_pause) and restart the server (the restart disarms the Sierra switch: re-arm only on the user's go). Logged as OPEN_DECISION amt_tell_orders_paused_20261110.
+export const AMT_TELL_ORDERS = { enabled: false, barRule: 'split', book: 'V1', pollMs: 5000, t1PlaceholderDist: 5000, expiresAtET: '15:57:00',
   override: { enabled: true, flip: true, edgeStop: false, waitMs: 20000, maxFlipsPerDay: 2 },
   // Day-state gate (2026-11-09, user: yes to option A; docs/WORKPLAN_20261109.md items F/G): no LONG order while the RTH day state is a LIQUIDATION (dayState.js, replayed over 2023-2026). The
   // skipped tell keeps its virtual result in amt_tell_trades with order_state SKIPPED_LIQ, so the would-have-been trade is scored. Unknown / stale / warm-up state = no gate (fail open to the tell). Longs only (shorts and melt-ups are untouched).
@@ -30,8 +33,9 @@ const SIM_TO_RESOLUTION = {
   STOP: ['STOP_HIT', 'TELL_STOP'], STOP_GAP: ['STOP_HIT', 'TELL_STOP'], FADE: ['TIME_EXPIRED', 'TELL_FADE'], TIMEOUT: ['TIME_EXPIRED', 'TELL_TIMEOUT'], EOD: ['TIME_EXPIRED', 'TELL_EOD'], EOS: ['TIME_EXPIRED', 'TELL_EOD'],
 };   // resolution VARCHAR(20), resolution_method VARCHAR(20): every value above is <= 12 chars; none is MARK_TO_MARKET/RECOVERY_MTM (REAL_TRADE_FILTER would drop it from real N/EV)
 
-const state = { lastRunAt: null, lastError: null, selfPaused: null, runs: 0, linked: 0, skipped: 0, resolved: 0, problem: null };
-const alarmSeen = new Map();
+const svc = createStrategyService({ logName: 'amtTellOrders', cfg: AMT_TELL_ORDERS, pauseKindSql: "kind IN ('AMT_STUCK_ACTIVE','AMT_GENERIC_RESOLUTION','AMT_DOUBLE_ENTRY','AMT_UNFLATTENED','AMT_OVERRIDE_STALE')",
+  statusExtra: () => ({ override: AMT_TELL_ORDERS.override }), onStart: () => { if (AMT_TELL_ORDERS.dayStateGate?.enabled) startDayStateRefresher(); } });
+const { state, raiseAlarm } = svc;   // Fable audit F26 (2026-11-11): state, alarm, pause, runner and status are shared (strategyOrderCore.js)
 
 /** Pure: should this logged tell be ordered? t = amt_tell_trades row; ctx = { nBars (completed bars the detector reports), busy, lastClose }. */
 export function decideEntry(t, ctx) {
@@ -107,10 +111,8 @@ export function buildInsert(t, fireTags = null) {
   const params = [t.trade_date, setupType, entryAt, expiresAt, t.entry_price, t.stop_price, t1, 'NO_TARGET (V1 tell-fade / 120-min / 15:55 exits written by amtTellOrders.js)', ...fireTagValues(fireTags || {}), getBetClass(setupType)];
   return { sql, params, setupType, entryAt, expiresAt, t1 };
 }
-export const RESOLVE_SQL = `UPDATE active_setups SET status = 'RESOLVED', resolution = $2, resolution_method = $3, actual_pnl = $4, price_at_resolution = $5, resolved_at = $6, updated_at = NOW()
-                           WHERE id = $1 AND status = 'ACTIVE' AND resolved_at IS NULL RETURNING id`;
+export { RESOLVE_SQL };   // shared (strategyOrderCore.js)
 
-const etMinOf = (ts) => Number(String(ts).slice(11, 13)) * 60 + Number(String(ts).slice(14, 16));
 
 async function sessionNBars(tradeDate) {
   const r = await query(`SELECT n_bars FROM amt_tell_sessions WHERE trade_date = $1 AND bar_rule = $2 AND state IN ('LIVE')`, [tradeDate, AMT_TELL_ORDERS.barRule]);
@@ -122,21 +124,7 @@ async function isBusy() {
   const o = await query(`SELECT 1 FROM order_placements o JOIN active_setups s ON s.id = o.setup_id WHERE s.setup_type LIKE 'AMT\\_TELL\\_%' AND o.position_open = TRUE LIMIT 1`);   // resolved but the flatten is still in flight
   return o.rows.length > 0;
 }
-async function lastNqClose() {
-  const r = await query(`SELECT close::float AS c FROM price_bars_primary WHERE symbol='NQ' AND ts >= NOW()::timestamp - interval '10 minutes' AND ts <= NOW()::timestamp ORDER BY ts DESC LIMIT 1`);
-  return r.rows[0]?.c ?? null;
-}
 
-async function raiseAlarm(kind, detail, pause) {
-  const key = kind + JSON.stringify(detail);
-  if (!alarmSeen.has(key)) {
-    alarmSeen.set(key, Date.now());
-    console.error(`[amtTellOrders] ALARM ${kind}`, detail);
-    await query(`INSERT INTO amt_tell_alarms (at, kind, detail) VALUES (NOW()::timestamp, $1, $2)`, [kind.slice(0, 30), JSON.stringify(detail)]).catch(() => {});
-  }
-  state.problem = `${kind} ${JSON.stringify(detail)}`;
-  if (pause && !state.selfPaused) { state.selfPaused = `${kind} at ${new Date().toISOString()}`; console.error(`[amtTellOrders] SELF-PAUSED (no new entries; exits keep being managed): ${state.selfPaused}`); }
-}
 
 async function loadOverride(t) {
   const c = (await query(`SELECT label FROM tell_context_fires WHERE tell_trade_id = $1`, [t.id])).rows[0];
@@ -224,34 +212,13 @@ async function reconcile() {
     else if (r.sstatus === 'CLOSED' && r.sold) await raiseAlarm('AMT_OVERRIDE_STALE', { setup_id: r.id, why: 'book closed but the order was not resolved' }, true);
     else if (r.sstatus === 'OPEN' && readerBad) await raiseAlarm('AMT_OVERRIDE_STALE', { setup_id: r.id, why: 'context reader not healthy' }, true);
   }
-  const generic = (await query(`SELECT id, resolution, resolution_method FROM active_setups WHERE setup_type LIKE 'AMT\\_TELL\\_%' AND trade_date >= CURRENT_DATE - 1 AND status IN ('RESOLVED','EXPIRED','INVALIDATED')
-                                AND (resolution_method IN ('MARK_TO_MARKET','RECOVERY_MTM') OR resolution = 'INVALIDATED')`)).rows;
-  for (const r of generic) await raiseAlarm('AMT_GENERIC_RESOLUTION', { setup_id: r.id, resolution: r.resolution, method: r.resolution_method }, true);
-  const unflat = (await query(`SELECT a.id FROM active_setups a JOIN order_placements o ON o.setup_id = a.id AND o.purpose = 'ENTRY' WHERE a.setup_type LIKE 'AMT\\_TELL\\_%' AND a.status IN ('RESOLVED','EXPIRED')
-                                AND o.position_open = TRUE AND a.resolved_at < NOW()::timestamp - interval '3 minutes'`)).rows;   // resolved, entry filled, but the broker position is still open: the flatten never went out
-  for (const r of unflat) await raiseAlarm('AMT_UNFLATTENED', { setup_id: r.id }, true);
-  const act = (await query(`SELECT count(*)::int AS n FROM active_setups WHERE setup_type LIKE 'AMT\\_TELL\\_%' AND status = 'ACTIVE'`)).rows[0].n;
-  if (act > 1) await raiseAlarm('AMT_DOUBLE_ENTRY', { active_rows: act }, true);
+  await svc.checkGenericResolution('AMT\\_TELL\\_%', 'AMT_GENERIC_RESOLUTION');
+  await svc.checkUnflattened('AMT\\_TELL\\_%', 'AMT_UNFLATTENED');
+  await svc.checkDoubleEntry('AMT\\_TELL\\_%', 'AMT_DOUBLE_ENTRY');
   if (state.selfPaused && !state.problem) state.problem = `self-paused: ${state.selfPaused}`;
 }
 
-// The self-pause survives a restart: any pausing alarm raised today (ET) re-pauses the service until the next trading day (clear it deliberately by deleting today's AMT_* alarm rows).
-async function loadPause() {
-  if (state.selfPaused) return;
-  const r = (await query(`SELECT kind FROM amt_tell_alarms WHERE kind IN ('AMT_STUCK_ACTIVE','AMT_GENERIC_RESOLUTION','AMT_DOUBLE_ENTRY','AMT_UNFLATTENED','AMT_OVERRIDE_STALE') AND at >= CURRENT_DATE::timestamp ORDER BY at DESC LIMIT 1`)).rows[0];
-  if (r) { state.selfPaused = `${r.kind} (restored from today's alarms)`; console.error(`[amtTellOrders] SELF-PAUSED on start: ${state.selfPaused}`); }
-}
-
-let timer = null, running = false;
-export async function runAmtTellOrdersOnce() {
-  if (running) return; running = true;
-  try { await loadPause(); await reconcile(); await syncExits(); await considerEntries(); state.lastError = null; }       // reconcile first: a fresh misfire must pause BEFORE any new entry is considered
-  catch (e) { state.lastError = e.message; console.error('[amtTellOrders]', e); }
-  finally { running = false; state.lastRunAt = Date.now(); state.runs++; }
-}
-export function startAmtTellOrders() { if (!timer) { timer = setInterval(runAmtTellOrdersOnce, AMT_TELL_ORDERS.pollMs); if (AMT_TELL_ORDERS.dayStateGate?.enabled) startDayStateRefresher(); } }
-export function stopAmtTellOrders() { if (timer) { clearInterval(timer); timer = null; } }
-export function getAmtTellOrdersStatus() {
-  return { enabled: !!AMT_TELL_ORDERS.enabled && !state.selfPaused, configuredEnabled: !!AMT_TELL_ORDERS.enabled, override: AMT_TELL_ORDERS.override, selfPaused: state.selfPaused, problem: state.problem || (state.lastError ? `orders service error: ${state.lastError}` : null),
-           lastRunAgeSec: state.lastRunAt ? Math.round((Date.now() - state.lastRunAt) / 1000) : null, linked: state.linked, skipped: state.skipped, resolved: state.resolved };
-}
+export async function runAmtTellOrdersOnce() { return svc.runOnce({ reconcile, syncExits, considerEntries }); }
+export function startAmtTellOrders() { svc.start(runAmtTellOrdersOnce); }
+export function stopAmtTellOrders() { svc.stop(); }
+export function getAmtTellOrdersStatus() { return svc.status(); }

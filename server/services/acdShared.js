@@ -136,10 +136,37 @@ export function getCached(tradeDate, key, ttl = LEVEL_CACHE_TTL) {
   if (e && Date.now() - e.ts < ttl) return e.val;
   return null;
 }
+let _lastCacheSweep = Date.now();
 export function setCached(tradeDate, key, val) {
-  _levelCache[cacheKey(tradeDate, key)] = { val, ts: Date.now() };
+  const now = Date.now();
+  // F30 (Fable audit, 2026-11-10): entries were never evicted, so date-keyed keys accumulated for the life of the process. Entries older than the
+  // longest TTL in use (DAY_CACHE_TTL) can never be served again, so drop them at most every 10 minutes.
+  if (now - _lastCacheSweep > 10 * 60 * 1000) {
+    _lastCacheSweep = now;
+    for (const k of Object.keys(_levelCache)) if (now - _levelCache[k].ts > DAY_CACHE_TTL) delete _levelCache[k];
+  }
+  _levelCache[cacheKey(tradeDate, key)] = { val, ts: now };
   return val;
 }
+
+// F17 (Fable audit, 2026-11-10): the day-long caches below stored whatever the loader returned, including an EMPTY or failed result, and kept serving it for
+// 12 hours (a gate silently off all day; a transient error cached as 'NONE'). This helper refuses to store an empty or incomplete value: it returns the
+// value to the caller (so behaviour on this call is unchanged) but the next call tries the loader again. `isComplete(val)` overrides the default test.
+function defaultIsComplete(val) {
+  if (val == null) return false;
+  if (Array.isArray(val)) return val.length > 0;
+  if (val instanceof Map || val instanceof Set) return val.size > 0;
+  if (typeof val === 'object') return Object.keys(val).length > 0;
+  return true;
+}
+export async function cacheDayValue(tradeDate, key, loader, { isComplete = defaultIsComplete, ttl = DAY_CACHE_TTL } = {}) {
+  const hit = getCached(tradeDate, key, ttl);
+  if (hit != null) return hit;
+  const val = await loader();
+  if (isComplete(val)) setCached(tradeDate, key, val);
+  return val;
+}
+export function _clearLevelCacheForTests() { for (const k of Object.keys(_levelCache)) delete _levelCache[k]; }
 
 // Fixed 2026-09-05 (found by a DeepSeek-dispatched audit, independently verified against
 // git blame and live performance_audit rows before trusting it): `getCached()` above returns

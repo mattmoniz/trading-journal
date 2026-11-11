@@ -90,7 +90,7 @@ async function getTrailingCumDeltas(date, days = 30) {
     AND ts::date >= $1::date - $2::int AND ts::date < $1
     AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 959
     ORDER BY ts`, [date, days]).catch(() => ({ rows: [] }));
-  if (!dailyBars.rows.length) return cacheSet(ck, [], MB_DAY_CACHE_TTL);
+  if (!dailyBars.rows.length) return cacheSet(ck, [], 60_000); // F17 (2026-11-10): an empty read is not day-stable; retry in a minute, not 12 h
   // Group by date, compute cumDelta per day
   const byDate = {};
   for (const b of dailyBars.rows) {
@@ -229,7 +229,8 @@ async function getTrailingDelta30P50(date, days = 30) {
     FROM delta30_windows
     WHERE abs_delta30 IS NOT NULL
   `, [date, days]).catch(() => ({ rows: [{}] }));
-  return cacheSet(ck, Math.round(res.rows[0]?.p50 ?? 2100), MB_DAY_CACHE_TTL);  // Fallback: p50 from 90d analysis 2026-07-09
+  // Fallback: p50 from 90d analysis 2026-07-09. F17 (2026-11-10): the static fallback is cached for a minute only; only a real p50 is held for the day.
+  return res.rows[0]?.p50 != null ? cacheSet(ck, Math.round(res.rows[0].p50), MB_DAY_CACHE_TTL) : cacheSet(ck, 2100, 60_000);
 }
 
 // Fetch trailing ATR(20) for rotation threshold
@@ -244,7 +245,7 @@ export async function getTrailingATR(date, days = 20) {
     AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 959
     GROUP BY ts::date
     ORDER BY ts::date DESC`, [date, days]).catch(() => ({ rows: [] }));
-  if (res.rows.length < 5) return cacheSet(ck, 400, MB_DAY_CACHE_TTL); // reasonable NQ default
+  if (res.rows.length < 5) return cacheSet(ck, 400, 60_000); // reasonable NQ default; F17 (2026-11-10): a default is not cached for the day
   return cacheSet(ck, res.rows.reduce((s, r) => s + r.range, 0) / res.rows.length, MB_DAY_CACHE_TTL);
 }
 

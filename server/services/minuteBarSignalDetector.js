@@ -20,7 +20,8 @@
 // performance_audit (per CLAUDE.md's New Setup Type checklist), cached for the trading day.
 import { tagRotation65ptGateShadow } from './rotation65ptGateShadow.js';
 import { query } from '../db.js';
-import { dropToTimeline, computeFireTags, FIRE_TAG_COLS, fireTagValues } from '../routes/acd.js';
+import { dropToTimeline } from './acdShared.js';
+import { computeFireTags, FIRE_TAG_COLS, fireTagValues } from './fireTags.js';  // F33 (2026-11-11): from the defining modules, not the route file (broke a services -> route import cycle)
 import { getBetClass } from '../config/setupTypes.js';
 import { checkStandardLiveGates } from './detectorLiveGates.js';
 import { getLatestBars } from './priceRetrieval.js';

@@ -116,6 +116,11 @@ Full text of every entry that CLAUDE.md now summarises in one line. Nothing was 
 - [cv-110](#cv-110) New monitors, scoreboards, learning arms, bots and forward tests go in the one Monitor & Learning page (phone Monitor tab, app Learning view) as a new section, not a new tab or menu entry. (cv-110)
 - [cv-111](#cv-111) Sealed-look wrapper: after any script edit run phase 2 end-to-end on explore rows as a separate passing command BEFORE the spend; never chain the check and the sealed run. (2026-11-03)
 - [cv-112](#cv-112) A page/dev-server edit goes live instantly but the API only after a restart: every new summary field a page reads must tolerate being absent; test against the RUNNING server. (cv-112)
+- [cv-113](#cv-113) A shadow.py --once-date dry-out replay skips already-stored events, so before/after parity on a stored date compares 0 to 0 (vacuous); use unit tests, a scratch table, or post-restart checks. (cv-113)
+- [cv-114](#cv-114) A hand-moved stop on a system-managed tell row leaves active_setups ACTIVE (stale stop_level) and blocks vacuum orders via isBusy(); resolve with the real fill, MANUAL_STOP. (cv-114)
+- [cv-115](#cv-115) Test order-path changes with scripts/test_order_path_harness.mjs (fake DTC + scratch schema 'harness'), never live tables; every scenario ends with the one-working-stop invariant.
+- [cv-116](#cv-116) Trading-day dates use etToday()/etDateOf()/shiftDays() (server/lib/dateMath.js), not toISOString().slice(0,10); per-day bar filters use dayEq() range form, not ts::date = $1.
+- [cv-117](#cv-117) Detection-pass refactors must pass node scripts/test_replay_golden.mjs (reads-only golden replay, writes suppressed); record with scripts/replay/record_schedule.sh.
 
 ---
 
@@ -720,3 +725,45 @@ Incident 2026-11-03: the flip time-of-day wrapper (`flip_time_sealed.mjs`) spend
 
 quick-check.html and the React src/ go live the moment the file is saved (static file / dev server), but the API fields they read only change after a server restart. Found 2026-11-04: new shadow-book rows (`sh.books.D`) read before the API sent them threw 'Cannot read properties of undefined (reading changed)' and blanked the whole phone Monitor tab until fixed.
 Rule: every new summary field a page reads must tolerate being ABSENT (skip the row or show 'not served yet'), never assume the key exists; verify with a Playwright route-intercept against the RUNNING server (not only with injected data) before calling a UI change done; and note in OPEN_THREADS which UI pieces only light up after the restart.
+
+<a id="cv-113"></a>
+
+- **A shadow.py --once-date dry-out replay skips already-stored events, so before/after parity on a stored date compares 0 to 0 (vacuous); use unit tests, a scratch table, or post-restart checks. (cv-113)**
+
+A before/after parity replay of scripts/vacuum_live/shadow.py (`--once-date D --dry-out F`) is VACUOUS on a date whose events are already stored: the dry run skips every stored (track, bar, direction) key, so it dumps 0 rows before and 0 after and "identical" proves nothing.
+
+Found 2026-11-10 (row 36 forward ROC3 arm): I refactored the outcome-fill block into `fill_outcomes(table, ...)` and replayed 2026-11-09 old vs new; both dumps were empty for the existing ROC10/turn tables (only the NEW table's 18 candidates appeared), so the replay could not show the ROC10 path unchanged.
+Rule: to prove a live-detector refactor did not change behaviour, (a) compare the generated SQL/outcome path by unit test (test_outcome.py, test_outcome_continuous.py, test_ohlc_fill.py), (b) replay against an empty or scratch copy of the event table, or a date with no stored rows, and (c) verify after the restart on the live table (event count unchanged, no duplicates, every row's outcome still filling). State which of these was actually done; never report a vacuous 0-vs-0 replay as parity.
+
+<a id="cv-114"></a>
+
+- **A hand-moved stop on a system-managed tell row leaves active_setups ACTIVE (stale stop_level) and blocks vacuum orders via isBusy(); resolve with the real fill, MANUAL_STOP. (cv-114)**
+
+A manually moved stop on a system-managed tell row leaves the active_setups row ACTIVE (stop_level stale) until the tell MODEL exits, and an ACTIVE tell/vacuum row makes vacuumLiveOrders `isBusy()` true, so no vacuum order can be placed meanwhile.
+
+Found 2026-11-10: the user moved the resting stop of AMT_TELL_SHORT #158992 twice in Sierra (28,055 -> 27,851 -> 27,773.25); the broker stop filled at 10:57:26 (+171.25 pts, fillVerify MATCH, broker_pnl 340.5), but fillPriceSanity logged REFUSED x5 then FLAGGED the fill (beyond the stored 28,055 trigger) and the row stayed ACTIVE (the tell service resolves a row only when its model trade closes: 120-min / fade / 15:55 / stop).
+Rule: when the user moves a stop by hand and it fills, resolve the row at once with the guarded RESOLVE_SQL shape (status ACTIVE and resolved_at NULL), resolution STOP_HIT, resolution_method MANUAL_STOP, actual_pnl by the real-fill convention (decideExit: (entry fill - exit) x dir x $2/pt - $2 = broker_pnl), price_at_resolution = the fill, resolved_at = the fill time; save the pre-image JSON first; verify 0 open positions, 0 new orders, 0 ACTIVE rows. Needs the user's go (live-row write). Exclude MANUAL_STOP rows from tell-vs-model comparisons.
+
+<a id="cv-115"></a>
+
+- **Test order-path changes with scripts/test_order_path_harness.mjs (fake DTC + scratch schema 'harness'), never live tables; every scenario ends with the one-working-stop invariant.**
+
+Order-path changes (server/services/sierraChart/, strategy order services) are tested with `scripts/test_order_path_harness.mjs`: a fake DTC client (`scripts/lib/fakeDtc.mjs`) and a scratch DB schema `harness` (`./scripts/setup_order_path_harness.sh`), never the live tables.
+
+Built 2026-11-10 from the Fable whole-app audit (precondition F01-F05). The harness runs the real reconciliation.js, protection.js and orderSweep helpers against an in-memory broker book and a copy of six tables in schema `harness` (search_path=harness; `scripts/lib/orderPathHarnessEnv.mjs` refuses to run unless `current_schema()` is `harness`, moves the process into a temp dir so the kill-switch file is not the live one, and blanks the phone-alert webhook). Every scenario ends with the protection invariant: a non-zero broker position has exactly one working stop of the same size on the other side, or the app flattened it and halted. Add a scenario for any new order-path behaviour and run `npm test` (22 scenarios plus 13 other test scripts). The fake is not a TCP server: dtcClient.js wire encoding is still only checked against Sierra Chart itself.
+
+<a id="cv-116"></a>
+
+- **Trading-day dates use etToday()/etDateOf()/shiftDays() (server/lib/dateMath.js), not toISOString().slice(0,10); per-day bar filters use dayEq() range form, not ts::date = $1.**
+
+Trading-day dates in server code come from `etToday()` / `etDateOf()` / `shiftDays()` (server/lib/dateMath.js), never `toISOString().slice(0,10)`; per-day bar predicates use the range form (`dayEq()` in server/lib/sqlDay.js), never `ts::date = $1`.
+
+Fable audit F35/F11 (2026-11-10). The UTC date is tomorrow's date after 19:00-20:00 ET; a Date built from toLocaleString('en-US', {timeZone: 'America/New_York'}) and then toISOString()'d is wrong the other way when the process timezone is New York (it is). Fixed 4 sites (data-health endpoint, fired-date match, a manual-trade date that used now-4h, a backtest start). `ts::date = $1` on price_bars_primary measured 134-167 ms against 20-24 ms for `ts >= $1::date AND ts < $1::date + 1`, identical rows on 6 dates (scripts/test_sql_day.mjs); 9 hot acd.js sites converted, about 400 `ts::date` predicates remain in server/ (convert on touch; there is no lint yet).
+
+<a id="cv-117"></a>
+
+- **Detection-pass refactors must pass node scripts/test_replay_golden.mjs (reads-only golden replay, writes suppressed); record with scripts/replay/record_schedule.sh.**
+
+A change to the detection pass (server/routes/acd.js and what it calls) that is meant to alter NO decision must pass `node scripts/test_replay_golden.mjs`; record new golden passes with `scripts/replay/record_schedule.sh HHMM ...`.
+
+Built 2026-11-11 (Fable audit F27/F32). `scripts/replay/lib.mjs`: ONE real `/acd/setup-detection` pass runs in a fresh process with a frozen clock (Date) and a seeded Math.random, with `server/db.js` `query()` intercepted via `setQueryInterceptor`. RECORD mode answers reads from the live database and stores statement+params+rows; it NEVER executes a write (INSERT/UPDATE/DELETE/DDL are captured as the pass's decisions and answered with a synthetic result, RETURNING id gets a deterministic fake id), blocks outbound calls other than localhost, and has no DTC client, so it is safe against the live system at any hour. REPLAY mode needs no database. Decisions compared: every write attempted, the response body, the localhost calls; a statement the recording lacks is reported UNRECORDED (the changed code altered a read). Recordings live in `scratch/replay_golden/` (~15 MB each, one per time of day: Globex, RTH open, midday...). `--route` replays the same recording against another copy of the route file (e.g. a pre-refactor snapshot), which is how F06 (added SHADOW rows only) and the F32 steps were proven. A deliberate decision change shows as a diff by design: re-record afterwards. Mutation-tested (a one-field change to the response is caught). Same-code replay agreeing with its own recording is the hr-010 check.

@@ -142,7 +142,9 @@ export async function checkLiveRoster(setupType) {
   if (!LIVE_ROSTER_GATE.enabled) return { blocked: false, reason: null };
   await getLiveRoster();
   const reason = rosterBlockReason(setupType);
-  return { blocked: !!reason, reason };
+  // `state` (F22, 2026-11-10): the reason string stays the generic LIVE_ROSTER_UNAVAILABLE (stored rows and scripts/test_live_roster.mjs depend on it), but an EMPTY roster
+  // (the calibration ran and chose nothing) and a MISSING/STALE one (the calibration did not run) are different problems; callers and the Monitor page can now tell them apart.
+  return { blocked: !!reason, reason, state: _rosterCache.val ? _rosterCache.val.state : 'UNLOADED' };
 }
 
 

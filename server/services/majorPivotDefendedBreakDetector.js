@@ -117,12 +117,14 @@ function isGlobexMod(mod) {
 // matching the original 2026-09-10 validation's scope) without reimplementing any of the
 // pivot/break logic -- default unchanged, so the live call site (computeMajorPivotDefendedBreakSignal
 // -> getDefendedBreaksCached -> computeDefendedBreaks()) is byte-identical in behavior.
-export async function computeDefendedBreaks(zigzagThreshold = ZIGZAG_THRESHOLD, lookbackDays = LOOKBACK_DAYS) {
+// window: optional { from, to } ('YYYY-MM-DD', `to` exclusive) added 2026-11-09 night so a research replay can run this SAME real function over a fixed historical span without ever reading
+// bars outside it (the sealed 2025-05-17.. windows). With a window the live "last bucket still forming" rule is skipped (every bar in a closed window is complete). Default null = byte-identical live behavior.
+export async function computeDefendedBreaks(zigzagThreshold = ZIGZAG_THRESHOLD, lookbackDays = LOOKBACK_DAYS, window = null) {
   const barsRes = await query(`
     SELECT to_char(ts, 'YYYY-MM-DD HH24:MI:SS') as tc, to_char(ts,'YYYY-MM-DD') as d,
            open::float, high::float, low::float, close::float
     FROM price_bars_primary
-    WHERE symbol = 'NQ' AND ts >= NOW() - INTERVAL '${lookbackDays} days' AND ts <= NOW()
+    WHERE symbol = 'NQ' AND ${window ? `ts >= '${window.from}'::date AND ts < '${window.to}'::date` : `ts >= NOW() - INTERVAL '${lookbackDays} days' AND ts <= NOW()`}
     ORDER BY ts ASC
   `);
   const bars1m = barsRes.rows;
@@ -137,7 +139,7 @@ export async function computeDefendedBreaks(zigzagThreshold = ZIGZAG_THRESHOLD, 
   //    without this the bucket would wait for the next bar, which can take minutes in thin hours). 40 s covers the Sierra-to-database ingest lag.
   // NOTE this applies to EVERY caller, not only live ones: the query is bounded by ts <= NOW(), so a backtest re-run also stops at the last COMPLETE bucket (an improvement,
   // but earlier outputs of this function are not byte-reproducible).
-  if (bars5m.length) {
+  if (bars5m.length && !window) {
     const lastBucket = bars5m[bars5m.length - 1];
     const fast = parseInt(bars1m[bars1m.length - 1].tc.substring(14, 16), 10) % 5 === 4;
     const slow = etNaiveTimestampToMs(plus5m(lastBucket.tsStr)) + 40000 <= Date.now();
@@ -358,3 +360,6 @@ export async function computeMajorPivotDefendedBreakSignal(todayET) {
     return inserted.length ? inserted : null;
   } catch (_) { return null; /* informational-only build, never block the response */ }
 }
+
+// Research access (2026-11-09 night, additive): the live session configs and session-boundary rule, exported so the capitulation-exit replay uses the REAL values (hr-022), never a copy.
+export { CONFIG as MAJOR_PIVOT_CONFIG, isGlobexMod as majorPivotIsGlobexMod, plus5m as majorPivotPlus5m };

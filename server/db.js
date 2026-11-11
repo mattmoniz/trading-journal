@@ -102,8 +102,15 @@ export function getQueryProfile({ top = 25 } = {}) {
   return { sinceMs: Date.now() - PROFILE_STARTED_AT, totalCalls, totalMs, byTotalMs: rows.sort((a, b) => b.totalMs - a.totalMs).slice(0, top) };
 }
 
-// Helper function to execute queries
+// Optional query interceptor (Fable audit F32/F27, 2026-11-11): the golden detection replay (scripts/replay/) records every statement and its rows at THIS boundary and later answers
+// them from the recording. null in the server (one null check per query); only the replay scripts set it. fn(text, params, realQuery) must return a pg-shaped result.
+let _interceptor = null;
+export function setQueryInterceptor(fn) { _interceptor = fn; }
 export const query = async (text, params) => {
+  if (_interceptor) return _interceptor(text, params, realQuery);
+  return realQuery(text, params);
+};
+const realQuery = async (text, params) => {
   const start = Date.now();
   try {
     const res = await pool.query(text, params);

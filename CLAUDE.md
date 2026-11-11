@@ -11,7 +11,7 @@ Trading journal: React frontend (Vite, port 3000) + Express backend (port 3002) 
 - Start `./start.sh` (kills stale processes, starts server + client, re-creates the `pre-commit` hook symlink); stop `./stop.sh` or `fuser -k 3002/tcp`; restart `./restart.sh` (wrapper around `start.sh`).
 - Single-instance server takeover lives ONLY in `scripts/lib/server-lifecycle.sh`, sourced by `start.sh`, `restart.sh`, `stop.sh` and `scripts/dev-server-guard.sh`; never reimplement it in a new entry point. (dw-001)
 - `git commit` runs `scripts/git-hooks/pre-commit` (symlinked from `.git/hooks/`), which blocks 7 hardcoded-threshold anti-patterns defined once in `scripts/hardcoded-threshold-patterns.sh` (shared with the Stop hook) and the CLAUDE.md size cap. Deliberate exception: `ALLOW_HARDCODED=1 git commit ...`.
-- Server only `npm run server` (`scripts/dev-server-guard.sh`: stops systemd, kills stale nodemon/node, hands the port back on exit); client only `npm run client`.
+- Server only `npm run server` (`scripts/dev-server-guard.sh`: stops systemd, kills stale node, hands the port back on exit; NO nodemon since 2026-11-09: a saved `server/` file no longer restarts it, apply edits with `./restart.sh` while flat); client only `npm run client`.
 - DB: `server/schema.sql` is a `pg_dump --schema-only` snapshot (regen command in [ARCHITECTURE.md](ARCHITECTURE.md#schema-source-of-truth)); there is no migration history, so it drifts when a table changes live without regenerating. When in doubt query `information_schema` on the live DB.
 
 ## Hard rules
@@ -47,7 +47,7 @@ Full text of each entry: `docs/CLAUDE_MD_ARCHIVE/hard_rules.md`, anchor = the id
 - Do not guess third-party tool behavior (especially Sierra Chart); fetch the documentation or ask. (hr-027)
 - Process large files and tables in chunks or streams (a 1 GB .scid in memory killed a run and froze WSL); filter by date first. (hr-028)
 - Never write a file over 400 lines in one Write call; Write the first section, then append with `cat >>`. (hr-029)
-- Use Gemini for DB mining and pattern analysis, Claude for implementation and for interpreting results. (hr-030)
+- Argon is a thinker, not a worker: design critique, interpretation, prereg and code review only; Claude does all data pulls, counts, replays and scripts and puts audited numbers in the brief. (hr-030)
 - Higher-stakes or live-wiring work gets three phases: design critique, the analysis, then a review-only pass before shipping. (hr-031)
 - Default for research: Gemini/DeepSeek critique the idea, mine, and review code; Claude audits every output and decides. (hr-032)
 - Gemini gets two correction attempts on wrong output; after the second wrong answer Claude does the task directly. (hr-033)
@@ -88,7 +88,7 @@ Full text of each entry: `docs/CLAUDE_MD_ARCHIVE/hard_rules.md`, anchor = the id
 - Keep the full event history (append-only log) for any state derived from an external event stream; a last-message column can't be repaired later. (hr-068)
 - A strict 'unknown broker order' halt is only usable on an account kept free of unrelated resting orders; clear clutter in Sierra, don't soften the halt. (hr-069)
 - price_bars_primary RTH volume is ~2.7x inflated on some mid-2025 dates (ticks are right); validate bars by tick RTH high/low vs the DB, never by DB volume. (2026-11-03) (hr-070)
-- Before ./restart.sh, check ps -ef | grep start.sh: a leftover supervisor from an earlier backgrounded restart respawns children and makes a 2nd server. Kill by PID, ./stop.sh, one ./start.sh. (hr-071) (hr-071)
+- Before ./restart.sh, check ps -ef | grep start.sh: a leftover supervisor from an earlier backgrounded restart respawns children and makes a 2nd server. Kill by PID, ./stop.sh, one ./start.sh. (hr-071)
 
 ## Conventions
 
@@ -203,9 +203,14 @@ Full text of each entry: `docs/CLAUDE_MD_ARCHIVE/conventions.md`, anchor = the i
 - A 'grep every call site' sweep must be repo-wide (`grep -rn ... .`); directory-scoped sweeps missed `server/routes/sierraChart.js` twice. (cv-107)
 - A prop-firm evaluation account does not carry retail CME margin; never judge its margin figures against generic CME numbers, ask the user what they actually see. (cv-108)
 - The Claude Code sandbox classifier also blocks ARMING the kill switch; if denied, stop, don't retry another way, report what's verified and hand the arm step to the user. (cv-109)
-- New monitors, scoreboards, learning arms, bots and forward tests go in the one Monitor & Learning page (phone Monitor tab, app Learning view) as a new section, not a new tab or menu entry. (cv-110) (cv-110)
+- New monitors, scoreboards, learning arms, bots and forward tests go in the one Monitor & Learning page (phone Monitor tab, app Learning view) as a new section, not a new tab or menu entry. (cv-110)
 - Sealed-look wrapper: after any script edit run phase 2 end-to-end on explore rows as a separate passing command BEFORE the spend; never chain the check and the sealed run. (2026-11-03) (cv-111)
 - A page/dev-server edit goes live instantly but the API only after a restart: every new summary field a page reads must tolerate being absent; test against the RUNNING server. (cv-112)
+- A shadow.py --once-date dry-out replay skips already-stored events, so before/after parity on a stored date compares 0 to 0 (vacuous); use unit tests, a scratch table, or post-restart checks. (cv-113)
+- A hand-moved stop on a system-managed tell row leaves active_setups ACTIVE (stale stop_level) and blocks vacuum orders via isBusy(); resolve with the real fill, MANUAL_STOP. (cv-114)
+- Test order-path changes with scripts/test_order_path_harness.mjs (fake DTC + scratch schema 'harness'), never live tables; every scenario ends with the one-working-stop invariant. (cv-115)
+- Trading-day dates use etToday()/etDateOf()/shiftDays() (server/lib/dateMath.js), not toISOString().slice(0,10); per-day bar filters use dayEq() range form, not ts::date = $1. (cv-116)
+- Detection-pass refactors must pass node scripts/test_replay_golden.mjs (reads-only golden replay, writes suppressed); record with scripts/replay/record_schedule.sh. (cv-117)
 
 ## Collaboration
 
@@ -235,7 +240,7 @@ Full text of each entry: `docs/CLAUDE_MD_ARCHIVE/collaboration.md`, anchor = the
 - Every monitor/forward test/study ships a written next-step tree (confirm/fail/continue) on its card and a failure autopsy in the improvement register; 'not shown' alone is not closure. (2026-11-04) (co-022)
 - Register every test/variant at its START: prereg, ledger look, claim, register row (next test + retire rule), index rebuild; Stop hook runs check_research_organized.mjs. (co-023)
 - Unsolicited edge search runs as a quarterly queue (docs/CANDIDATE_QUEUE.md): max 8 candidates, charged to the ledger at registration, Holm 0.10, judged on forward days only; explore results are leads. (co-024)
-- Never retire or discard an idea on an estimate or a prior (even an AI reviewer's); keep it open or PARKED with a next step and reopen trigger. Only a pre-registered result closes one. (2026-11-08) (co-025)
+- Never retire an idea on an estimate or prior; park it with a next step. ONE exception: 2 pre-registered nulls, each MDE <= 0.015 ADR20 (~7 pt; was 0.15, amended 11-09 night), retire it (only the user revives). (co-025)
 
 ## Where to look
 

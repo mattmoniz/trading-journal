@@ -17,6 +17,8 @@ import { handleOrderUpdate, runReconciliation, extractPositionForSymbol, getBrok
 import { resolveMnqFrontMonthSymbolFromEnv } from './contractSymbol.js';
 import { query } from '../../db.js';
 import { getPriceMultiplier } from './priceMultiplier.js';
+import { runProtectionSweep } from './protection.js';
+import { sendAlert } from '../alertNotifier.js';
 import { runBootSelfTest, markBootSelfTestCrashed, bootSelfTestAllowsRearm } from './bootSelfTest.js';
 
 let client = null;
@@ -42,6 +44,24 @@ const PERIODIC_RECONCILE_MS = 15 * 60 * 1000;
 const POSITION_SAMPLE_MS = 15 * 1000;
 let positionSampleTimer = null;
 let lastSampledNet;
+
+// Protection sweep (Fable audit F01/F04/F05, 2026-11-10): every open filled entry must have a working broker-side stop. The stop used to be
+// placed only inside the fill handler, so a missed fill message, a rejected exit or a failed submit left a position unprotected until a human
+// noticed (2026-11-09: ~15 min). 20 s is well under the 60 s flatten deadline in protection.js; the sweep is one indexed query when nothing is open.
+const PROTECTION_SWEEP_MS = 20 * 1000;
+let protectionSweepTimer = null;
+let protectionSweepRunning = false;
+async function protectionSweepTick() {
+  if (protectionSweepRunning || !client || !client.isLive()) return;
+  protectionSweepRunning = true;
+  try {
+    const r = await runProtectionSweep(client, { killSwitch, sendAlert });
+    const acted = (r.results || []).filter((x) => !String(x.action).startsWith('NOOP'));
+    if (acted.length) console.log('[sierraChart.connectionManager] protection sweep acted:', JSON.stringify(acted));
+  } catch (err) { console.error('[sierraChart.connectionManager] protection sweep failed:', err.message); }
+  finally { protectionSweepRunning = false; }
+}
+function stopProtectionSweep() { if (protectionSweepTimer) { clearInterval(protectionSweepTimer); protectionSweepTimer = null; } }
 
 // Prevention (2026-10-19): learn each contract's price multiplier BEFORE the first fill needs it. A lookup that
 // first happens at fill time can time out and leave that fill unpriced (the 2026-10-18 roll incident). Warms the
@@ -236,6 +256,7 @@ async function connectOnce() {
     console.error(`[sierraChart.connectionManager] disconnected: ${reason} -- reconnecting in ${RECONNECT_DELAY_MS / 1000}s`);
     stopPeriodicReconcile();
     stopPositionSampler();
+    stopProtectionSweep();
     scheduleReconnect();
   });
   client.on('logon', async (msg) => {
@@ -254,6 +275,10 @@ async function connectOnce() {
     stopPositionSampler();
     lastSampledNet = undefined;
     positionSampleTimer = setInterval(samplePosition, POSITION_SAMPLE_MS);
+    // After the logon reconcile (so the broker's state was just compared), repair any unprotected position at once, then keep sweeping.
+    stopProtectionSweep();
+    protectionSweepTick();
+    protectionSweepTimer = setInterval(protectionSweepTick, PROTECTION_SWEEP_MS);
   });
   try { await client.connect(); }
   catch (err) { console.error('[sierraChart.connectionManager] connect failed:', err.message); scheduleReconnect(); }

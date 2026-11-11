@@ -6,5 +6,8 @@ const args = { rthAccount: 'Sim1', globexAccount: 'Sim2' };
 eq('RTH setup -> Sim1', selectTradeAccount({ isRth: true, ...args }), 'Sim1');
 eq('Globex setup -> Sim2', selectTradeAccount({ isRth: false, ...args }), 'Sim2');
 eq('unknown session defaults to RTH account (not Globex)', selectTradeAccount({ isRth: null, ...args }), 'Sim1');
+// F09 (2026-11-10): an unset Globex account stays null (the sweep then sends no order); it must never become a literal.
+eq('Globex setup with no configured account -> null (fail closed)', selectTradeAccount({ isRth: false, rthAccount: 'Sim1', globexAccount: null }), null);
+eq('RTH setup is unaffected by an unset Globex account', selectTradeAccount({ isRth: true, rthAccount: 'Sim1', globexAccount: null }), 'Sim1');
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

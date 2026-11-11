@@ -37,9 +37,8 @@ import { query } from '../db.js';
 import { detectRotationLegs, getOvernightSessionBars } from './rotationDetector.js';
 import { minutesSinceOvernightOpen } from './globexRotationBadge.js';
 import { getCanonicalLiveStatus } from './setupEligibility.js';
-import {
-  dropToTimeline, computeFireTags, FIRE_TAG_COLS, fireTagValues,
-} from '../routes/acd.js';
+import { dropToTimeline } from './acdShared.js';
+import { computeFireTags, FIRE_TAG_COLS, fireTagValues } from './fireTags.js'; // F33 (2026-11-11): from the defining modules, not the route file
 import { getBetClass } from '../config/setupTypes.js';
 import { LIVE_INSTRUMENT } from '../config/instruments.js';
 

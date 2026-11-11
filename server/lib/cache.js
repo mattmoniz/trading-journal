@@ -8,8 +8,12 @@ export function cacheGet(key) {
   return entry.val;
 }
 
+let _lastSweep = Date.now();
 export function cacheSet(key, val, ttlMs = 120_000) {
-  _cache.set(key, { val, exp: Date.now() + ttlMs });
+  const now = Date.now();
+  // F30 (Fable audit, 2026-11-10): an entry was only dropped when the SAME key was read again, so date-keyed entries accumulated. Sweep expired ones at most every 10 min.
+  if (now - _lastSweep > 10 * 60 * 1000) { _lastSweep = now; for (const [k, e] of _cache) if (now > e.exp) _cache.delete(k); }
+  _cache.set(key, { val, exp: now + ttlMs });
   return val;
 }
 
